@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      (() => {
+        const storageKey = "hyphen-webui-locale";
+        const localeMap = {
+          en: "en-US",
+          es: "es-MX",
+          ru: "ru-RU",
+          tr: "tr-TR",
+          uk: "uk-UA",
+          zh: "zh-CN",
+        };
+
+        try {
+          const storedLocale = globalThis.localStorage.getItem(storageKey) ?? "en";
+          const localeCode = Object.hasOwn(localeMap, storedLocale) ? storedLocale : "en";
+          document.documentElement.lang = localeMap[localeCode];
+          document.documentElement.dataset.hyphenLocale = localeCode;
+          globalThis.__HYPHEN_LOCALE__ = localeCode;
+        } catch {
+          document.documentElement.lang = localeMap.en;
+          document.documentElement.dataset.hyphenLocale = "en";
+          globalThis.__HYPHEN_LOCALE__ = "en";
+        }
+      })();
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

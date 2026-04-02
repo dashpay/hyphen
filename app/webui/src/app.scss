@@ -1,0 +1,235 @@
+@use "_views-mixins.scss" as view;
+@use "./lib/theme/hy.scss";
+@import "@repo/hyphen-views/theme.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+html,
+body {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-primary);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-blue);
+  color: var(--hy-selection-fg);
+}
+
+.app-shell {
+  border-radius: var(--radius-frame);
+  display: flex;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.app-sidebar {
+  display: none;
+}
+
+.app-sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.app-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+}
+
+.app-sidebar-item {
+  align-items: center;
+  background: var(--overlay-subtle);
+  border: 1px solid transparent;
+  border-radius: var(--radius-identity);
+  color: var(--color-fg);
+  display: flex;
+  font-family: var(--font-primary);
+  font-size: var(--text-sm-plus);
+  font-weight: 600;
+  gap: var(--space-2);
+  padding: var(--hy-shell-nav-item-padding);
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) var(--ease-default),
+    border-color var(--duration-fast) var(--ease-default),
+    color var(--duration-fast) var(--ease-default);
+}
+
+.app-sidebar-item:hover {
+  background: var(--overlay-hover);
+}
+
+.app-sidebar-item:focus-visible {
+  background: var(--overlay-hover);
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.app-sidebar-item-current {
+  background: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--color-on-accent) 18%, transparent);
+  color: var(--color-on-accent);
+}
+
+.app-sidebar-item-current:focus-visible {
+  outline-color: color-mix(in srgb, var(--color-on-accent) 90%, transparent);
+}
+
+.app-sidebar-title {
+  font-family: var(--font-primary);
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+.app-main {
+  display: grid;
+  flex: 1;
+  gap: var(--space-3);
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  padding: var(--hy-shell-main-padding);
+}
+
+.app-header {
+  align-items: center;
+  backdrop-filter: blur(var(--blur-radius));
+  background: var(--header-bg);
+  border: 1px solid var(--header-border);
+  border-radius: var(--radius-header);
+  display: flex;
+  justify-content: space-between;
+  min-height: var(--hy-shell-header-height);
+  padding: 0 var(--space-5);
+}
+
+.app-header-spacer {
+  flex: 1;
+}
+
+.app-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --hy-breakpoint-laptop */
+@include view.media-up(laptop) {
+  .app-sidebar {
+    background: var(--sidebar-bg);
+    border-bottom-right-radius: var(--radius-sidebar);
+    border-right: 1px solid var(--sidebar-border);
+    border-top-right-radius: var(--radius-sidebar);
+    box-shadow: var(--shadow-sidebar);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: var(--space-6);
+    width: var(--hy-shell-sidebar-width);
+  }
+}
+
+/* --hy-breakpoint-laptop - 1px */
+@include view.media-below(laptop) {
+  .app-main {
+    padding: var(--hy-shell-main-padding-mobile);
+  }
+}
+
+/* ── Custom scrollbar for internal scroll areas ── */
+.scroll-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hy-scrollbar-thumb) transparent;
+}
+
+.scroll-body::-webkit-scrollbar {
+  width: var(--hy-scrollbar-width);
+}
+
+.scroll-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-body::-webkit-scrollbar-thumb {
+  background: var(--hy-scrollbar-thumb);
+  border-radius: var(--hy-scrollbar-thumb-radius);
+}
+
+.scroll-body::-webkit-scrollbar-thumb:hover {
+  background: var(--hy-scrollbar-thumb-hover);
+}
+
+/* ── Row entrance animation ── */
+@keyframes row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.row-animate {
+  animation: row-enter var(--duration-normal) var(--ease-default) backwards;
+}
+
+/* ── Special transaction type badge colors ── */
+.badge-proreg {
+  background: var(--hy-tag-proreg-bg);
+  color: var(--hy-tag-proreg-fg);
+}
+.badge-proupserv {
+  background: var(--hy-tag-proupserv-bg);
+  color: var(--hy-tag-proupserv-fg);
+}
+.badge-proupreg {
+  background: var(--hy-tag-proupreg-bg);
+  color: var(--hy-tag-proupreg-fg);
+}
+.badge-prouprev {
+  background: var(--hy-tag-prouprev-bg);
+  color: var(--hy-tag-prouprev-fg);
+}
+.badge-quorum {
+  background: var(--hy-tag-quorum-bg);
+  color: var(--hy-tag-quorum-fg);
+}
+.badge-mnhf {
+  background: var(--hy-tag-mnhf-bg);
+  color: var(--hy-tag-mnhf-fg);
+}
+.badge-assetlock {
+  background: var(--hy-tag-assetlock-bg);
+  color: var(--hy-tag-assetlock-fg);
+}
+.badge-assetunlock {
+  background: var(--hy-tag-assetunlock-bg);
+  color: var(--hy-tag-assetunlock-fg);
+}

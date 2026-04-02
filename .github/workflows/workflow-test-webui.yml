@@ -1,0 +1,44 @@
+name: Test @repo/hyphen-webui
+
+on:
+  workflow_run:
+    workflows: ["TypeScript"]
+    types: [completed]
+    branches-ignore: []
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Check build result
+    runs-on: ubuntu-24.04-arm
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Resolve container image
+        id: vars
+        run: |
+          HASH=$(echo -n "${{ hashFiles('contrib/docker/ci.Dockerfile', 'pyproject.toml') }}" | cut -c1-12)
+          IMAGE="ghcr.io/${{ github.repository }}/hyphen-ci:${HASH}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test @repo/hyphen-webui
+    needs: gate
+    uses: ./.github/workflows/test-ts.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit
+    with:
+      package: "@repo/hyphen-webui"
+      path: ${{ needs.gate.outputs.image }}

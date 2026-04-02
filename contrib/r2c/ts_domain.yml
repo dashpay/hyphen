@@ -1,0 +1,48 @@
+rules:
+  - id: ts-domain-data-no-css-vars
+    message: Domain data modules must not reference CSS variables.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/*.ts
+        - /app/webui/src/lib/block/*.ts
+        - /app/webui/src/lib/validator/*.ts
+        - /app/webui/src/lib/address/*.ts
+        - /app/webui/src/lib/balances/*.ts
+      exclude:
+        - /app/webui/src/lib/*/views/**/*.ts
+    pattern-regex: 'var\(--|--(?:hy|vw)-'
+
+  - id: ts-domain-data-no-svelte-imports
+    message: Domain data modules must not import Svelte files.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/*.ts
+        - /app/webui/src/lib/block/*.ts
+        - /app/webui/src/lib/validator/*.ts
+        - /app/webui/src/lib/address/*.ts
+        - /app/webui/src/lib/balances/*.ts
+      exclude:
+        - /app/webui/src/lib/*/views/**/*.ts
+    pattern-regex: 'from\s+"[^"]+\.svelte"|from\s+''[^'']+\.svelte'''
+
+  - id: ts-domain-data-no-view-barrel-imports
+    message: Domain data modules must not import view barrels.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/*.ts
+        - /app/webui/src/lib/block/*.ts
+        - /app/webui/src/lib/validator/*.ts
+        - /app/webui/src/lib/address/*.ts
+        - /app/webui/src/lib/balances/*.ts
+      exclude:
+        - /app/webui/src/lib/*/views/**/*.ts
+    pattern-regex: 'from\s+"(?:\$lib/(?:views|icons|anim|(?:tx|block|validator|address|balances)/views)[^"]*)"|from\s+''(?:\$lib/(?:views|icons|anim|(?:tx|block|validator|address|balances)/views)[^'']*)'''

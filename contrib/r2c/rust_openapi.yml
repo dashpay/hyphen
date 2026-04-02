@@ -1,0 +1,47 @@
+rules:
+  - id: rust-openapi-path-only-in-rest-modules
+    message: utoipa path annotations belong only in REST handler modules.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/search.rs
+        - /pkgs/daemon/src/rest/status.rs
+    pattern-regex: '#\s*\[\s*utoipa::path\s*\('
+  - id: rust-openapi-path-needs-description
+    message: public utoipa paths must include a description that explains endpoint behavior and dependencies.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/search.rs
+        - /pkgs/daemon/src/rest/status.rs
+    pattern-regex: '(?s)#\s*\[\s*utoipa::path\s*\((?:(?!description\s*=).)*\)\s*\]'
+  - id: rust-openapi-path-needs-responses
+    message: public utoipa paths must declare responses.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/search.rs
+        - /pkgs/daemon/src/rest/status.rs
+    pattern-regex: '(?s)#\s*\[\s*utoipa::path\s*\((?:(?!responses\s*\().)*\)\s*\]'
+  - id: rust-openapi-path-needs-tag
+    message: public utoipa paths must declare a tag.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/search.rs
+        - /pkgs/daemon/src/rest/status.rs
+    pattern-regex: '(?s)#\s*\[\s*utoipa::path\s*\((?:(?!tag\s*=).)*\)\s*\]'

@@ -1,0 +1,18 @@
+{
+  "asOfHeight": 2441849,
+  "totalCount": 3000,
+  "value": [
+    {
+      "rank": 1,
+      "address": "XexampleTopLevel",
+      "balance": 100,
+      "pctSupply": 0.5,
+      "totalReceived": 150,
+      "totalSent": 50,
+      "txCount": 3
+    }
+  ],
+  "includedSupply": 200,
+  "supplyDefinition": "top-level balances snapshot",
+  "nextCursor": "cursor-top-level"
+}

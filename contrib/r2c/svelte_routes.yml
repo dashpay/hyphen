@@ -1,0 +1,30 @@
+rules:
+  - id: svelte-routes-no-style-blocks
+    message: Route Svelte files must not define local style blocks.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/**/src/routes/**/*.svelte
+    pattern-regex: '<style(?:\s[^>]*)?>'
+
+  - id: svelte-routes-no-direct-view-file-imports
+    message: Route Svelte files must import from view barrels, not concrete view files.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/**/src/routes/**/*.svelte
+    pattern-regex: 'from\s+"\$lib/(?:views|(?:tx|block|validator|address|balances)/views)/[^"]+\.svelte"'
+
+  - id: svelte-routes-no-deep-view-root-imports
+    message: Route Svelte files must import from approved view barrels, not deep view paths.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/**/src/routes/**/*.svelte
+    pattern-regex: 'from\s+"\$lib/(?:views|icons|anim|(?:tx|block|validator|address|balances)/views)/[^"]+"|from\s+''\$lib/(?:views|icons|anim|(?:tx|block|validator|address|balances)/views)/[^'']+'''

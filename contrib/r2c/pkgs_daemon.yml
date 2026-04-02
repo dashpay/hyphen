@@ -1,0 +1,749 @@
+rules:
+  - id: daemon-no-sqlx-outside-sql-modules
+    message: crate::sql is the sole SQL boundary; sqlx must not appear outside src/sql.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/sql/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::$X
+          - pattern: use sqlx::$X
+          - pattern: sqlx::query(...)
+          - pattern: sqlx::query_as(...)
+          - pattern: sqlx::query_scalar(...)
+          - pattern: sqlx::query_file(...)
+          - pattern: sqlx::query_file_as(...)
+          - pattern: sqlx::query_file_scalar(...)
+  - id: daemon-no-divan-bench-inside-daemon-src
+    message: Benchmark definitions belong in pkgs/daemon/bench, not pkgs/daemon/src.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+    pattern-regex: divan::bench
+  - id: daemon-no-divan-bench-outside-daemon-bench-package
+    message: divan benchmark definitions belong only in pkgs/daemon/bench.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/bench/**/*.rs
+        - /pkgs/**/*.rs
+      exclude:
+        - /pkgs/daemon/bench/**/*.rs
+    pattern-regex: divan::bench
+  - id: daemon-no-explain-outside-sql-modules
+    message: Read-only live SQL validation belongs in crate::sql; non-SQL modules must not own EXPLAIN or table-size SQL.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/sql/**/*.rs
+    pattern-regex: 'EXPLAIN\s*(?:\(|\\")|pg_total_relation_size\s*\('
+  - id: daemon-bench-runner-must-stay-orchestration-only
+    message: daemon benchmark support is orchestration-only; benchmark definitions stay in pkgs/daemon/bench.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/bench.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'EXPLAIN\s*(?:\(|\\")'
+          - pattern: sqlx::query(...)
+          - pattern: sqlx::query_as(...)
+          - pattern: sqlx::query_scalar(...)
+  - id: daemon-no-reqwest-outside-source-transports
+    message: reqwest belongs only in daemon source transport modules.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/sources/rest.rs
+        - /pkgs/daemon/src/sources/rpc.rs
+    patterns:
+      - pattern-either:
+          - pattern: reqwest::$X
+          - pattern: use reqwest::$X
+  - id: daemon-no-zeromq-outside-zmq-transport
+    message: zeromq belongs only in the daemon ZMQ transport module.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/sources/zmq.rs
+    patterns:
+      - pattern-either:
+          - pattern: zeromq::$X
+          - pattern: use zeromq::$X
+  - id: daemon-no-primitive-hash-or-address-implementation
+    message: Daemon modules must consume dash-primitives for chain hashing, script classification, and address derivation.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/architecture.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern: sha2::$X
+          - pattern: use sha2::$X
+          - pattern: ripemd::$X
+          - pattern: use ripemd::$X
+          - pattern: bs58::$X
+          - pattern: use bs58::$X
+          - pattern: double_sha256(...)
+  - id: daemon-no-consensus-byte-parsing-outside-primitives
+    message: Daemon modules must not own cursor-based consensus parsing or CompactSize encoding logic.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/architecture.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern: dash_primitives::cursor::Cursor
+          - pattern: Cursor::new(...)
+          - pattern: consensus_decode_tx(...)
+          - pattern: consensus_decode_block(...)
+          - pattern: read_compact_size(...)
+          - pattern: read_compact_bytes(...)
+          - pattern: write_compact_size(...)
+  - id: daemon-rest-must-not-touch-source-transports
+    message: REST handlers must go through owner logic, not source transports directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/*.rs
+      exclude:
+        - /pkgs/daemon/src/rest/mod.rs
+        - /pkgs/daemon/src/rest/openapi.rs
+        - /pkgs/daemon/src/rest/error.rs
+    patterns:
+      - pattern-either:
+          - pattern: use crate::sources::$X
+          - pattern: crate::sources::$X::$Y
+  - id: daemon-rest-must-not-call-owner-rpc-or-zmq
+    message: REST handlers must not depend on owner rpc/zmq modules directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/*.rs
+      exclude:
+        - /pkgs/daemon/src/rest/mod.rs
+        - /pkgs/daemon/src/rest/openapi.rs
+        - /pkgs/daemon/src/rest/error.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::(?:index|live)::[A-Za-z0-9_:]+::(?:rpc|zmq)\b'
+          - pattern-regex: 'crate::(?:index|live)::[A-Za-z0-9_:]+::(?:rpc|zmq)::'
+          - pattern: use super::rpc::$X
+          - pattern: use super::zmq::$X
+          - pattern: super::rpc::$X
+          - pattern: super::zmq::$X
+  - id: daemon-rest-must-not-use-concrete-source-clients
+    message: REST handlers must not bind to concrete source clients.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/*.rs
+      exclude:
+        - /pkgs/daemon/src/rest/mod.rs
+        - /pkgs/daemon/src/rest/openapi.rs
+        - /pkgs/daemon/src/rest/error.rs
+    patterns:
+      - pattern-either:
+          - pattern: CoreRpcClient
+          - pattern: CoreRestClient
+          - pattern: CoreZmqSource
+  - id: daemon-live-state-must-not-depend-on-rest
+    message: live state and adapter modules must not depend on REST modules.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/live/**/state.rs
+        - /pkgs/daemon/src/live/**/rpc.rs
+        - /pkgs/daemon/src/live/**/zmq.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::rest::'
+          - pattern-regex: 'use\s+crate::(?:index|live)::[A-Za-z0-9_:]+::rest\b'
+          - pattern-regex: 'crate::rest::'
+          - pattern-regex: 'crate::(?:index|live)::[A-Za-z0-9_:]+::rest::'
+  - id: daemon-core-pipeline-must-not-depend-on-live
+    message: Core ingest and index pipeline modules must stay isolated from optional live subsystems.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/ingest/**/*.rs
+        - /pkgs/daemon/src/index/runner.rs
+        - /pkgs/daemon/src/index/connect.rs
+        - /pkgs/daemon/src/index/control.rs
+        - /pkgs/daemon/src/index/disconnect.rs
+        - /pkgs/daemon/src/index/stage.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::live::'
+          - pattern-regex: 'crate::live::'
+  - id: daemon-state-loop-must-not-hot-spin-after-transition
+    message: State-machine loops must not transition and immediately continue without an explicit sleep/backoff boundary.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/ingest/driver.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern: |
+          if $COND {
+            $STATE = transition_to(...).await?;
+            continue;
+          }
+  - id: daemon-main-must-not-spawn-unsupervised-tasks
+    message: main.rs must orchestrate visors, not spawn daemon-owned background tasks directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-not-inside: |
+          fn spawn_critical_task(...) {
+            ...
+          }
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-either:
+          - pattern: tokio::spawn(async move { ... })
+          - pattern: visor::spawn_critical_task(...)
+  - id: daemon-main-must-not-own-visor-internals
+    message: main.rs should orchestrate visors, not implement their lifecycle internals directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern: crate::ingest::run(...)
+          - pattern: crate::index::runner::block_indexer_loop(...)
+  - id: daemon-non-visor-must-not-use-visor-internals
+    message: Non-visor daemon code must not depend on visor internals; use the public supervision contracts only.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/visor/**/*.rs
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern: crate::visor::await_task(...)
+          - pattern: crate::visor::spawn_critical_task(...)
+          - pattern: use crate::visor::await_task
+          - pattern: use crate::visor::spawn_critical_task
+          - pattern-regex: 'use\s+crate::visor::(?:core|ipc|live|rest|runtime)\b'
+          - pattern-regex: 'crate::visor::(?:core|ipc|live|rest|runtime)::'
+  - id: daemon-main-must-not-derive-overlay-plan
+    message: main.rs must consume index::visor overlay planning instead of deriving overlay policy inline.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern: $OPTIONS.live.chainlock || $OPTIONS.overlays.chainlock
+          - pattern-regex: '\b(?:crate::)?rest::OverlayCapabilities\s*\{'
+  - id: daemon-visors-must-not-depend-on-rest-handlers
+    message: Visor modules own lifecycle and orchestration, not REST handler logic.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/visor/**/*.rs
+        - /pkgs/daemon/src/index/visor/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/index/visor/overlay.rs
+        - /pkgs/daemon/src/visor/rest.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::rest::'
+          - pattern-regex: 'use\s+crate::(?:index|live)::[A-Za-z0-9_:]+::rest\b'
+          - pattern-regex: 'crate::rest::'
+          - pattern-regex: 'crate::(?:index|live)::[A-Za-z0-9_:]+::rest::'
+  - id: daemon-visors-must-not-call-task-entrypoints-directly
+    message: Visor modules must consume task-side worker builders instead of calling concrete task entrypoints directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/visor/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern: crate::rest::serve(...)
+          - pattern: crate::ipc::transport::serve(...)
+          - pattern: crate::ipc::verb::handle_commands(...)
+          - pattern: crate::live::mempool::refresh_summary_loop(...)
+          - pattern: crate::live::network::refresh_loop(...)
+          - pattern: crate::live::chainlock::refresh_loop(...)
+          - pattern: crate::live::protx::refresh_loop(...)
+          - pattern: crate::live::gov::refresh_loop(...)
+          - pattern: crate::live::zmq::fanout_loop(...)
+          - pattern: crate::live::stream::hub::fanout_loop(...)
+          - pattern: crate::live::mempool::sync_recent_loop(...)
+          - pattern: crate::live::islock::sync_current_loop(...)
+          - pattern: crate::live::gov::refresh_from_zmq_loop(...)
+  - id: daemon-visors-must-not-build-worker-tasks-directly
+    message: Visor modules must consume task-side supervised-task specs instead of assembling worker tasks or rebuild closures directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/visor/ipc.rs
+        - /pkgs/daemon/src/visor/live.rs
+        - /pkgs/daemon/src/visor/rest.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'crate::rest::[A-Za-z0-9_]+_worker_task\s*\('
+          - pattern-regex: 'crate::ipc::[A-Za-z0-9_]+_worker_task\s*\('
+          - pattern-regex: 'crate::live::[A-Za-z0-9_]+_worker_task\s*\('
+  - id: daemon-visor-trait-impls-must-stay-in-supervisor-modules
+    message: "Visor implementations belong only in dedicated supervisor modules."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/visor/core.rs
+        - /pkgs/daemon/src/visor/ipc.rs
+        - /pkgs/daemon/src/visor/live.rs
+        - /pkgs/daemon/src/visor/rest.rs
+    patterns:
+      - pattern-regex: '\bimpl\s+Visor\s+for\b'
+  - id: daemon-spawn-critical-task-must-stay-in-supervisor-modules
+    message: "spawn_critical_task(...) belongs only in supervisor modules."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/visor/mod.rs
+        - /pkgs/daemon/src/visor/core.rs
+        - /pkgs/daemon/src/visor/runtime.rs
+        - /pkgs/daemon/src/visor/ipc.rs
+        - /pkgs/daemon/src/visor/live.rs
+        - /pkgs/daemon/src/visor/rest.rs
+    patterns:
+      - pattern: spawn_critical_task(...)
+  - id: daemon-public-hash-boundaries-must-use-utils
+    message: Public txid and hash boundaries must use crate::utils endian helpers instead of raw hex encoding/decoding.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/*.rs
+        - /pkgs/daemon/src/tx/*.rs
+      exclude:
+        - /pkgs/daemon/src/rest/mod.rs
+        - /pkgs/daemon/src/rest/openapi.rs
+        - /pkgs/daemon/src/rest/error.rs
+        - /pkgs/daemon/src/live/gov/rest.rs
+        - /pkgs/daemon/src/tx/asset_lock.rs
+        - /pkgs/daemon/src/tx/asset_unlock.rs
+        - /pkgs/daemon/src/tx/coinbase.rs
+        - /pkgs/daemon/src/tx/mnhf.rs
+        - /pkgs/daemon/src/tx/quorum.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: 'hex::encode\(\s*&?(?:row\.)?(?:txid|hash|block_hash|pro_tx_hash|collateral_hash)\b'
+          - pattern-regex: 'hex::decode\(\s*&?(?:cursor\.)?(?:txid|hash|block_hash|pro_tx_hash|collateral_hash)\b'
+  - id: daemon-supervisor-lifecycle-methods-must-stay-in-supervisor-modules
+    message: "Supervisor lifecycle methods belong only in dedicated supervisor modules."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/visor/mod.rs
+        - /pkgs/daemon/src/visor/core.rs
+        - /pkgs/daemon/src/visor/ipc.rs
+        - /pkgs/daemon/src/visor/live.rs
+        - /pkgs/daemon/src/visor/rest.rs
+        - /pkgs/daemon/src/lifecycle.rs
+    patterns:
+      - pattern-not-inside: |
+          #[async_trait]
+          impl Supervisable for $T {
+            ...
+          }
+      - pattern-not-inside: |
+          impl Fenceable for $T {
+            ...
+          }
+      - pattern-not-inside: |
+          impl InterruptGate for $T {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: '\basync\s+fn\s+start\s*\('
+          - pattern-regex: '\bfn\s+interrupt\s*\('
+          - pattern-regex: '\basync\s+fn\s+stop\s*\('
+          - pattern-regex: '\bfn\s+interrupt_point\s*\('
+  - id: daemon-main-must-not-construct-ipc-command-context
+    message: "main.rs must consume ipc::visor control-plane planning, not construct IPC command internals inline."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\bipc::verb::CommandCtx\b'
+          - pattern-regex: '\bipc::verb::handle_commands\b'
+          - pattern-regex: '\bCommandVisor\b'
+          - pattern-regex: '\btake_command_rx\s*\('
+  - id: daemon-main-must-not-construct-rest-app-state
+    message: "main.rs must consume rest::visor planning, not construct REST app state inline."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\brest::AppState\b'
+          - pattern-regex: '\bstate:\s*rest::AppState\b'
+  - id: daemon-main-must-not-construct-live-visor-flags
+    message: "main.rs must consume live::visor planning, not assemble live feature flags inline."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\blive::visor::LiveVisorConfig\s*\{'
+          - pattern-regex: '\b(?:mempool_enabled|islock_enabled|network_enabled|governance_enabled|stream_enabled|chainlock_enabled|protx_enabled)\s*:'
+  - id: daemon-main-must-not-construct-core-visor-config
+    message: "main.rs must consume visor::CoreVisor planning, not assemble core runtime config inline."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\bvisor::CoreVisorConfig\s*\{'
+          - pattern-regex: '\bindex::enabled_stage_order\s*\('
+  - id: daemon-main-must-not-assemble-serve-runtime
+    message: "main.rs must consume visor::ServeRuntime planning, not assemble serve-mode runtime resources inline."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/main.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\blifecycle::Lifecycle::start\s*\('
+          - pattern-regex: '\bReadinessCache::new\s*\('
+          - pattern-regex: '\bSpentQueryCache::new\s*\('
+          - pattern-regex: '\bApiServerMetrics::default\s*\('
+          - pattern-regex: '\bOverlayPlan::from_options\s*\('
+          - pattern-regex: '\bbroadcast::channel\s*::<\s*wire::msg::DaemonMessage\s*>\s*\('
+          - pattern-regex: '\bpg_startup_diag\s*\('
+          - pattern-regex: '\b(?:CoreVisor|LiveVisor|RestVisor|IpcVisor)::new\s*\('
+  - id: daemon-health-surfaces-must-not-infer-core-health-from-active-lanes
+    message: "Health surfaces must use core_pipeline_diag freshness, not infer core health from active_lanes."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/status.rs
+        - /pkgs/console/src/pages/health.rs
+        - /pkgs/console/src/widgets/index_tree.rs
+    patterns:
+      - pattern-regex: '\.(?:index_scheduler_diag|scheduler)\.active_lanes\b'
+  - id: daemon-no-legacy-metrics-history-route
+    message: Use /api/v1/metrics/chart with block-native bucketing; do not reintroduce /api/v1/metrics/history.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/mod.rs
+        - /pkgs/daemon/src/index/metrics/rest.rs
+    patterns:
+      - pattern-regex: '/api/v1/metrics/history'
+  - id: daemon-metrics-rest-must-use-chart-query
+    message: Metrics REST handlers must use the shared MetricsChartQuery instead of ad hoc history params.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/metrics/rest.rs
+    patterns:
+      - pattern-regex: '\bstruct\s+HistoryParams\b'
+  - id: daemon-rest-openapi-timestamps-must-be-rfc3339-strings
+    message: Public REST timestamp fields in openapi.rs must be RFC 3339 strings, not integer epochs.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-regex: '\bpub\s+(?:time|orphaned_at|updated_at|first_seen_at|last_seen_at|start_time|end_time|creation_time|vote_time)\s*:\s*(?:Option<)?i(?:32|64)>?'
+  - id: daemon-rest-openapi-money-must-use-i64
+    message: Public REST monetary fields in openapi.rs must use base-unit i64 types, not floats.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-regex: '\bpub\s+(?:payment_amount|credit_pool_balance|circulating_supply|included_supply|balance|total_received|total_sent|value_out|value|fee|payment_amount)\s*:\s*(?:Option<)?f(?:32|64)>?'
+  - id: daemon-rest-openapi-no-legacy-pagination-schema
+    message: Public REST schemas use cursor pages; do not reintroduce legacy Pagination.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-regex: '\bstruct\s+Pagination\b'
+  - id: daemon-rest-no-offset-query-params
+    message: Public REST handlers must use cursor pagination, not offset query params.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+        - /pkgs/daemon/src/live/**/rest.rs
+        - /pkgs/daemon/src/rest/*.rs
+      exclude:
+        - /pkgs/daemon/src/rest/mod.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\bPaginationParams\b'
+          - pattern: next_link_for_offset_page(...)
+  - id: daemon-rest-openapi-no-next-link
+    message: Public REST schemas use nextCursor; do not reintroduce nextLink.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-regex: '\bnext_link\b|\bnextLink\b'
+  - id: daemon-spent-address-domain-summary-must-not-fall-back-to-base-tables
+    message: Address summary, history, and balances reads must stay on address-domain tables, not recompute from base tx tables.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/spent/sql.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?s)pub\s+async\s+fn\s+address_summary\b(?:(?!\npub\s+async\s+fn).)*\b(?:tx_outputs|tx_inputs|address_balances)\b'
+          - pattern-regex: '(?s)pub\s+async\s+fn\s+address_exists\b(?:(?!\npub\s+async\s+fn).)*\b(?:tx_outputs|tx_inputs|address_balances)\b'
+          - pattern-regex: '(?s)pub\s+async\s+fn\s+address_history_txs\b(?:(?!\npub\s+async\s+fn).)*\b(?:tx_outputs|tx_inputs|address_balances)\b'
+          - pattern-regex: '(?s)pub\s+async\s+fn\s+balances_page\b(?:(?!\npub\s+async\s+fn).)*\b(?:tx_outputs|tx_inputs|address_balances)\b'
+          - pattern-regex: '(?s)pub\s+async\s+fn\s+balances_summary\b(?:(?!\npub\s+async\s+fn).)*\b(?:tx_outputs|tx_inputs|address_balances)\b'
+  - id: daemon-rest-openapi-public-schemas-must-derive-debug
+    message: Public REST OpenAPI schema structs must derive Debug per the Rust guide.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-regex: '#\[derive\((?![^\]]*\bDebug\b)[^\]]*\bToSchema\b[^\]]*\)\]'
+  - id: daemon-config-toml-parsing-must-stay-in-init-config
+    message: Raw TOML config parsing belongs only in init/config.rs.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/init/config.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern: toml::from_str(...)
+          - pattern: toml::from_slice(...)
+          - pattern-regex: 'toml::de::from_[A-Za-z_]+\s*\('
+  - id: daemon-args-parsing-must-stay-in-init-args
+    message: Raw CLI argument parsing belongs only in init/args.rs.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/init/args.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: 'use\s+clap::'
+          - pattern-regex: '#\[derive\([^\]]*\b(?:Parser|ValueEnum)\b[^\]]*\)\]'
+          - pattern-regex: 'clap::value_parser!\s*\('
+          - pattern-regex: '\bSelf::parse\(\)'
+  - id: daemon-config-snapshot-must-stay-in-init-options
+    message: Runtime ConfigSnapshot assembly belongs only in init/options.rs.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+      exclude:
+        - /pkgs/daemon/src/init/options.rs
+        - /pkgs/daemon/src/wire/msg.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-regex: 'ConfigSnapshot\s*\{'
+  - id: daemon-no-dash-core-terminology
+    message: Use generic node terminology in daemon source text; keep Dash Core only in the copyright header.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/**/*.rs
+    patterns:
+      - pattern-regex: 'Dash Core'
+      - pattern-not-regex: '^// Copyright \(c\) .* The Dash Core developers$'
+  - id: daemon-rest-openapi-raw-routes-must-not-carry-live-overlay
+    message: Raw REST response schemas must stay payload-oriented and must not carry nested live overlays.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    pattern-regex: '(?s)pub struct Raw(?:Block|Tx)Response\s*\{[^}]*\blive\s*:'
+  - id: daemon-rest-openapi-validator-live-must-not-duplicate-status
+    message: Validator live overlays must not duplicate top-level public status.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    pattern-regex: '(?s)pub struct ValidatorLive\s*\{[^}]*\bstatus\s*:'
+  - id: daemon-rest-openapi-search-response-must-be-discriminated
+    message: SearchResponse must be a discriminated union, not a generic result bag.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    pattern: |
+      pub struct SearchResponse {
+        ...
+      }
+  - id: daemon-rest-openapi-network-response-must-not-be-opaque
+    message: NetworkResponse must expose typed nested schemas instead of opaque serde_json::Value fields.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    pattern-regex: '(?s)pub struct NetworkResponse\s*\{[^}]*(?:network_info\s*:\s*serde_json::Value|peer_info\s*:\s*serde_json::Value)'

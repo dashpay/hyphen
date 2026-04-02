@@ -1,0 +1,21 @@
+rules:
+  - id: app-views-barrel-vw-prefix
+    message: app/views public exports must use the Vw prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/views/src/lib/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!Vw)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-views-no-hy-imports
+    message: app/views must not import or export Hy-prefixed webui symbols.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/views/src/**/*.svelte
+        - /app/views/src/**/*.ts
+    pattern-regex: '(?:import|export)[^\n]*\bHy(?:An|Ic|Tx|Bl|Vl|Ad|Ba|[A-Z])[A-Za-z0-9_]*\b'

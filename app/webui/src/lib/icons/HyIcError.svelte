@@ -1,0 +1,104 @@
+<script lang="ts">
+  /**
+   * Render the themed error icon used by shell error states.
+   */
+  export let alt = "Error";
+</script>
+
+<div aria-label={alt} class="error-icon" role="img">
+  <svg
+    aria-hidden="true"
+    class="error-icon__image error-icon__image--dark"
+    height="256"
+    shape-rendering="crispEdges"
+    viewBox="-7 -2 50 50"
+    width="256"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <g transform="rotate(45, 9.5, 20)">
+      <path
+        d="M8.7 6.7H11.3V8.3H8.7V7.7H9.7V7.7H8.7Z M8.7 7.7H11.3V11.3H8.7Z M5.7 10.7H13.3V14.3H5.7Z M3.7 13.7H15.3V15.3H3.7Z M14.7 13.7H17.3V15.3H14.7Z M1.7 14.7H15.3V17.3H1.7Z M14.7 14.7H17.3V17.3H14.7Z M0.7 16.7H17.3V19.3H0.7Z M16.7 16.7H18.3V19.3H16.7Z M-0.3 18.7H18.6V26.3H-0.3Z M17.7 18.7H19.3V26.3H17.7Z M0.7 25.7H18.3V28.3H0.7Z M1.7 27.7H17.3V30.3H1.7Z M3.7 29.7H15.3V31.3H3.7Z M5.7 30.7H13.3V32.3H5.7Z"
+        fill="#FFF"
+      />
+      <path
+        d="M6.7 11.7H10.3V13.3H6.7Z M6.7 12.7H8.3V14.3H6.7Z M4.7 13.7H7.3V15.3H4.7Z M2.7 14.7H5.3V16.3H2.7Z M2.7 15.7H4.3V17.3H2.7Z M1.7 16.7H3.3V19.3H1.7Z M0.7 18.7H2.3V23.3H0.7Z"
+        fill="#000"
+      />
+      <g>
+        <path
+          d="M10.7 5.7H16.3V7.3H10.7Z M15.7 6.7H18.3V8.3H15.7Z M17.7 7.7H21.3V9.3H17.7Z M20.7 6.7H24.3V8.3H20.7Z M19.7 4.7H21.3V6.3H19.7Z M19.7 9.7H21.3V11.3H19.7Z M18.7 10.7H20.3V12.3H18.7Z M17.7 11.7H19.3V13.3H17.7Z M22.7 11.7H24.3V13.3H22.7Z M22.7 13.7H24.3V15.3H22.7Z"
+          fill="#CC3333"
+        />
+        <path
+          d="M22.7 9.7H24.3V11.3H22.7Z M25.7 8.7H27.3V10.3H25.7Z M25.7 5.7H27.3V7.3H25.7Z M17.7 3.7H19.3V5.3H17.7Z M15.7 2.7H17.3V4.3H15.7Z M24.7 2.7H26.3V4.3H24.7Z M20.7 1.7H22.3V3.3H20.7Z M21.7 3.7H23.3V5.3H21.7Z"
+          fill="#CC8822"
+        />
+        <path
+          d="M26.7 9.7H28.3V11.3H26.7Z M27.7 10.7H29.3V12.3H27.7Z M28.7 11.7H30.3V13.3H28.7Z M27.7 5.7H29.3V7.3H27.7Z M29.7 5.7H31.3V7.3H29.7Z M25.7 1.7H27.3V3.3H25.7Z M26.7 0.7H28.3V2.3H26.7Z M27.7 -0.3H29.3V1.3H27.7Z M19.7 -0.3H21.3V1.3H19.7Z"
+          fill="#CCCC44"
+        />
+      </g>
+    </g>
+  </svg>
+  <svg
+    aria-hidden="true"
+    class="error-icon__image error-icon__image--light"
+    height="256"
+    shape-rendering="crispEdges"
+    viewBox="-7 -2 50 50"
+    width="256"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <g transform="rotate(45, 9.5, 20)">
+      <path
+        d="M8.7 6.7H11.3V8.3H8.7V7.7H9.7V7.7H8.7Z M8.7 7.7H11.3V11.3H8.7Z M5.7 10.7H13.3V14.3H5.7Z M3.7 13.7H15.3V15.3H3.7Z M14.7 13.7H17.3V15.3H14.7Z M1.7 14.7H15.3V17.3H1.7Z M14.7 14.7H17.3V17.3H14.7Z M0.7 16.7H17.3V19.3H0.7Z M16.7 16.7H18.3V19.3H16.7Z M-0.3 18.7H18.6V26.3H-0.3Z M17.7 18.7H19.3V26.3H17.7Z M0.7 25.7H18.3V28.3H0.7Z M1.7 27.7H17.3V30.3H1.7Z M3.7 29.7H15.3V31.3H3.7Z M5.7 30.7H13.3V32.3H5.7Z"
+        fill="#000"
+      />
+      <path
+        d="M6.7 11.7H10.3V13.3H6.7Z M6.7 12.7H8.3V14.3H6.7Z M4.7 13.7H7.3V15.3H4.7Z M2.7 14.7H5.3V16.3H2.7Z M2.7 15.7H4.3V17.3H2.7Z M1.7 16.7H3.3V19.3H1.7Z M0.7 18.7H2.3V23.3H0.7Z"
+        fill="#FFF"
+      />
+      <g>
+        <path
+          d="M10.7 5.7H16.3V7.3H10.7Z M15.7 6.7H18.3V8.3H15.7Z M17.7 7.7H21.3V9.3H17.7Z M20.7 6.7H24.3V8.3H20.7Z M19.7 4.7H21.3V6.3H19.7Z M19.7 9.7H21.3V11.3H19.7Z M18.7 10.7H20.3V12.3H18.7Z M17.7 11.7H19.3V13.3H17.7Z M22.7 11.7H24.3V13.3H22.7Z M22.7 13.7H24.3V15.3H22.7Z"
+          fill="red"
+        />
+        <path
+          d="M22.7 9.7H24.3V11.3H22.7Z M25.7 8.7H27.3V10.3H25.7Z M25.7 5.7H27.3V7.3H25.7Z M17.7 3.7H19.3V5.3H17.7Z M15.7 2.7H17.3V4.3H15.7Z M24.7 2.7H26.3V4.3H24.7Z M20.7 1.7H22.3V3.3H20.7Z M21.7 3.7H23.3V5.3H21.7Z"
+          fill="#F80"
+        />
+        <path
+          d="M26.7 9.7H28.3V11.3H26.7Z M27.7 10.7H29.3V12.3H27.7Z M28.7 11.7H30.3V13.3H28.7Z M27.7 5.7H29.3V7.3H27.7Z M29.7 5.7H31.3V7.3H29.7Z M25.7 1.7H27.3V3.3H25.7Z M26.7 0.7H28.3V2.3H26.7Z M27.7 -0.3H29.3V1.3H27.7Z M19.7 -0.3H21.3V1.3H19.7Z"
+          fill="#FF0"
+        />
+      </g>
+    </g>
+  </svg>
+</div>
+
+<style>
+  .error-icon {
+    align-items: center;
+    display: inline-flex;
+    justify-content: center;
+  }
+
+  .error-icon__image {
+    display: block;
+    height: auto;
+    image-rendering: pixelated;
+    width: min(12rem, 100%);
+  }
+
+  .error-icon__image--light {
+    display: none;
+  }
+
+  :global(.theme-light) .error-icon__image--dark {
+    display: none;
+  }
+
+  :global(.theme-light) .error-icon__image--light {
+    display: block;
+  }
+</style>

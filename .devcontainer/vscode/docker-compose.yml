@@ -1,0 +1,14 @@
+services:
+  hyphen_dev:
+    build:
+      context: ../..
+      dockerfile: contrib/docker/ci.Dockerfile
+      args:
+        USER_ID: ${USER_ID:-1000}
+        GROUP_ID: ${GROUP_ID:-1000}
+    stdin_open: true
+    tty: true
+    ports:
+      - 5173:5173
+    volumes:
+      - ../..:/src/hyphen:cached

@@ -1,0 +1,31 @@
+rules:
+  - id: primitives-no-runtime-db-or-http-clients
+    message: primitives must stay transport- and storage-agnostic; keep axum, reqwest, sqlx, and zeromq out of pkgs/primitives.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/primitives/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern: use axum::$X
+          - pattern: axum::$X
+          - pattern: use reqwest::$X
+          - pattern: reqwest::$X
+          - pattern: use sqlx::$X
+          - pattern: sqlx::$X
+          - pattern: use zeromq::$X
+          - pattern: zeromq::$X
+  - id: primitives-no-daemon-console-coupling
+    message: primitives must not depend on daemon or console crates.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/primitives/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern: use hyphend::$X
+          - pattern: use hyphen_tui::$X
+          - pattern: hyphend::$X
+          - pattern: hyphen_tui::$X

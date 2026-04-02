@@ -1,0 +1,34 @@
+@import "$lib/theme/theme.css";
+
+html,
+body {
+  min-height: 100dvh;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-primary);
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+.vw-demo-table-hash {
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.vw-demo-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.vw-demo-chip {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-input);
+  height: 72px;
+}

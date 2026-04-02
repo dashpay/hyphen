@@ -1,0 +1,30 @@
+rules:
+  - id: app-api-no-optional-lookup-helpers
+    message: Use explicit ApResult-returning get(...) methods instead of tryGet(...) helpers.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/api/src/**/*.ts
+    pattern-regex: '\btryGet[A-Za-z0-9_]*\b'
+
+  - id: app-api-no-throw-transport-exports
+    message: app/api transport must expose Result-based helpers, not throw-based request helpers.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/api/src/internal/transport.ts
+    pattern-regex: 'export\s+async\s+function\s+request(?:Json|Response|OptionalJson)\s*\('
+
+  - id: app-api-no-error-classes
+    message: app/api errors must stay plain-data unions, not classes.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/api/src/contracts/errors.ts
+    pattern-regex: 'export\s+class\s+[A-Za-z0-9_]*Error\b'

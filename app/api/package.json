@@ -1,0 +1,36 @@
+{
+  "name": "@repo/hyphen-api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "bench": "sh -c 'if [ -z \"${HYPHEN_API_LIVE_URL:-}\" ]; then echo \"bench:api requires HYPHEN_API_LIVE_URL=<hyphen-api-base-url>\" >&2; exit 1; fi; vitest bench' sh",
+    "build": "tsc -p ./tsconfig.build.json",
+    "check": "tsc -p ./tsconfig.json --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@repo/eslint-rules": "workspace:*",
+    "@vitest/coverage-v8": "^3.2.4",
+    "@types/node": "^25.5.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "prettier-plugin-svelte": "^3.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

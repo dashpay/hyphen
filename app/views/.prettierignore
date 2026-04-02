@@ -1,0 +1,6 @@
+.svelte-kit
+build
+public
+src/gen
+package-lock.json
+pnpm-lock.yaml
