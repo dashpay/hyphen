@@ -1,0 +1,44 @@
+{
+  "name": "@repo/hyphen-i18n",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "intl-messageformat": "^10.7.18",
+    "json5": "^2.2.3"
+  },
+  "scripts": {
+    "build": "tsc -p ./tsconfig.build.json",
+    "check": "tsc --noEmit -p ./tsconfig.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "pnpm --filter @repo/eslint-rules build && eslint .",
+    "lint:fix": "pnpm --filter @repo/eslint-rules build && eslint . --fix",
+    "run:check": "tsx ./src/cli/check.ts",
+    "run:format": "tsx ./src/cli/format.ts",
+    "run:gen": "tsx ./src/cli/gen.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@repo/eslint-rules": "workspace:*",
+    "@types/node": "^25.3.3",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "jiti": "^2.6.1",
+    "prettier": "^3.0.0",
+    "prettier-plugin-svelte": "^3.0.0",
+    "svelte": "^5.45.6",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.0.0"
+  }
+}

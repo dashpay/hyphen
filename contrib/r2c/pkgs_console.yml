@@ -1,0 +1,79 @@
+rules:
+  - id: console-no-sqlx
+    message: the console must not talk to PostgreSQL directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/console/src/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern: sqlx::$X
+          - pattern: use sqlx::$X
+  - id: console-no-rpc-or-zmq-transports
+    message: the console must not talk to JSON-RPC, REST transports other than its REST worker, or ZMQ directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/console/src/**/*.rs
+      exclude:
+        - /pkgs/console/src/rest.rs
+    patterns:
+      - pattern-either:
+          - pattern: reqwest::$X
+          - pattern: use reqwest::$X
+          - pattern: zeromq::$X
+          - pattern: use zeromq::$X
+          - pattern: ureq::$X
+          - pattern: use ureq::$X
+  - id: console-no-direct-ipc-client-outside-ipc-module
+    message: the console IPC client belongs only in console/src/ipc.rs.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/console/src/**/*.rs
+      exclude:
+        - /pkgs/console/src/ipc.rs
+    patterns:
+      - pattern-either:
+          - pattern: use hyphend::wire::client::IpcClient
+          - pattern: hyphend::wire::client::IpcClient
+  - id: console-pages-and-widgets-must-not-call-controllers
+    message: console pages and widgets must stay view-only and avoid controller modules.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/console/src/pages/**/*.rs
+        - /pkgs/console/src/widgets/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::(?:ipc|rest|app)\b'
+          - pattern-regex: 'crate::(?:ipc|rest|app)::'
+  - id: console-pages-and-widgets-must-not-mutate-appstate
+    message: console pages and widgets must render from AppState, not mutate it.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/console/src/pages/**/*.rs
+        - /pkgs/console/src/widgets/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: '&mut\s+AppState'
+          - pattern-regex: '&mut\s+crate::model::AppState'
+  - id: console-no-detached-thread-spawn
+    message: console worker threads must be owned and joined; detached std::thread::spawn calls are not allowed.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/console/src/**/*.rs
+    patterns:
+      - pattern: std::thread::spawn(...)
+      - pattern-not-inside: |
+          let $HANDLE = std::thread::spawn(...);
+      - pattern-not-inside: |
+          return std::thread::spawn(...);

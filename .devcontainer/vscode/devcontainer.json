@@ -1,0 +1,22 @@
+{
+  "name": "hyphen",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "hyphen_dev",
+  "workspaceFolder": "/src/hyphen",
+  "remoteUser": "moby",
+  "initializeCommand": "printf 'USER_ID=%s\\nGROUP_ID=%s\\n' \"$(id -u)\" \"$(id -g)\" > .devcontainer/vscode/.env",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "dbaeumer.vscode-eslint",
+        "editorconfig.editorconfig",
+        "esbenp.prettier-vscode",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "rust-lang.rust-analyzer",
+        "svelte.svelte-vscode",
+      ]
+    }
+  }
+}

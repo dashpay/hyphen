@@ -1,0 +1,19 @@
+# Use the following command to ensure permissions match the host
+# docker compose build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g)
+
+services:
+  devcontainer:
+    build:
+      context: "."
+      dockerfile: "./dev.Dockerfile"
+      args:
+        USER_ID: 1000
+        GROUP_ID: 1000
+    stdin_open: true
+    tty: true
+    ports:
+      - 5173:5173
+    volumes:
+      - "../..:/src/hyphen:rw"
+      - "${HOME}/.claude:/home/moby/.claude:rw"
+      - "${HOME}/.claude.json:/home/moby/.claude.json:rw"

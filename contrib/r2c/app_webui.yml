@@ -1,0 +1,537 @@
+rules:
+  - id: app-webui-no-components-bucket
+    message: Use $lib/views or $lib/*/views instead of $lib/components.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/**/*.svelte
+        - /app/webui/src/**/*.ts
+    pattern-regex: 'from\s+"\$lib/components"'
+
+  - id: app-webui-non-icons-no-hyic-exports
+    message: Only src/lib/icons may export HyIc symbols.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.svelte
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/icons/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyIc[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyIc[A-Za-z0-9_]*'
+
+  - id: app-webui-non-anim-no-hyan-exports
+    message: Only src/lib/anim may export HyAn symbols.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.svelte
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/anim/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyAn[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyAn[A-Za-z0-9_]*'
+
+  - id: app-webui-non-hyutil-no-hyutil-exports
+    message: Only src/lib/HyUtil.ts may export HyUtil symbols.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/HyUtil.ts
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyUtil[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyUtil[A-Za-z0-9_]*'
+
+  - id: app-webui-non-txutil-no-hytxutil-exports
+    message: Only src/lib/tx/HyTxUtil.ts may export HyTx symbols outside tx/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/tx/HyTxUtil.ts
+        - /app/webui/src/lib/tx/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyTx[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyTx[A-Za-z0-9_]*'
+
+  - id: app-webui-non-blutil-no-hyblutil-exports
+    message: Only src/lib/block/HyBlUtil.ts may export HyBl symbols outside block/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/block/HyBlUtil.ts
+        - /app/webui/src/lib/block/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyBl[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyBl[A-Za-z0-9_]*'
+
+  - id: app-webui-non-adutil-no-hyadutil-exports
+    message: Only src/lib/address/HyAdUtil.ts may export HyAd symbols outside address/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/address/HyAdUtil.ts
+        - /app/webui/src/lib/address/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyAd[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyAd[A-Za-z0-9_]*'
+
+  - id: app-webui-non-vlutil-no-hyvlutil-exports
+    message: Only src/lib/validator/HyVlUtil.ts may export HyVl symbols outside validator/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/validator/HyVlUtil.ts
+        - /app/webui/src/lib/validator/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyVl[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyVl[A-Za-z0-9_]*'
+
+  - id: app-webui-non-mputil-no-hymp-exports
+    message: Only src/lib/mempool/HyMpUtil.ts may export HyMp symbols outside mempool/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/mempool/HyMpUtil.ts
+        - /app/webui/src/lib/mempool/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyMp[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyMp[A-Za-z0-9_]*'
+
+  - id: app-webui-non-ntutil-no-hynt-exports
+    message: Only src/lib/network/HyNtUtil.ts may export HyNt symbols outside network/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/network/HyNtUtil.ts
+        - /app/webui/src/lib/network/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyNt[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyNt[A-Za-z0-9_]*'
+
+  - id: app-webui-non-prutil-no-hypr-exports
+    message: Only src/lib/proposal/HyPrUtil.ts may export HyPr symbols outside proposal/views.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/proposal/HyPrUtil.ts
+        - /app/webui/src/lib/proposal/views/**
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyPr[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyPr[A-Za-z0-9_]*'
+
+  - id: app-webui-hyutil-prefix
+    message: src/lib/HyUtil.ts exports must use the HyUtil prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/HyUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyUtil)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyUtil)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-txutil-prefix
+    message: src/lib/tx/HyTxUtil.ts exports must use the HyTx prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/HyTxUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyTx)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyTx)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-blutil-prefix
+    message: src/lib/block/HyBlUtil.ts exports must use the HyBl prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/block/HyBlUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyBl)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyBl)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-adutil-prefix
+    message: src/lib/address/HyAdUtil.ts exports must use the HyAd prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/address/HyAdUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyAd)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyAd)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-vlutil-prefix
+    message: src/lib/validator/HyVlUtil.ts exports must use the HyVl prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/validator/HyVlUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyVl)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyVl)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-mputil-prefix
+    message: src/lib/mempool/HyMpUtil.ts exports must use the HyMp prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/mempool/HyMpUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyMp)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyMp)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-ntutil-prefix
+    message: src/lib/network/HyNtUtil.ts exports must use the HyNt prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/network/HyNtUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyNt)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyNt)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-prutil-prefix
+    message: src/lib/proposal/HyPrUtil.ts exports must use the HyPr prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/proposal/HyPrUtil.ts
+    pattern-regex: 'export\s+(?:const|function|class)\s+(?!HyPr)[A-Za-z0-9_]+|export\s+\{\s*(?:default\s+as\s+)?(?!HyPr)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-non-balances-views-no-hybl-exports
+    message: Only block views and block util may export HyBl symbols.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.ts
+      exclude:
+        - /app/webui/src/lib/block/views/**
+        - /app/webui/src/lib/block/HyBlUtil.ts
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?HyBl[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+HyBl[A-Za-z0-9_]*'
+
+  - id: app-webui-views-barrel-hy-prefix
+    message: app/webui src/lib/views exports must use the Hy prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!Hy)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-no-dash-literals-outside-config
+    message: Keep Dash, DASH, and Dash Core literals in src/lib/config only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/**/*.svelte
+        - /app/webui/src/**/*.ts
+      exclude:
+        - /app/webui/src/lib/config/**
+    pattern-regex: '["''](?:[^"'']*\b(?:Dash Core|DASH|Dash)\b[^"'']*)["'']'
+
+  - id: app-webui-icons-barrel-hyic-prefix
+    message: app/webui src/lib/icons exports must use the HyIc prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/icons/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyIc)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-anim-barrel-hyan-prefix
+    message: app/webui src/lib/anim exports must use the HyAn prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/anim/index.ts
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?(?!HyAn)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-tx-views-barrel-hytx-prefix
+    message: app/webui tx/views exports must use the HyTx prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyTx)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-block-views-barrel-hybl-prefix
+    message: app/webui block/views exports must use the HyBl prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/block/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyBl)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-validator-views-barrel-hyvl-prefix
+    message: app/webui validator/views exports must use the HyVl prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/validator/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyVl)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-address-views-barrel-hyad-prefix
+    message: app/webui address/views exports must use the HyAd prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/address/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyAd)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-mempool-views-barrel-hymp-prefix
+    message: app/webui mempool/views exports must use the HyMp prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/mempool/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyMp)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-network-views-barrel-hynt-prefix
+    message: app/webui network/views exports must use the HyNt prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/network/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyNt)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-proposal-views-barrel-hypr-prefix
+    message: app/webui proposal/views exports must use the HyPr prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/proposal/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!HyPr)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-balances-views-barrel-hy-prefix
+    message: app/webui balances/views exports must use the Hy prefix.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/balances/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+(?!Hy)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-general-views-no-domain-view-imports
+    message: app/webui src/lib/views must stay independent from domain view layers.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/views/**/*.svelte
+        - /app/webui/src/lib/views/**/*.ts
+    pattern-regex: 'from\s+"(?:\$lib/(?:tx|block|validator|address|balances)/views|[^"]*/(?:tx|block|validator|address|balances)/views)"|from\s+''(?:\$lib/(?:tx|block|validator|address|balances)/views|[^'']*/(?:tx|block|validator|address|balances)/views)'''
+
+  - id: app-webui-general-views-no-special-family-exports
+    message: app/webui src/lib/views must export only Hy symbols.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/views/**/*.ts
+    pattern-regex: 'export\s+\{\s*(?:default\s+as\s+)?Hy(?:Tx|Bl|Vl|Ad|Ic|An)[A-Za-z0-9_]*\s*\}|export\s+(?:const|function|class)\s+Hy(?:Tx|Bl|Vl|Ad|Ic|An)[A-Za-z0-9_]*'
+
+  - id: app-webui-tx-views-no-cross-family-imports
+    message: app/webui tx/views must not import other domain view families.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/views/**/*.svelte
+        - /app/webui/src/lib/tx/views/**/*.ts
+    pattern-regex: 'from\s+"(?:\$lib/(?:block|validator|address|balances)/views|[^"]*/(?:block|validator|address|balances)/views)"|from\s+''(?:\$lib/(?:block|validator|address|balances)/views|[^'']*/(?:block|validator|address|balances)/views)'''
+
+  - id: app-webui-block-views-no-cross-family-imports
+    message: app/webui block/views must not import other domain view families.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/block/views/**/*.svelte
+        - /app/webui/src/lib/block/views/**/*.ts
+    pattern-regex: 'from\s+"(?:\$lib/(?:validator|address|balances)/views|[^"]*/(?:validator|address|balances)/views)"|from\s+''(?:\$lib/(?:validator|address|balances)/views|[^'']*/(?:validator|address|balances)/views)'''
+
+  - id: app-webui-validator-views-no-cross-family-imports
+    message: app/webui validator/views must not import other domain view families.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/validator/views/**/*.svelte
+        - /app/webui/src/lib/validator/views/**/*.ts
+    pattern-regex: 'from\s+"(?:\$lib/(?:tx|block|address|balances)/views|[^"]*/(?:tx|block|address|balances)/views)"|from\s+''(?:\$lib/(?:tx|block|address|balances)/views|[^'']*/(?:tx|block|address|balances)/views)'''
+
+  - id: app-webui-address-views-no-cross-family-imports
+    message: app/webui address/views must not import other domain view families.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/address/views/**/*.svelte
+        - /app/webui/src/lib/address/views/**/*.ts
+    pattern-regex: 'from\s+"(?:\$lib/(?:block|validator|balances)/views|[^"]*/(?:block|validator|balances)/views)"|from\s+''(?:\$lib/(?:block|validator|balances)/views|[^'']*/(?:block|validator|balances)/views)'''
+
+  - id: app-webui-views-no-family-prefix-drift
+    message: app/webui src/lib/views exports must stay in the Hy family only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+Hy(?:Tx|Bl|Vl|Ad|An|Ic)[A-Za-z0-9_]*\s*\}'
+
+  - id: app-webui-icons-no-family-prefix-drift
+    message: app/webui src/lib/icons exports must stay in the HyIc family only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/icons/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+Hy(?!Ic)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-tx-views-no-family-prefix-drift
+    message: app/webui tx/views exports must stay in the HyTx family only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/tx/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+Hy(?!Tx)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-block-views-no-family-prefix-drift
+    message: app/webui block/views exports must stay in the HyBl family only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/block/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+Hy(?!Bl)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-validator-views-no-family-prefix-drift
+    message: app/webui validator/views exports must stay in the HyVl family only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/validator/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+Hy(?!Vl)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-address-views-no-family-prefix-drift
+    message: app/webui address/views exports must stay in the HyAd family only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/address/views/index.ts
+    pattern-regex: 'export\s+\{\s*default\s+as\s+Hy(?!Ad)[A-Za-z0-9_]+\s*\}'
+
+  - id: app-webui-responsive-width-literals
+    message: Use shared webui breakpoint widths only.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/**/*.svelte
+        - /app/webui/src/**/*.css
+    pattern-regex: '@(?:media|container)\s*\([^)]*width:\s*(?!360px|480px|768px|1023px|1024px|1440px|1920px)\d+px'
+
+  - id: app-webui-no-hypagecolumns-mobilebreakpoint
+    message: HyPageColumns uses stackAt instead of mobileBreakpoint.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/**/*.svelte
+        - /app/webui/src/**/*.ts
+    pattern-regex: '<HyPageColumns[^>]*\bmobileBreakpoint\s*='
+
+  - id: app-webui-no-hypagecolumns-columns-prop
+    message: HyPageColumns uses mode instead of raw columns strings.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/**/*.svelte
+        - /app/webui/src/**/*.ts
+    pattern-regex: '<HyPageColumns[^>]*\bcolumns\s*='
+
+  - id: app-webui-no-table-layout-measurement
+    message: Use shared HyTableUtil measurement helpers instead of local DOM probes.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/**/*.svelte
+        - /app/webui/src/**/*.ts
+      exclude:
+        - /app/webui/src/lib/views/HyTableUtil.ts
+    pattern-regex: 'measureColumnWidth\s*\(|querySelectorAll<HTMLElement>\('
+
+  - id: app-webui-no-table-max-content-columns
+    message: Use bounded shared table widths instead of max-content columns.
+    severity: ERROR
+    languages:
+      - regex
+    paths:
+      include:
+        - /app/webui/src/lib/**/*.svelte
+    pattern-regex: '(?:headerWidth|width):\s*"max-content"'

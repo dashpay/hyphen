@@ -1,0 +1,65 @@
+name: Build TypeScript
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: "Path to container"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: Build TypeScript
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    env:
+      NODE_ENV: development
+    container:
+      image: ${{ inputs.path }}
+      options: --user root
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Initial setup
+        id: setup
+        run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependency cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.setup.outputs.store }}
+          key: pnpm-deps-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-deps-${{ runner.arch }}-
+
+      - name: Manage build cache
+        uses: actions/cache@v5
+        with:
+          path: node_modules
+          key: pnpm-build-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: pnpm-build-${{ runner.arch }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Lint and check workspace
+        run: pnpm check && pnpm lint
+
+      - name: Format workspace
+        run: pnpm format:check

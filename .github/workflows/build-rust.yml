@@ -1,0 +1,59 @@
+name: Build Rust
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: "Path to container"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: Build Rust
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    container:
+      image: ${{ inputs.path }}
+      options: --user root
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Initial setup
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Restore dependency cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            /opt/cargo/registry
+            /opt/cargo/git
+          key: cargo-deps-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-deps-${{ runner.arch }}-
+
+      - name: Manage build cache
+        uses: actions/cache@v5
+        with:
+          path: target
+          key: cargo-build-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: cargo-build-${{ runner.arch }}-
+
+      - name: Lint workspace
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Format workspace (check)
+        run: cargo fmt --all --check
+
+      - name: Build workspace
+        run: cargo build --workspace --tests

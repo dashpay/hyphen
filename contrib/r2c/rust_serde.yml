@@ -1,0 +1,9 @@
+rules:
+  - id: rust-serde-no-function-defaults
+    message: avoid serde default functions; use Default on the type or field-level #[serde(default)] instead.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/**/*.rs
+    pattern-regex: 'serde\(default\s*=\s*"[^"]+"'

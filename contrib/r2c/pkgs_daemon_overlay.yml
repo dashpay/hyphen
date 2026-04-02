@@ -1,0 +1,163 @@
+rules:
+  - id: daemon-index-overlay-must-not-depend-on-live-owners
+    message: Index overlay modules may enrich indexed responses, but must not depend on live ownership modules directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/overlay.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::live::[A-Za-z0-9_:]+::(?:rest|state|rpc|zmq|stream)\b'
+          - pattern-regex: 'crate::live::[A-Za-z0-9_:]+::(?:rest|state|rpc|zmq|stream)::'
+  - id: daemon-index-rest-must-not-use-live-sql-directly
+    message: Indexed REST handlers must go through owner overlay helpers, not sql::live directly.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/**/rest.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-regex: 'crate::sql::live::'
+  - id: daemon-live-must-not-depend-on-index-overlays
+    message: Live ownership modules must not depend on indexed overlay composition modules.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/live/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'use\s+crate::index::[A-Za-z0-9_:]+::overlay\b'
+          - pattern-regex: 'crate::index::[A-Za-z0-9_:]+::overlay::'
+  - id: daemon-validator-live-must-not-duplicate-indexed-fields
+    message: Validator overlay schemas must not repeat fields already owned by the indexed validator payload.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct ValidatorLive {
+            ...
+          }
+      - pattern-regex: '\bpub\s+(?:pro_tx_hash|collateral_hash|collateral_index|addresses|operator_pub_key|operator_reward|validator_type|status|services|registered_height|last_updated_height|history)\s*:'
+  - id: daemon-block-live-must-not-duplicate-indexed-fields
+    message: Block overlay schemas must not repeat fields already owned by the indexed block payload.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct BlockLive {
+            ...
+          }
+      - pattern-regex: '\bpub\s+(?:as_of_height|height|hash|previousblockhash|merkleroot|time|bits|nonce|version|size|tx_count|status|orphaned_at|chainwork|cb_tx)\s*:'
+  - id: daemon-block-tags-must-not-expose-live-fields
+    message: Top-level block tags are indexed/base summaries only; live ChainLock applicability belongs under live.tags.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct BlockTags {
+            ...
+          }
+      - pattern-regex: '\bpub\s+chainlock\s*:'
+  - id: daemon-block-live-tags-must-not-repeat-indexed-tags
+    message: Block live tags may summarize live applicability, but must not repeat indexed-owned tag fields like orphan.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct BlockLiveTags {
+            ...
+          }
+      - pattern-regex: '\bpub\s+orphan\s*:'
+  - id: daemon-tx-live-must-not-duplicate-indexed-fields
+    message: Transaction overlay schemas must not repeat fields already owned by the indexed transaction payload, except for the dedicated live.tags summary.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct TxLive {
+            ...
+          }
+      - pattern-regex: '\bpub\s+(?:as_of_height|txid|block_height|block_pos|version|tx_type|lock_time|size|value_out|input_count|output_count|fee|payload|vin|vout|rawtx)\s*:'
+  - id: daemon-tx-tags-must-not-expose-live-fields
+    message: Top-level transaction tags are indexed/base summaries only; live applicability belongs under live.tags.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct TxTags {
+            ...
+          }
+      - pattern-regex: '\bpub\s+(?:mempool|islock)\s*:'
+  - id: daemon-tx-live-tags-must-not-repeat-indexed-tags
+    message: Transaction live tags may summarize live applicability, but must not repeat indexed-owned tag fields like mined.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/rest/openapi.rs
+    patterns:
+      - pattern-inside: |
+          pub struct TxLiveTags {
+            ...
+          }
+      - pattern-regex: '\bpub\s+mined\s*:'
+  - id: daemon-validator-overlay-must-not-duplicate-indexed-fields
+    message: Validator overlay state must not repeat fields already owned by the indexed validator store.
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /pkgs/daemon/src/index/validator/overlay.rs
+    patterns:
+      - pattern-not-inside: |
+          mod tests {
+            ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+            ...
+          }
+      - pattern-inside: |
+          pub struct ValidatorOverlay {
+            ...
+          }
+      - pattern-regex: '\bpub\s+(?:pro_tx_hash|collateral_hash|collateral_index|collateral_address|owner_address|voting_address|payout_address|operator_pubkey|operator_reward|validator_type|status|addr_core_p2p|addr_platform_p2p|addr_platform_https|registered_height|last_updated_height)\s*:'

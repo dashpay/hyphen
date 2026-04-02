@@ -1,0 +1,118 @@
+# Permitted regardless of namespace unless overridden
+[global]
+types = [
+  "build",
+  "chore",
+  "ci",
+  "doc",
+  "feat",
+  "fix",
+  "lint",
+  "misc",
+  "refac",
+  "test",
+]
+
+# User-defined namespaces
+[api]
+
+[base]
+
+[console]
+scopes = [
+  "apis",
+  "app",
+  "args",
+  "error",
+  "health",
+  "ipc",
+  "model",
+  "pages",
+  "rest",
+  "settings",
+  "sidebar",
+  "status",
+  "theme",
+  "widgets",
+]
+
+[daemon]
+scopes = [
+  "args",
+  "chainlock",
+  "config",
+  "datadir",
+  "db",
+  "diag",
+  "error",
+  "gov",
+  "hash",
+  "index",
+  "ingest",
+  "ipc",
+  "islock",
+  "lifecycle",
+  "live",
+  "lockfile",
+  "logging",
+  "mempool",
+  "network",
+  "rest",
+  "rpc",
+  "script",
+  "sources",
+  "spent",
+  "sql",
+  "stream",
+  "tx",
+  "visor",
+  "wire",
+  "zmq",
+]
+
+[eslint]
+
+[i18n]
+
+[primitives]
+scopes = [
+  "block",
+  "ser",
+  "sptx",
+  "tx",
+  "types",
+]
+
+[views]
+scopes = [
+  "chart",
+  "demo",
+  "feedback",
+  "form",
+  "layout",
+  "navigation",
+  "overlay",
+  "table",
+  "theme",
+]
+
+[webui]
+scopes = [
+  "address",
+  "api",
+  "balances",
+  "block",
+  "build",
+  "config",
+  "error",
+  "format",
+  "layout",
+  "overview",
+  "routing",
+  "store",
+  "tx",
+  "validator",
+]
+
+
+[schema]

@@ -1,0 +1,37 @@
+[package]
+name = "hyphen-tui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "hyphen-tui"
+path = "src/main.rs"
+
+[dependencies]
+clap               = { version = "4", features = ["derive"] }
+crossterm          = "0.29"
+hyphend            = { path = "../daemon", default-features = false, features = ["wire"] }
+ratatui            = "0.30"
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq               = "3"
+
+[lints.clippy]
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unwrap_used = "deny"
+
+[lints.rust]
+keyword_idents = "deny"
+missing_debug_implementations = "warn"
+non_ascii_idents = "deny"
+rust_2021_incompatible_closure_captures = "deny"
+rust_2021_incompatible_or_patterns = "deny"
+unsafe_code = "deny"
+unused_must_use = "warn"

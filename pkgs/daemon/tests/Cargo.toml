@@ -1,0 +1,31 @@
+[package]
+name = "hyphend-tests"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+async-trait = "0.1"
+axum = "0.8"
+hex = "0.4"
+hyphend = { path = "..", default-features = false, features = ["tests"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-none", "postgres"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
+
+[lints.clippy]
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unwrap_used = "deny"
+
+[lints.rust]
+keyword_idents = "deny"
+missing_debug_implementations = "warn"
+non_ascii_idents = "deny"
+rust_2021_incompatible_closure_captures = "deny"
+rust_2021_incompatible_or_patterns = "deny"
+unsafe_code = "deny"
+unused_must_use = "warn"

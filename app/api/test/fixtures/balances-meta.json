@@ -1,0 +1,20 @@
+{
+  "asOfHeight": 2441849,
+  "totalCount": 3000,
+  "value": [
+    {
+      "rank": 2,
+      "address": "XexampleMeta",
+      "balance": 90,
+      "pctSupply": 0.45,
+      "totalReceived": 120,
+      "totalSent": 30,
+      "txCount": 4
+    }
+  ],
+  "meta": {
+    "includedSupply": 200,
+    "supplyDefinition": "nested balances snapshot"
+  },
+  "nextCursor": "cursor-meta"
+}

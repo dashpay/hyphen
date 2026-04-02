@@ -1,0 +1,81 @@
+name: Build container
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: "Path to use for build context"
+        required: true
+        type: string
+      file:
+        description: "Path to Dockerfile"
+        required: true
+        type: string
+      name:
+        description: "Container name"
+        required: true
+        type: string
+    outputs:
+      path:
+        description: "Path to built container"
+        value: ${{ jobs.build.outputs.image }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: ${{ inputs.name }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.hash }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Login to container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare variables and check if image already exists
+        id: vars
+        run: |
+          BRANCH_NAME=$(echo "${{ github.head_ref || github.ref_name }}" | tr '[:upper:]' '[:lower:]')
+          echo "tag=${BRANCH_NAME}" >> "$GITHUB_OUTPUT"
+
+          HASH=$(echo -n "${{ hashFiles('contrib/docker/ci.Dockerfile', 'pyproject.toml') }}" | cut -c1-12)
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+
+          IMAGE=ghcr.io/${{ github.repository }}/${{ inputs.name }}
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+          if docker manifest inspect "${IMAGE}:${HASH}" 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.vars.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        if: steps.vars.outputs.exists != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.file }}
+          push: true
+          provenance: false
+          sbom: false
+          platforms: linux/arm64
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.hash }}
+          cache-from: type=registry,ref=${{ steps.vars.outputs.image }}:cache
+          cache-to: type=registry,ref=${{ steps.vars.outputs.image }}:cache,mode=max

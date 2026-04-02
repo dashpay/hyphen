@@ -1,0 +1,17 @@
+{
+  base: {
+    "hy-donut-top1": "var(--accent-blue)",
+    "hy-donut-top2to5": "var(--accent-mint)",
+    "hy-donut-top6to10": "#ff6b8a",
+    "hy-donut-top11to25": "var(--status-warning)",
+    "hy-donut-top26to50": "#ab7aff",
+    "hy-donut-top51to100": "#4dd0e1",
+    "hy-donut-size": "180px",
+    "hy-donut-size-mobile": "160px",
+    "hy-donut-swatch-size": "12px",
+    "hy-donut-legend-padding": "var(--space-2) var(--space-4)",
+    "hy-donut-row-padding": "var(--space-3) var(--space-4)",
+    "hy-donut-center-padding": "var(--space-2) var(--space-4) 0",
+    "hy-donut-center-padding-mobile-bottom": "var(--space-5)",
+  },
+}

@@ -1,0 +1,552 @@
+//
+// Copyright (c) 2026-present, The Dash Core developers
+// SPDX-License-Identifier: MIT
+// See the accompanying file LICENSE or https://opensource.org/license/MIT
+//
+
+//! ZMQ source module for live node event subscriptions.
+
+use std::convert::TryInto;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+
+use tokio::sync::Mutex;
+use tokio::time::timeout;
+use tracing::info;
+use zeromq::{Socket, SocketRecv, SubSocket, ZmqMessage};
+
+use super::ZmqSource as ZmqSourceTrait;
+use crate::config::{ZmqConfig, ZmqTopic};
+use crate::error::DaemonError;
+use hyphend::wire::msg::ZmqDiag;
+
+const ZMQ_STARTUP_TIMEOUT_SECS: u64 = 5;
+
+/// Raw multipart message received from a node ZMQ subscription.
+#[derive(Debug, Clone)]
+pub struct RawZmqMessage {
+  pub frames: Vec<Vec<u8>>,
+}
+
+/// Typed low-level ZMQ event decoded from a node multipart message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ZmqEvent {
+  RawTx { tx: Vec<u8>, sequence: u32 },
+  RawTxLock { tx: Vec<u8>, sequence: u32 },
+  RawChainLock { chainlock: Vec<u8>, sequence: u32 },
+  RawGovernanceObject { object: Vec<u8>, sequence: u32 },
+  RawGovernanceVote { vote: Vec<u8>, sequence: u32 },
+  Sequence { event: SequenceEvent, sequence: u32 },
+}
+
+/// Typed interpretation of the node `sequence` ZMQ topic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SequenceEvent {
+  BlockConnected {
+    hash: [u8; 32],
+  },
+  BlockDisconnected {
+    hash: [u8; 32],
+  },
+  TxAdded {
+    txid: [u8; 32],
+    mempool_sequence: u64,
+  },
+  TxRemoved {
+    txid: [u8; 32],
+    mempool_sequence: u64,
+  },
+}
+
+/// ZeroMQ subscriber transport for node live topics.
+pub struct CoreZmqSource {
+  endpoints: Vec<String>,
+  topics: Vec<ZmqTopic>,
+  socket: Mutex<SubSocket>,
+  metrics: ZmqMetrics,
+}
+
+impl std::fmt::Debug for CoreZmqSource {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("ZmqSource")
+      .field("endpoints", &self.endpoints)
+      .field("topics", &self.topics)
+      .finish()
+  }
+}
+
+#[derive(Debug)]
+struct ZmqMetrics {
+  enabled: bool,
+  connected: AtomicBool,
+  total_events: AtomicU64,
+  total_errors: AtomicU64,
+  last_event_epoch: AtomicU64,
+  sequence_gaps: AtomicU64,
+  topic_counts: StdMutex<Vec<(String, u64)>>,
+  error_counts: StdMutex<Vec<(String, u64)>>,
+  last_sequence: StdMutex<Vec<(String, u32)>>,
+}
+
+impl ZmqMetrics {
+  fn new(config: &ZmqConfig) -> Self {
+    Self {
+      enabled: config.enabled,
+      connected: AtomicBool::new(false),
+      total_events: AtomicU64::new(0),
+      total_errors: AtomicU64::new(0),
+      last_event_epoch: AtomicU64::new(0),
+      sequence_gaps: AtomicU64::new(0),
+      topic_counts: StdMutex::new(Vec::new()),
+      error_counts: StdMutex::new(Vec::new()),
+      last_sequence: StdMutex::new(Vec::new()),
+    }
+  }
+
+  fn mark_connected(&self) {
+    self.connected.store(true, Ordering::Relaxed);
+  }
+
+  fn record_event(&self, topic: &str, sequence: u32) {
+    self.total_events.fetch_add(1, Ordering::Relaxed);
+    self.connected.store(true, Ordering::Relaxed);
+    self.bump_counter(&self.topic_counts, topic);
+    self.track_sequence(topic, sequence);
+    let epoch = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_secs();
+    self.last_event_epoch.store(epoch, Ordering::Relaxed);
+  }
+
+  fn record_error(&self, category: &str) {
+    self.total_errors.fetch_add(1, Ordering::Relaxed);
+    self.connected.store(false, Ordering::Relaxed);
+    self.bump_counter(&self.error_counts, category);
+  }
+
+  fn snapshot(&self, endpoints: &[String], topics: &[ZmqTopic]) -> ZmqDiag {
+    let last_event_epoch = self.last_event_epoch.load(Ordering::Relaxed);
+    ZmqDiag {
+      enabled: self.enabled,
+      connected: self.connected.load(Ordering::Relaxed),
+      endpoints: endpoints.to_vec(),
+      subscriptions: topics
+        .iter()
+        .map(|topic| topic.subscription_name().to_owned())
+        .collect(),
+      total_events: self.total_events.load(Ordering::Relaxed),
+      total_errors: self.total_errors.load(Ordering::Relaxed),
+      last_event_epoch: if last_event_epoch == 0 {
+        None
+      } else {
+        Some(last_event_epoch)
+      },
+      sequence_gaps: self.sequence_gaps.load(Ordering::Relaxed),
+      topic_counts: self
+        .topic_counts
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default(),
+      error_counts: self
+        .error_counts
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default(),
+    }
+  }
+
+  fn bump_counter(&self, counters: &StdMutex<Vec<(String, u64)>>, key: &str) {
+    if let Ok(mut counters) = counters.lock() {
+      if let Some((_, count)) = counters.iter_mut().find(|(name, _)| name == key) {
+        *count += 1;
+      } else {
+        counters.push((key.to_owned(), 1));
+      }
+    }
+  }
+
+  fn track_sequence(&self, topic: &str, sequence: u32) {
+    if let Ok(mut last_sequence) = self.last_sequence.lock() {
+      if let Some((_, last)) = last_sequence.iter_mut().find(|(name, _)| name == topic) {
+        if *last != sequence.wrapping_sub(1) {
+          self.sequence_gaps.fetch_add(1, Ordering::Relaxed);
+        }
+        *last = sequence;
+      } else {
+        last_sequence.push((topic.to_owned(), sequence));
+      }
+    }
+  }
+}
+
+impl CoreZmqSource {
+  /// Connect a subscriber socket to all configured ZMQ endpoints.
+  ///
+  /// # Errors
+  ///
+  /// Returns `DaemonError::RestSource` when topic subscription or endpoint
+  /// connection fails.
+  pub async fn connect(config: &ZmqConfig) -> Result<Self, DaemonError> {
+    let mut socket = SubSocket::new();
+    for topic in &config.subscribe {
+      info!(
+        topic = topic.subscription_name(),
+        "subscribing to Core ZMQ topic"
+      );
+      timeout(
+        Duration::from_secs(ZMQ_STARTUP_TIMEOUT_SECS),
+        socket.subscribe(topic.subscription_name()),
+      )
+      .await
+      .map_err(|_| {
+        DaemonError::RestSource(format!(
+          "ZMQ subscribe timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {}",
+          topic.subscription_name()
+        ))
+      })?
+      .map_err(|e| DaemonError::RestSource(format!("ZMQ subscribe failed: {e}")))?;
+    }
+    for endpoint in &config.connect {
+      info!(%endpoint, "connecting to Core ZMQ endpoint");
+      timeout(
+        Duration::from_secs(ZMQ_STARTUP_TIMEOUT_SECS),
+        socket.connect(endpoint),
+      )
+      .await
+      .map_err(|_| {
+        DaemonError::RestSource(format!(
+          "ZMQ connect timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {endpoint}"
+        ))
+      })?
+      .map_err(|e| DaemonError::RestSource(format!("ZMQ connect failed: {e}")))?;
+    }
+    let metrics = ZmqMetrics::new(config);
+    metrics.mark_connected();
+    Ok(Self {
+      endpoints: config.connect.clone(),
+      topics: config.subscribe.clone(),
+      socket: Mutex::new(socket),
+      metrics,
+    })
+  }
+
+  /// Receive the next raw multipart message from the subscriber socket.
+  ///
+  /// # Errors
+  ///
+  /// Returns `DaemonError::RestSource` when socket receive fails.
+  pub async fn recv_raw(&self) -> Result<RawZmqMessage, DaemonError> {
+    let mut socket = self.socket.lock().await;
+    let msg = socket.recv().await.map_err(|e| {
+      self.metrics.record_error("receive");
+      DaemonError::RestSource(format!("ZMQ receive failed: {e}"))
+    })?;
+    Ok(RawZmqMessage {
+      frames: split_message(msg),
+    })
+  }
+
+  /// Receive and decode the next multipart ZMQ message.
+  ///
+  /// # Errors
+  ///
+  /// Returns `DaemonError::RestSource` when socket receive or message decoding
+  /// fails.
+  pub async fn recv_event(&self) -> Result<ZmqEvent, DaemonError> {
+    let raw = self.recv_raw().await?;
+    match decode_event(&raw) {
+      Ok(event) => {
+        self
+          .metrics
+          .record_event(event.topic_name(), event.sequence_number());
+        Ok(event)
+      }
+      Err(err) => {
+        self.metrics.record_error("decode");
+        Err(err)
+      }
+    }
+  }
+
+  /// Return a typed ZMQ diagnostic snapshot.
+  pub fn diag(&self) -> ZmqDiag {
+    self.metrics.snapshot(&self.endpoints, &self.topics)
+  }
+}
+
+#[async_trait::async_trait]
+impl ZmqSourceTrait for CoreZmqSource {
+  async fn recv_event(&self) -> Result<ZmqEvent, DaemonError> {
+    CoreZmqSource::recv_event(self).await
+  }
+
+  fn diag(&self) -> ZmqDiag {
+    CoreZmqSource::diag(self)
+  }
+}
+
+impl ZmqTopic {
+  fn subscription_name(self) -> &'static str {
+    match self {
+      Self::RawTx => "rawtx",
+      Self::Sequence => "sequence",
+      Self::RawTxLock => "rawtxlock",
+      Self::RawChainLock => "rawchainlock",
+      Self::RawGovernanceObject => "rawgovernanceobject",
+      Self::RawGovernanceVote => "rawgovernancevote",
+    }
+  }
+}
+
+fn split_message(msg: ZmqMessage) -> Vec<Vec<u8>> {
+  msg.iter().map(|frame| frame.to_vec()).collect()
+}
+
+fn decode_event(raw: &RawZmqMessage) -> Result<ZmqEvent, DaemonError> {
+  if raw.frames.len() != 3 {
+    return Err(DaemonError::RestSource(format!(
+      "ZMQ message must have 3 frames, got {}",
+      raw.frames.len()
+    )));
+  }
+
+  let topic = std::str::from_utf8(&raw.frames[0])
+    .map_err(|e| DaemonError::RestSource(format!("ZMQ topic is not valid UTF-8: {e}")))?;
+  let payload = raw.frames[1].clone();
+  let sequence = parse_u32_le(&raw.frames[2], "ZMQ sequence")?;
+
+  match topic {
+    "rawtx" => Ok(ZmqEvent::RawTx {
+      tx: payload,
+      sequence,
+    }),
+    "rawtxlock" => Ok(ZmqEvent::RawTxLock {
+      tx: payload,
+      sequence,
+    }),
+    "rawchainlock" => Ok(ZmqEvent::RawChainLock {
+      chainlock: payload,
+      sequence,
+    }),
+    "rawgovernanceobject" => Ok(ZmqEvent::RawGovernanceObject {
+      object: payload,
+      sequence,
+    }),
+    "rawgovernancevote" => Ok(ZmqEvent::RawGovernanceVote {
+      vote: payload,
+      sequence,
+    }),
+    "sequence" => Ok(ZmqEvent::Sequence {
+      event: decode_sequence_event(&payload)?,
+      sequence,
+    }),
+    _ => Err(DaemonError::RestSource(format!(
+      "unsupported ZMQ topic: {topic}"
+    ))),
+  }
+}
+
+impl ZmqEvent {
+  fn topic_name(&self) -> &'static str {
+    match self {
+      Self::RawTx { .. } => "rawtx",
+      Self::RawTxLock { .. } => "rawtxlock",
+      Self::RawChainLock { .. } => "rawchainlock",
+      Self::RawGovernanceObject { .. } => "rawgovernanceobject",
+      Self::RawGovernanceVote { .. } => "rawgovernancevote",
+      Self::Sequence { .. } => "sequence",
+    }
+  }
+
+  fn sequence_number(&self) -> u32 {
+    match self {
+      Self::RawTx { sequence, .. }
+      | Self::RawTxLock { sequence, .. }
+      | Self::RawChainLock { sequence, .. }
+      | Self::RawGovernanceObject { sequence, .. }
+      | Self::RawGovernanceVote { sequence, .. }
+      | Self::Sequence { sequence, .. } => *sequence,
+    }
+  }
+}
+
+fn decode_sequence_event(payload: &[u8]) -> Result<SequenceEvent, DaemonError> {
+  if payload.len() < 33 {
+    return Err(DaemonError::RestSource(format!(
+      "sequence payload too short: {}",
+      payload.len()
+    )));
+  }
+
+  let hash: [u8; 32] = payload[..32]
+    .try_into()
+    .map_err(|_| DaemonError::RestSource("sequence hash must be 32 bytes".to_owned()))?;
+  let kind = payload[32];
+  match kind {
+    b'C' => {
+      ensure_sequence_len(payload, 33)?;
+      Ok(SequenceEvent::BlockConnected { hash })
+    }
+    b'D' => {
+      ensure_sequence_len(payload, 33)?;
+      Ok(SequenceEvent::BlockDisconnected { hash })
+    }
+    b'A' => {
+      ensure_sequence_len(payload, 41)?;
+      Ok(SequenceEvent::TxAdded {
+        txid: hash,
+        mempool_sequence: parse_u64_le(&payload[33..41], "sequence add mempool number")?,
+      })
+    }
+    b'R' => {
+      ensure_sequence_len(payload, 41)?;
+      Ok(SequenceEvent::TxRemoved {
+        txid: hash,
+        mempool_sequence: parse_u64_le(&payload[33..41], "sequence remove mempool number")?,
+      })
+    }
+    _ => Err(DaemonError::RestSource(format!(
+      "unsupported sequence action byte: {kind:#x}"
+    ))),
+  }
+}
+
+fn ensure_sequence_len(payload: &[u8], expected: usize) -> Result<(), DaemonError> {
+  if payload.len() != expected {
+    return Err(DaemonError::RestSource(format!(
+      "sequence payload length mismatch: expected {expected}, got {}",
+      payload.len()
+    )));
+  }
+  Ok(())
+}
+
+fn parse_u32_le(bytes: &[u8], field: &str) -> Result<u32, DaemonError> {
+  let raw: [u8; 4] = bytes
+    .try_into()
+    .map_err(|_| DaemonError::RestSource(format!("{field} must be 4 bytes")))?;
+  Ok(u32::from_le_bytes(raw))
+}
+
+fn parse_u64_le(bytes: &[u8], field: &str) -> Result<u64, DaemonError> {
+  let raw: [u8; 8] = bytes
+    .try_into()
+    .map_err(|_| DaemonError::RestSource(format!("{field} must be 8 bytes")))?;
+  Ok(u64::from_le_bytes(raw))
+}
+
+#[cfg(test)]
+mod tests {
+  use bytes::Bytes;
+
+  use super::{
+    decode_event, decode_sequence_event, split_message, RawZmqMessage, SequenceEvent, ZmqEvent,
+    ZmqMetrics,
+  };
+  use crate::config::{ZmqConfig, ZmqTopic};
+
+  #[test]
+  fn zmq_topics_map_to_dash_subscription_names() {
+    assert_eq!(ZmqTopic::RawTx.subscription_name(), "rawtx");
+    assert_eq!(ZmqTopic::Sequence.subscription_name(), "sequence");
+    assert_eq!(ZmqTopic::RawTxLock.subscription_name(), "rawtxlock");
+    assert_eq!(ZmqTopic::RawChainLock.subscription_name(), "rawchainlock");
+    assert_eq!(
+      ZmqTopic::RawGovernanceObject.subscription_name(),
+      "rawgovernanceobject"
+    );
+    assert_eq!(
+      ZmqTopic::RawGovernanceVote.subscription_name(),
+      "rawgovernancevote"
+    );
+  }
+
+  #[test]
+  fn split_message_preserves_frame_boundaries() {
+    let msg = zeromq::ZmqMessage::try_from(vec![
+      Bytes::from_static(b"rawtx"),
+      Bytes::from_static(&[1, 2, 3]),
+      Bytes::from_static(&[4, 5, 6, 7]),
+    ])
+    .expect("multipart message should build");
+    assert_eq!(
+      split_message(msg),
+      vec![b"rawtx".to_vec(), vec![1, 2, 3], vec![4, 5, 6, 7]]
+    );
+  }
+
+  #[test]
+  fn decode_rawtx_event_reads_payload_and_sequence() {
+    let raw = RawZmqMessage {
+      frames: vec![
+        b"rawtx".to_vec(),
+        vec![0xaa, 0xbb],
+        7u32.to_le_bytes().to_vec(),
+      ],
+    };
+    assert_eq!(
+      decode_event(&raw).expect("rawtx event should decode"),
+      ZmqEvent::RawTx {
+        tx: vec![0xaa, 0xbb],
+        sequence: 7,
+      }
+    );
+  }
+
+  #[test]
+  fn decode_sequence_added_event_reads_mempool_sequence() {
+    let mut payload = vec![0x11; 32];
+    payload.push(b'A');
+    payload.extend_from_slice(&42u64.to_le_bytes());
+    assert_eq!(
+      decode_sequence_event(&payload).expect("sequence add should decode"),
+      SequenceEvent::TxAdded {
+        txid: [0x11; 32],
+        mempool_sequence: 42,
+      }
+    );
+  }
+
+  #[test]
+  fn decode_sequence_block_connected_event_has_no_extra_payload() {
+    let mut payload = vec![0x22; 32];
+    payload.push(b'C');
+    assert_eq!(
+      decode_sequence_event(&payload).expect("sequence block connect should decode"),
+      SequenceEvent::BlockConnected { hash: [0x22; 32] }
+    );
+  }
+
+  #[test]
+  fn decode_event_rejects_unknown_topic() {
+    let raw = RawZmqMessage {
+      frames: vec![b"unknown".to_vec(), vec![1], 1u32.to_le_bytes().to_vec()],
+    };
+    let err = decode_event(&raw).expect_err("unknown topic should fail");
+    assert!(matches!(
+      err,
+      crate::error::DaemonError::RestSource(message)
+      if message.contains("unsupported ZMQ topic")
+    ));
+  }
+
+  #[test]
+  fn zmq_metrics_track_topic_counts_and_sequence_gaps() {
+    let metrics = ZmqMetrics::new(&ZmqConfig::default());
+    metrics.record_event("rawtx", 1);
+    metrics.record_event("rawtx", 2);
+    metrics.record_event("rawtx", 4);
+    metrics.record_error("decode");
+
+    let diag = metrics.snapshot(&["tcp://127.0.0.1:28332".to_owned()], &[ZmqTopic::RawTx]);
+    assert!(diag.connected == false);
+    assert_eq!(diag.total_events, 3);
+    assert_eq!(diag.total_errors, 1);
+    assert_eq!(diag.sequence_gaps, 1);
+    assert_eq!(diag.topic_counts, vec![("rawtx".to_owned(), 3)]);
+    assert_eq!(diag.error_counts, vec![("decode".to_owned(), 1)]);
+    assert_eq!(diag.subscriptions, vec!["rawtx".to_owned()]);
+  }
+}
