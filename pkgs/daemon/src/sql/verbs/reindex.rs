@@ -6,28 +6,26 @@
 
 //! Force-reindex helpers.
 
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use crate::error::DaemonError;
-use crate::index::Stage;
+use crate::index::batch::{
+  BatchSizer, DEFAULT_COMMIT_BATCH_BLOCKS, DEFAULT_MAX_BATCH_SIZE, DEFAULT_MIN_BATCH_SIZE,
+  DEFAULT_PREFETCH_BLOCKS, DEFAULT_TARGET_BATCH_MS,
+};
+use crate::index::spent::cache::SpentQueryCache;
+use crate::index::{self, IndexerLoopCtx, Stage};
+use crate::ingest::IngestRuntime;
+use crate::lifecycle::Lifecycle;
 use crate::sql;
+use crate::store::manager::SecondaryStoreSet;
 
-/// Force a full reindex of `stage` and all downstream dependents.
-///
-/// # Errors
-///
-/// Returns `DaemonError::Index` for unknown stage names or
-/// `DaemonError::Pg` when the required schema reset fails.
-pub async fn force_reindex_stage(
+async fn reset_reindex_stages(
   pool: &sqlx::PgPool,
-  _db: &rocksdb::DB,
-  stage: &str,
-) -> Result<String, DaemonError> {
-  let Some(stage) = Stage::from_name(stage) else {
-    return Err(DaemonError::Index(format!("unknown stage: {stage}")));
-  };
-  let stages = stage.reset_stages();
-
+  stage: Stage,
+) -> Result<Vec<Stage>, DaemonError> {
+  let stages = stage.reset_stages().to_vec();
   if stages.contains(&Stage::Block) {
     sql::bootstrap::reset(pool).await?;
   } else {
@@ -38,9 +36,145 @@ pub async fn force_reindex_stage(
     let stage_names: Vec<&str> = stages.iter().copied().map(Stage::name).collect();
     sql::bootstrap::targeted_reset(pool, &tables, &stage_names).await?;
   }
+  Ok(stages)
+}
+
+fn reindex_enabled_stages(stages: &[Stage]) -> Arc<Vec<Stage>> {
+  Arc::new(
+    index::exact_stage_order(stages)
+      .into_iter()
+      .filter(|stage| *stage != Stage::Block)
+      .collect(),
+  )
+}
+
+async fn rebuild_stages_from_local_rocks(
+  pool: sql::SqlPool,
+  db: Arc<rocksdb::DB>,
+  secondary_stores: Option<Arc<SecondaryStoreSet>>,
+  stages: &[Stage],
+  p2pkh_version: u8,
+  p2sh_version: u8,
+  block_time_secs: f64,
+) -> Result<(), DaemonError> {
+  let lifecycle = Lifecycle::start();
+  let ingest_runtime = Arc::new(IngestRuntime::default());
+  let scheduler_state = Arc::new(std::sync::Mutex::new(
+    index::runner::IndexSchedulerState::default(),
+  ));
+  let control_plane_pause_active = Arc::new(AtomicBool::new(false));
+  let block_worker = Arc::new(index::BlockIndexerWorker::new(
+    Arc::clone(&db),
+    Arc::clone(&ingest_runtime),
+    Arc::clone(&lifecycle),
+    Arc::clone(&scheduler_state),
+    Arc::clone(&control_plane_pause_active),
+  ));
+  let ctx = IndexerLoopCtx {
+    db,
+    secondary_stores,
+    pool,
+    block_worker,
+    event_tx: tokio::sync::broadcast::channel(16).0,
+    lifecycle,
+    enabled_stages: reindex_enabled_stages(stages),
+    chain_state_lock: Arc::new(tokio::sync::RwLock::new(())),
+    scheduler_state,
+    spent_cache: Arc::new(SpentQueryCache::new(false, 1)),
+    history_partition_cache: Arc::new(std::sync::Mutex::new(None)),
+    canonical_partition_cache: Arc::new(std::sync::Mutex::new(None)),
+    tx_batch_sizer: Arc::new(Mutex::new(BatchSizer::new(
+      DEFAULT_COMMIT_BATCH_BLOCKS,
+      DEFAULT_MIN_BATCH_SIZE,
+      DEFAULT_MAX_BATCH_SIZE,
+      DEFAULT_TARGET_BATCH_MS,
+    ))),
+    spent_batch_sizer: Arc::new(Mutex::new(BatchSizer::new(
+      DEFAULT_COMMIT_BATCH_BLOCKS,
+      DEFAULT_MIN_BATCH_SIZE,
+      DEFAULT_MAX_BATCH_SIZE,
+      DEFAULT_TARGET_BATCH_MS,
+    ))),
+    operator_pause_requested: Arc::new(AtomicBool::new(false)),
+    p2pkh_version,
+    p2sh_version,
+    block_time_secs,
+  };
+  let block_batch_sizer = Arc::new(Mutex::new(BatchSizer::new(
+    DEFAULT_COMMIT_BATCH_BLOCKS,
+    DEFAULT_MIN_BATCH_SIZE,
+    DEFAULT_MAX_BATCH_SIZE,
+    DEFAULT_TARGET_BATCH_MS,
+  )));
+  index::runner::rebuild_from_local_rocks(ctx, block_batch_sizer, DEFAULT_PREFETCH_BLOCKS).await
+}
+
+/// Reset and rebuild every enabled PostgreSQL stage from the local RocksDB
+/// block store.
+///
+/// # Errors
+///
+/// Returns `DaemonError::Pg` when reset fails or `DaemonError::Index` when the
+/// rebuild cannot replay the local RocksDB tip.
+pub async fn force_reindex_all(
+  pool: &sqlx::PgPool,
+  db: Arc<rocksdb::DB>,
+  secondary_stores: Option<Arc<SecondaryStoreSet>>,
+  enabled_stages: &[Stage],
+  p2pkh_version: u8,
+  p2sh_version: u8,
+  block_time_secs: f64,
+) -> Result<String, DaemonError> {
+  sql::bootstrap::reset(pool).await?;
+  rebuild_stages_from_local_rocks(
+    pool.clone(),
+    db,
+    secondary_stores,
+    Stage::Block.reset_stages(),
+    p2pkh_version,
+    p2sh_version,
+    block_time_secs,
+  )
+  .await?;
+  let names: Vec<&str> = std::iter::once(Stage::Block)
+    .chain(enabled_stages.iter().copied())
+    .map(Stage::name)
+    .collect();
+  Ok(format!("reindex complete for: {}", names.join(", ")))
+}
+
+/// Force a full reindex of `stage` and all downstream dependents.
+///
+/// # Errors
+///
+/// Returns `DaemonError::Index` for unknown stage names or
+/// `DaemonError::Pg` when the required schema reset fails.
+pub async fn force_reindex_stage(
+  pool: &sqlx::PgPool,
+  db: Arc<rocksdb::DB>,
+  secondary_stores: Option<Arc<SecondaryStoreSet>>,
+  stage: &str,
+  p2pkh_version: u8,
+  p2sh_version: u8,
+  block_time_secs: f64,
+) -> Result<String, DaemonError> {
+  let Some(stage) = Stage::from_name(stage) else {
+    return Err(DaemonError::Index(format!("unknown stage: {stage}")));
+  };
+  let stages = reset_reindex_stages(pool, stage).await?;
+  rebuild_stages_from_local_rocks(
+    pool.clone(),
+    db,
+    secondary_stores,
+    &stages,
+    p2pkh_version,
+    p2sh_version,
+    block_time_secs,
+  )
+  .await?;
 
   let names: Vec<&str> = stages.iter().copied().map(Stage::name).collect();
-  Ok(format!("reindex started for: {}", names.join(", ")))
+  Ok(format!("reindex complete for: {}", names.join(", ")))
 }
 
 /// Force a full reindex of `stage` using owned shared handles.
@@ -50,34 +184,40 @@ pub async fn force_reindex_stage(
 /// Returns the same errors as [`force_reindex_stage`].
 pub async fn force_reindex_stage_shared(
   pool: sqlx::PgPool,
-  _db: Arc<rocksdb::DB>,
+  db: Arc<rocksdb::DB>,
+  secondary_stores: Option<Arc<SecondaryStoreSet>>,
   stage: String,
+  p2pkh_version: u8,
+  p2sh_version: u8,
+  block_time_secs: f64,
 ) -> Result<String, DaemonError> {
   let Some(stage) = Stage::from_name(&stage) else {
     return Err(DaemonError::Index(format!("unknown stage: {stage}")));
   };
-  let stages = stage.reset_stages();
-
-  if stages.contains(&Stage::Block) {
-    sql::bootstrap::reset(&pool).await?;
-  } else {
-    let tables: Vec<&str> = stages
-      .iter()
-      .flat_map(|stage| stage.tables().iter().copied())
-      .collect();
-    let stage_names: Vec<&str> = stages.iter().copied().map(Stage::name).collect();
-    sql::bootstrap::targeted_reset(&pool, &tables, &stage_names).await?;
-  }
+  let stages = reset_reindex_stages(&pool, stage).await?;
+  rebuild_stages_from_local_rocks(
+    pool.clone(),
+    db,
+    secondary_stores,
+    &stages,
+    p2pkh_version,
+    p2sh_version,
+    block_time_secs,
+  )
+  .await?;
 
   let names: Vec<&str> = stages.iter().copied().map(Stage::name).collect();
-  Ok(format!("reindex started for: {}", names.join(", ")))
+  Ok(format!("reindex complete for: {}", names.join(", ")))
 }
 
 #[cfg(test)]
 mod tests {
   use std::path::PathBuf;
   use std::sync::atomic::{AtomicU64, Ordering};
+  use std::sync::Arc;
   use std::time::{SystemTime, UNIX_EPOCH};
+
+  use dash_primitives::hash;
 
   use crate::index::Stage;
   use crate::sql;
@@ -253,15 +393,42 @@ mod tests {
       .await
   }
 
+  /// Seed one raw canonical block because real reindex should replay from RocksDB.
+  fn seed_raw_block(
+    db: &rocksdb::DB,
+    height: u32,
+    raw: &[u8],
+  ) -> Result<(), crate::error::DaemonError> {
+    let hash = hash::block_hash(raw)
+      .map_err(|e| crate::error::DaemonError::Index(format!("hash raw reindex test block: {e}")))?
+      .0;
+    let blocks_cf = db
+      .cf_handle(crate::db::CF_BLOCKS)
+      .ok_or_else(|| crate::error::DaemonError::Db("blocks CF missing".to_owned()))?;
+    let heights_cf = db
+      .cf_handle(crate::db::CF_HEIGHTS)
+      .ok_or_else(|| crate::error::DaemonError::Db("heights CF missing".to_owned()))?;
+    let meta_cf = db
+      .cf_handle(crate::db::CF_META)
+      .ok_or_else(|| crate::error::DaemonError::Db("meta CF missing".to_owned()))?;
+    let mut batch = rocksdb::WriteBatch::default();
+    batch.put_cf(heights_cf, height.to_be_bytes(), hash);
+    batch.put_cf(blocks_cf, hash, raw);
+    crate::db::put_tip_hash(&mut batch, meta_cf, &hash);
+    crate::db::put_tip_height(&mut batch, meta_cf, height);
+    db.write(batch)
+      .map_err(|e| crate::error::DaemonError::Db(format!("seed reindex test block: {e}")))
+  }
+
   #[tokio::test]
   async fn force_reindex_rejects_unknown_stage() -> Result<(), Box<dyn std::error::Error>> {
     let Some(pool) = crate::tests::pg_pool().await? else {
       return Ok(());
     };
     sql::bootstrap::reset(&pool).await?;
-    let db = open_test_db()?;
+    let db = Arc::new(open_test_db()?);
 
-    let err = force_reindex_stage(&pool, &db, "unknown_stage")
+    let err = force_reindex_stage(&pool, db, None, "unknown_stage", 76, 16, 150.0)
       .await
       .expect_err("unknown stage should fail");
     assert!(
@@ -286,10 +453,10 @@ mod tests {
     seed_sync_height(&pool, "transaction", 0).await?;
     seed_sync_height(&pool, "validator", 0).await?;
 
-    let db = open_test_db()?;
-    let message = force_reindex_stage(&pool, &db, "validator").await?;
+    let db = Arc::new(open_test_db()?);
+    let message = force_reindex_stage(&pool, db, None, "validator", 76, 16, 150.0).await?;
 
-    assert_eq!(message, "reindex started for: validator");
+    assert_eq!(message, "reindex complete for: validator");
     assert_eq!(count_rows(&pool, "transactions").await?, 1);
     assert_eq!(count_rows(&pool, "special_tx_payloads").await?, 1);
     assert_eq!(count_rows(&pool, "validators").await?, 0);
@@ -319,10 +486,10 @@ mod tests {
     seed_sync_height(&pool, "script", 0).await?;
     seed_sync_height(&pool, "spent", 0).await?;
 
-    let db = open_test_db()?;
-    let message = force_reindex_stage(&pool, &db, "script").await?;
+    let db = Arc::new(open_test_db()?);
+    let message = force_reindex_stage(&pool, db, None, "script", 76, 16, 150.0).await?;
 
-    assert_eq!(message, "reindex started for: spent, script");
+    assert_eq!(message, "reindex complete for: spent, script");
     assert_eq!(count_rows(&pool, "script_output_history").await?, 0);
     assert_eq!(count_rows(&pool, "address_balances").await?, 0);
     assert_eq!(count_rows(&pool, "spent_output_history").await?, 0);
@@ -360,12 +527,12 @@ mod tests {
       seed_sync_height(&pool, stage.name(), 0).await?;
     }
 
-    let db = open_test_db()?;
-    let message = force_reindex_stage(&pool, &db, "block").await?;
+    let db = Arc::new(open_test_db()?);
+    let message = force_reindex_stage(&pool, db, None, "block", 76, 16, 150.0).await?;
 
     assert_eq!(
       message,
-      "reindex started for: spent, script, validator, metrics, transaction, block"
+      "reindex complete for: spent, script, validator, metrics, transaction, block"
     );
     assert_eq!(count_rows(&pool, "blocks").await?, 0);
     assert_eq!(count_rows(&pool, "transactions").await?, 0);
@@ -381,6 +548,61 @@ mod tests {
     );
     assert_eq!(
       sql::query::indexed_stage_height(&pool, Stage::Metrics).await?,
+      -1
+    );
+
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn force_reindex_metrics_rebuilds_rows_from_local_rocks(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(pool) = crate::tests::pg_pool().await? else {
+      return Ok(());
+    };
+    sql::bootstrap::reset(&pool).await?;
+
+    let raw = crate::tests::minimal_block_bytes(7);
+    let block_hash = hash::block_hash(&raw)?.0.to_vec();
+    seed_block(&pool, 0, block_hash, vec![0_u8; 32], vec![0xBB_u8; 32]).await?;
+    seed_sync_height(&pool, "block", 0).await?;
+    seed_sync_height(&pool, "metrics", 0).await?;
+    seed_metrics_row(&pool).await?;
+
+    let db = Arc::new(open_test_db()?);
+    seed_raw_block(db.as_ref(), 0, &raw)?;
+
+    let message = force_reindex_stage(&pool, db, None, "metrics", 76, 16, 150.0).await?;
+
+    assert_eq!(message, "reindex complete for: metrics");
+    assert_eq!(count_rows(&pool, "block_metrics").await?, 1);
+    assert_eq!(
+      sql::query::indexed_stage_height(&pool, Stage::Metrics).await?,
+      0
+    );
+
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn force_reindex_fails_when_local_rocks_tip_is_missing(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(pool) = crate::tests::pg_pool().await? else {
+      return Ok(());
+    };
+    sql::bootstrap::reset(&pool).await?;
+    seed_sync_height(&pool, "validator", 10).await?;
+
+    let db = Arc::new(open_test_db()?);
+    let err = force_reindex_stage(&pool, db, None, "validator", 76, 16, 150.0)
+      .await
+      .expect_err("empty local RocksDB should fail reindex");
+
+    assert!(
+      matches!(err, crate::error::DaemonError::Index(message) if message.contains("canonical tip is missing"))
+    );
+    assert_eq!(
+      sql::query::indexed_stage_height(&pool, Stage::Validator).await?,
       -1
     );
 

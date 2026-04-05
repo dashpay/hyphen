@@ -12,6 +12,8 @@ import {
 } from "@repo/hyphen-i18n";
 
 import i18nMetaText from "../../../../../contrib/i18n/meta.json5?raw";
+import { getWebUiConfig } from "./load.svelte";
+import { applyValidatorTermOverrides, readValidatorTermOverrideFromConfig } from "./validatorTerms";
 
 const STORAGE_KEY = "hyphen-webui-locale";
 const DEFAULT_LOCALE = "en";
@@ -29,7 +31,9 @@ export interface WebUiLocaleOption {
 
 interface LocaleDefinition {
   readonly code: string;
+  readonly dict: Readonly<Record<string, string>>;
   readonly locale: string;
+  readonly name: string;
   readonly nativeName: string;
   readonly src: string;
 }
@@ -37,7 +41,9 @@ interface LocaleDefinition {
 const localeDefinitions = I18N_META.langs.map(
   (entry): LocaleDefinition => ({
     code: entry.src.replace(/\.json5$/u, ""),
+    dict: entry.dict,
     locale: entry.locale,
+    name: entry.name,
     nativeName: entry.name,
     src: entry.src,
   })
@@ -47,9 +53,9 @@ function getLocaleDefinition(code: string): LocaleDefinition | null {
   return localeDefinitions.find((entry): boolean => entry.code === code) ?? null;
 }
 
-function ensureLocaleDictionaries(): void {
+function ensureLocaleDictionaries(force = false): void {
   for (const entry of localeDefinitions) {
-    if (entry.code === DEFAULT_LOCALE || hasLocale(entry.code)) {
+    if (entry.code === DEFAULT_LOCALE || (!force && hasLocale(entry.code))) {
       continue;
     }
 
@@ -60,7 +66,11 @@ function ensureLocaleDictionaries(): void {
     }
 
     const catalog: I18nCatalogDocument = parseCatalogDocument(catalogText, "contrib/i18n/" + entry.src);
-    loadDictionary(entry.code, catalog.strings, entry.locale);
+    loadDictionary(
+      entry.code,
+      applyValidatorTermOverrides(catalog.strings, entry, readValidatorTermOverrideFromConfig(getWebUiConfig())),
+      entry.locale
+    );
   }
 }
 
@@ -156,4 +166,9 @@ export function hydrateSelectedLocale(): void {
   if (getLocale() !== nextLocale) {
     setLocale(nextLocale);
   }
+}
+
+export function refreshLocaleDictionaries(): void {
+  ensureLocaleDictionaries(true);
+  setLocale(getLocale());
 }

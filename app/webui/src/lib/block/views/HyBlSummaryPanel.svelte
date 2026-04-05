@@ -43,11 +43,12 @@
   }
 </script>
 
-<VwPanel border={true} padding={0} radius="sm" variant="glass">
-  <HyPanelHeader {onback} subtitle={tr("Mined on {}", HyUtilFormatFullDate(block.time))} title={tr("Block")} />
+<div class="summary-panel">
+  <VwPanel border={true} padding={0} radius="sm" variant="glass">
+    <HyPanelHeader {onback} subtitle={tr("Mined on {}", HyUtilFormatFullDate(block.time))} title={tr("Block")} />
 
-  <HyScrollBody container={true}>
-    <div class="summary-stack">
+    <HyScrollBody container={true}>
+      <div class="summary-stack">
       <div>
         <div class="section-title">{tr("Hash")}</div>
         <div class="hy-reference-hash-row">
@@ -190,9 +191,10 @@
           </div>
         </div>
       {/if}
-    </div>
-  </HyScrollBody>
-</VwPanel>
+      </div>
+    </HyScrollBody>
+  </VwPanel>
+</div>
 
 <style lang="scss">
   @use "_views-mixins.scss" as view;
@@ -285,9 +287,39 @@
     margin-bottom: var(--hy-detail-tag-gap);
   }
 
-  @include view.container-down(tablet) {
+  .summary-panel {
+    height: 100%;
+    min-width: 0;
+  }
+
+  .summary-panel :global(.panel) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  @include view.media-down(tablet) {
+    .summary-panel {
+      height: auto;
+    }
+
+    .summary-panel :global(.panel) {
+      height: auto;
+    }
+
     .detail-row {
       grid-template-columns: var(--hy-detail-kv-column-width, var(--hy-detail-kv-label-width-wide)) minmax(0, 1fr);
+    }
+
+    .detail-row-wide {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kv-grid {
+      gap: var(--hy-detail-flow-row-gap);
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>

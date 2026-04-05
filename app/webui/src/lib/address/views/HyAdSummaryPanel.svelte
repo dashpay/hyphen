@@ -42,54 +42,58 @@
   }
 </script>
 
-<VwPanel border={true} padding={0} radius="sm" variant="glass">
-  <HyPanelHeader {onback} title={tr("Address")} />
+<div class="summary-panel">
+  <VwPanel border={true} padding={0} radius="sm" variant="glass">
+    <HyPanelHeader {onback} title={tr("Address")} />
 
-  <HyScrollBody container={true}>
-    <HyDetailSection title={tr("Address")}>
-      <div class="hash-row">
-        <span class="mono hash-full">{address}</span>
-        <HyCopyButton
-          copied={copiedValue === address}
-          inline={true}
-          label={tr("Copy address")}
-          onpress={(): void => {
-            copyToClipboard(address);
-          }}
-          title={tr("Copy address")}
-        />
-      </div>
-    </HyDetailSection>
+    <HyScrollBody container={true}>
+      <HyDetailSection title={tr("Address")}>
+        <div class="hash-row">
+          <span class="mono hash-full">{address}</span>
+          <HyCopyButton
+            copied={copiedValue === address}
+            inline={true}
+            label={tr("Copy address")}
+            onpress={(): void => {
+              copyToClipboard(address);
+            }}
+            title={tr("Copy address")}
+          />
+        </div>
+      </HyDetailSection>
 
-    <HyDetailSection>
-      <HyMetricCard tone="accent">
-        <span class="balance-label">{tr("Balance")}</span>
-        <span class="balance-value">
-          <HyAmountText value={HyUtilFormatSelectedAmount(summary.balance, getWebUiConfig())} />
-        </span>
-      </HyMetricCard>
-    </HyDetailSection>
-
-    <HyDetailSection>
-      <HyMetricGrid>
-        <HyMetricCard>
-          <span class="stat-label">{tr("Total Sent")}</span>
-          <span class="stat-value">
-            <HyAmountText value={HyUtilFormatSelectedAmount(summary.totalSent, getWebUiConfig())} />
+      <HyDetailSection>
+        <HyMetricCard tone="accent">
+          <span class="balance-label">{tr("Balance")}</span>
+          <span class="balance-value">
+            <HyAmountText value={HyUtilFormatSelectedAmount(summary.balance, getWebUiConfig())} />
           </span>
         </HyMetricCard>
-        <HyMetricCard>
-          <span class="stat-label">{tr("Total Received")}</span>
-          <span class="stat-value">
-            <HyAmountText value={HyUtilFormatSelectedAmount(summary.totalReceived, getWebUiConfig())} />
-          </span>
-        </HyMetricCard>
-      </HyMetricGrid>
-    </HyDetailSection>
-  </HyScrollBody>
-</VwPanel>
+      </HyDetailSection>
 
-<style>
+      <HyDetailSection>
+        <HyMetricGrid columns={2}>
+          <HyMetricCard>
+            <span class="stat-label">{tr("Total Sent")}</span>
+            <span class="stat-value">
+              <HyAmountText value={HyUtilFormatSelectedAmount(summary.totalSent, getWebUiConfig())} />
+            </span>
+          </HyMetricCard>
+          <HyMetricCard>
+            <span class="stat-label">{tr("Total Received")}</span>
+            <span class="stat-value">
+              <HyAmountText value={HyUtilFormatSelectedAmount(summary.totalReceived, getWebUiConfig())} />
+            </span>
+          </HyMetricCard>
+        </HyMetricGrid>
+      </HyDetailSection>
+    </HyScrollBody>
+  </VwPanel>
+</div>
+
+<style lang="scss">
+  @use "_views-mixins.scss" as view;
+
   .hash-row {
     align-items: center;
     display: flex;
@@ -144,5 +148,28 @@
 
   .mono {
     font-family: var(--font-mono);
+  }
+
+  .summary-panel {
+    height: 100%;
+    min-width: 0;
+  }
+
+  .summary-panel :global(.panel) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  @include view.media-down(tablet) {
+    .summary-panel {
+      height: auto;
+    }
+
+    .summary-panel :global(.panel) {
+      height: auto;
+    }
   }
 </style>

@@ -345,12 +345,16 @@ CREATE TABLE IF NOT EXISTS validators (
   addr_platform_p2p   TEXT[],
   addr_platform_https TEXT[],
   payout_address      TEXT,
+  operator_payout_address TEXT,
   operator_reward     INTEGER NOT NULL DEFAULT 0,
   validator_type      TEXT    NOT NULL DEFAULT 'Regular',
   status              TEXT    NOT NULL DEFAULT 'registered',
   registered_height   INTEGER NOT NULL,
   last_updated_height INTEGER NOT NULL
 );
+
+ALTER TABLE validators
+  ADD COLUMN IF NOT EXISTS operator_payout_address TEXT;
 
 CREATE TABLE IF NOT EXISTS validator_counts (
   status          TEXT   NOT NULL DEFAULT '',
@@ -380,6 +384,7 @@ CREATE TABLE IF NOT EXISTS validator_history (
   addr_platform_p2p    TEXT[],
   addr_platform_https  TEXT[],
   payout_address       TEXT,
+  operator_payout_address TEXT,
   operator_reward      INTEGER,
   validator_type       TEXT,
   status               TEXT,
@@ -387,6 +392,9 @@ CREATE TABLE IF NOT EXISTS validator_history (
   last_updated_height  INTEGER,
   PRIMARY KEY (height, sequence, pro_tx_hash)
 );
+
+ALTER TABLE validator_history
+  ADD COLUMN IF NOT EXISTS operator_payout_address TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_validator_history_height
   ON validator_history (height, sequence DESC);

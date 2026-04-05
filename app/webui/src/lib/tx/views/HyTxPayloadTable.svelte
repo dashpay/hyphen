@@ -21,7 +21,9 @@
   </div>
 {/if}
 
-<style>
+<style lang="scss">
+  @use "_views-mixins.scss" as view;
+
   .payload-key {
     color: var(--text-muted);
     font-family: var(--font-primary);
@@ -44,5 +46,12 @@
 
   .mono {
     font-family: var(--font-mono);
+  }
+
+  @include view.media-down(tablet) {
+    :global(.hy-detail-payload-table) {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--hy-detail-flow-row-gap);
+    }
   }
 </style>

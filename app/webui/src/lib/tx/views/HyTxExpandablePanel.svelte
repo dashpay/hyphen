@@ -20,6 +20,7 @@
     readonly hasMore?: boolean;
     readonly loadingMore?: boolean;
     readonly ioAmountLayout?: "inline" | "stacked";
+    readonly hidePayloadForTypes?: readonly string[];
     readonly onloadmore?: (() => unknown) | undefined;
     readonly ontxclick: ((txid: string) => void) | undefined;
     readonly rows: readonly HyTxExpandableRow[];
@@ -38,6 +39,7 @@
     fullHeight = true,
     hasMore = false,
     loadingMore = false,
+    hidePayloadForTypes = [],
     ioAmountLayout = "inline",
     onloadmore,
     ontxclick,
@@ -65,6 +67,10 @@
 
   function hasExpandedPayload(expanded: ExpandedTransactionState): boolean {
     if (expanded.renderer.renderMode === "payment") {
+      return false;
+    }
+
+    if (hidePayloadForTypes.includes(expanded.renderer.type)) {
       return false;
     }
 

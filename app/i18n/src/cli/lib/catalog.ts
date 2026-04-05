@@ -25,6 +25,7 @@ export interface LocaleCatalogDocument {
  */
 export interface LocaleMetaDocument {
   readonly langs: readonly {
+    readonly dict: Readonly<Record<string, string>>;
     readonly locale: string;
     readonly name: string;
     readonly src: string;
@@ -124,7 +125,26 @@ export async function readMetaDocument(path: string): Promise<LocaleMetaDocument
         throw new Error("Expected langs[" + String(index) + "] to contain name and src in " + path);
       }
 
+      const dict = entry["dict"];
+      if (dict != null && !isRecord(dict)) {
+        throw new Error("Expected langs[" + String(index) + "].dict to be an object in " + path);
+      }
+
+      const normalizedDict: Record<string, string> = {};
+      if (dict != null) {
+        for (const [key, value] of Object.entries(dict)) {
+          if (typeof value !== "string") {
+            throw new Error(
+              "Expected langs[" + String(index) + "].dict[" + JSON.stringify(key) + "] to be a string in " + path
+            );
+          }
+
+          normalizedDict[key] = value;
+        }
+      }
+
       return {
+        dict: normalizedDict,
         name: entry["name"],
         locale,
         src: entry["src"],

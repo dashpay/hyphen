@@ -171,11 +171,18 @@ pub async fn validate(pool: &sqlx::PgPool) -> Result<Vec<String>, DaemonError> {
         "addr_core_p2p",
         "addr_platform_p2p",
         "addr_platform_https",
+        "operator_payout_address",
       ],
     ),
     (
       "validator_history",
-      &["height", "sequence", "pro_tx_hash", "existed"],
+      &[
+        "height",
+        "sequence",
+        "pro_tx_hash",
+        "existed",
+        "operator_payout_address",
+      ],
     ),
     ("validator_counts", &["status", "validator_type", "total"]),
     (

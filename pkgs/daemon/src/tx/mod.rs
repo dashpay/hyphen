@@ -29,11 +29,16 @@ use serde_json::Value;
 #[derive(Clone, Debug)]
 pub enum ValidatorEffect {
   Insert(ValidatorInsert),
+  ReapSpentCollateral {
+    collateral_hash: Vec<u8>,
+    collateral_index: i32,
+  },
   UpdateService {
     pro_tx_hash: Vec<u8>,
     core_addrs: Vec<String>,
     plat_p2p_addrs: Vec<String>,
     plat_https_addrs: Vec<String>,
+    operator_payout_addr: Option<String>,
   },
   UpdateRegistrar {
     pro_tx_hash: Vec<u8>,
@@ -59,6 +64,7 @@ pub struct ValidatorInsert {
   pub operator_reward: i32,
   pub validator_type: String,
   pub payout_addr: Option<String>,
+  pub operator_payout_addr: Option<String>,
   pub core_addrs: Vec<String>,
   pub plat_p2p_addrs: Vec<String>,
   pub plat_https_addrs: Vec<String>,
@@ -104,7 +110,11 @@ pub fn validator_effect(
       p2pkh_version,
       p2sh_version,
     )),
-    SpecialPayload::ProviderUpdateService(p) => Some(provider_update_service::to_effect(p)),
+    SpecialPayload::ProviderUpdateService(p) => Some(provider_update_service::to_effect(
+      p,
+      p2pkh_version,
+      p2sh_version,
+    )),
     SpecialPayload::ProviderUpdateRegistrar(p) => Some(provider_update_registrar::to_effect(
       p,
       p2pkh_version,

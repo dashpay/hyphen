@@ -35,7 +35,7 @@
   const txDisplay = $derived.by(() => getTransactionDisplay(transactionRenderer.type, transaction.blockPos));
   const blockSubtitle = $derived.by((): string => {
     if (blockTime != null) {
-      return tr("Broadcasted on {}", HyUtilFormatFullDate(blockTime));
+      return tr("Mined on {}", HyUtilFormatFullDate(blockTime));
     }
 
     return transaction.blockHeight != null ? tr("Block #{}", HyUtilFormatNumber(transaction.blockHeight)) : "Mempool";
@@ -51,11 +51,12 @@
   }
 </script>
 
-<VwPanel border={true} padding={0} radius="sm" variant="glass">
-  <HyPanelHeader {onback} subtitle={blockSubtitle} title={tr("Transaction")} />
+<div class="summary-panel">
+  <VwPanel border={true} padding={0} radius="sm" variant="glass">
+    <HyPanelHeader {onback} subtitle={blockSubtitle} title={tr("Transaction")} />
 
-  <HyScrollBody container={true}>
-    <div class="hy-reference-stack tx-summary-stack">
+    <HyScrollBody container={true}>
+      <div class="hy-reference-stack tx-summary-stack">
       <div>
         <div class="section-title">{tr("Hash")}</div>
         <div class="hy-reference-hash-row">
@@ -96,11 +97,27 @@
           </span>
         </div>
       </div>
-    </div>
-  </HyScrollBody>
-</VwPanel>
+      </div>
+    </HyScrollBody>
+  </VwPanel>
+</div>
 
-<style>
+<style lang="scss">
+  @use "_views-mixins.scss" as view;
+
+  .summary-panel {
+    height: 100%;
+    min-width: 0;
+  }
+
+  .summary-panel :global(.panel) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
   .tx-summary-stack {
     padding: var(--hy-detail-section-padding);
   }
@@ -120,5 +137,15 @@
     font-size: var(--text-sm);
     font-weight: 700;
     margin-bottom: var(--hy-detail-tag-gap);
+  }
+
+  @include view.media-down(tablet) {
+    .summary-panel {
+      height: auto;
+    }
+
+    .summary-panel :global(.panel) {
+      height: auto;
+    }
   }
 </style>

@@ -58,15 +58,18 @@
   let versionBodyHeight = $state(0);
 
   const latestMetric = $derived(metricsHistory[metricsHistory.length - 1] ?? null);
+  const creditPoolStartHeight = $derived(getWebUiConfig().network.creditPoolStartHeight);
 
   const supplyPoints = $derived.by((): readonly ChartPoint[] => {
     return metricsHistory.map((metric): ChartPoint => ({ timestamp: metric.height, value: metric.circulatingSupply }));
   });
 
   const creditPoolPoints = $derived.by((): readonly ChartPoint[] => {
-    return metricsHistory.map(
+    return metricsHistory
+      .filter((metric): boolean => metric.height >= creditPoolStartHeight)
+      .map(
       (metric): ChartPoint => ({ timestamp: metric.height, value: metric.creditPoolBalance ?? 0 })
-    );
+      );
   });
 
   const circulatingLabel = $derived.by((): string => {
@@ -74,10 +77,12 @@
   });
 
   const creditPoolLabel = $derived.by((): string => {
-    return latestMetric?.creditPoolBalance == null
+    return latestMetric == null || latestMetric.height < creditPoolStartHeight || latestMetric.creditPoolBalance == null
       ? "—"
       : HyUtilFormatSelectedAmount(latestMetric.creditPoolBalance, getWebUiConfig(), 0);
   });
+
+  const showCreditPoolGraph = $derived(creditPoolPoints.length > 0);
 
   const chainstateLabel = $derived.by((): string => {
     return latestMetric == null ? "—" : HyUtilFormatBytes(latestMetric.blockchainSize);
@@ -279,6 +284,20 @@
     };
   }
 
+  async function loadCreditPoolRange(
+    range: TimeRange
+  ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> {
+    const result = await loadMetricRange(
+      range,
+      (metric): number => (metric.height >= creditPoolStartHeight ? (metric.creditPoolBalance ?? 0) : 0)
+    );
+
+    return {
+      bucketBlocks: result.bucketBlocks,
+      points: result.points.filter((point): boolean => point.timestamp >= creditPoolStartHeight),
+    };
+  }
+
   const lowerCounters = $derived.by((): readonly CounterEntry[] => {
     return [
       { icon: IconMempool, label: tr("Mempool Pressure"), value: mempoolPressureLabel },
@@ -412,18 +431,19 @@
           <HyPlainCounter icon={counter.icon} label={counter.label} value={counter.value} />
         {/each}
       </div>
-      <HyGraphWidget
-        blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
-        data={creditPoolPoints}
-        icon={IconPool}
-        label={tr("Credit Pool")}
-        loadRange={(
-          range: TimeRange
-        ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
-          loadMetricRange(range, (metric): number => metric.creditPoolBalance ?? 0)}
-        value={creditPoolLabel}
-        valueFormatter={formatAmountMetric}
-      />
+      {#if showCreditPoolGraph}
+        <HyGraphWidget
+          blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
+          data={creditPoolPoints}
+          icon={IconPool}
+          label={tr("Credit Pool")}
+          loadRange={loadCreditPoolRange}
+          value={creditPoolLabel}
+          valueFormatter={formatAmountMetric}
+        />
+      {:else}
+        <HyPlainCounter icon={IconPool} label={tr("Credit Pool")} value={creditPoolLabel} />
+      {/if}
     </div>
   </div>
 </div>

@@ -92,11 +92,12 @@
   }
 </script>
 
-<VwPanel border={true} padding={0} radius="sm" variant="glass">
-  <HyPanelHeader {onback} title={tr("Validator")} />
+<div class="summary-panel">
+  <VwPanel border={true} padding={0} radius="sm" variant="glass">
+    <HyPanelHeader {onback} title={tr("Validator")} />
 
-  <HyScrollBody container={true}>
-    <div class="summary-stack">
+    <HyScrollBody container={true}>
+      <div class="summary-stack">
       <div>
         <div class="section-title">ProTxHash</div>
         <div class="hy-reference-hash-row">
@@ -199,9 +200,10 @@
           <span class="hy-reference-stat-value mono">{lastPaidValue ?? "—"}</span>
         </div>
       </div>
-    </div>
-  </HyScrollBody>
-</VwPanel>
+      </div>
+    </HyScrollBody>
+  </VwPanel>
+</div>
 
 <style lang="scss">
   @use "_views-mixins.scss" as view;
@@ -216,6 +218,19 @@
     display: grid;
     gap: var(--hy-detail-grid-gap);
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .summary-panel {
+    height: 100%;
+    min-width: 0;
+  }
+
+  .summary-panel :global(.panel) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .validator-stat-grid--two {
@@ -346,15 +361,22 @@
     padding: var(--hy-detail-inline-padding);
   }
 
-  /* --hy-breakpoint-phone */
-  @include view.container-down(phone) {
-    .validator-stat-grid {
-      grid-template-columns: 1fr;
+  @include view.media-down(tablet) {
+    .summary-panel {
+      height: auto;
+    }
+
+    .summary-panel :global(.panel) {
+      height: auto;
     }
 
     .network-grid,
     .network-grid.three-cols {
       grid-template-columns: 1fr;
+    }
+
+    .kv-row {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>

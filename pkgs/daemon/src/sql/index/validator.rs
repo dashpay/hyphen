@@ -40,6 +40,7 @@ pub struct ValidatorRow {
   pub addr_platform_p2p: Vec<String>,
   pub addr_platform_https: Vec<String>,
   pub payout_address: Option<String>,
+  pub operator_payout_address: Option<String>,
   pub registered_height: i32,
   pub last_updated_height: i32,
 }
@@ -80,6 +81,7 @@ fn validator_row(row: sqlx::postgres::PgRow) -> ValidatorRow {
     addr_platform_p2p: row.get("addr_platform_p2p"),
     addr_platform_https: row.get("addr_platform_https"),
     payout_address: row.get("payout_address"),
+    operator_payout_address: row.get("operator_payout_address"),
     registered_height: row.get("registered_height"),
     last_updated_height: row.get("last_updated_height"),
   }
@@ -127,7 +129,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE status = $1
@@ -152,7 +155,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE status = $1 AND {PUBLIC_VALIDATOR_TYPE_SQL} = $2
@@ -170,7 +174,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE status = $1
@@ -193,7 +198,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE status = $1
@@ -210,7 +216,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE {PUBLIC_VALIDATOR_TYPE_SQL} = $1
@@ -233,7 +240,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE {PUBLIC_VALIDATOR_TYPE_SQL} = $1
@@ -250,7 +258,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          WHERE registered_height < $1
@@ -269,7 +278,8 @@ pub async fn list_validators(
         "SELECT validators.pro_tx_hash, validators.collateral_hash, validators.collateral_index, validators.collateral_address,
                 validators.owner_address, validators.voting_address, validators.operator_pubkey, validators.operator_reward, validators.validator_type, validators.status,
                 validators.addr_core_p2p, validators.addr_platform_p2p, validators.addr_platform_https,
-                validators.payout_address, validators.registered_height, validators.last_updated_height
+                validators.payout_address, validators.operator_payout_address,
+                validators.registered_height, validators.last_updated_height
          FROM validators
          LEFT JOIN validator_protx_snapshot AS vps USING (pro_tx_hash)
          ORDER BY registered_height DESC, pro_tx_hash DESC
@@ -299,7 +309,7 @@ pub async fn validator(
       "SELECT pro_tx_hash, collateral_hash, collateral_index, collateral_address,
               owner_address, voting_address, operator_pubkey, operator_reward, validator_type, status,
               addr_core_p2p, addr_platform_p2p, addr_platform_https,
-              payout_address, registered_height, last_updated_height
+              payout_address, operator_payout_address, registered_height, last_updated_height
        FROM validators WHERE pro_tx_hash = $1",
     )
     .bind(pro_tx_hash)
@@ -390,6 +400,7 @@ struct ValidatorSnapshot {
   addr_platform_p2p: Option<Vec<String>>,
   addr_platform_https: Option<Vec<String>>,
   payout_address: Option<String>,
+  operator_payout_address: Option<String>,
   operator_reward: Option<i32>,
   validator_type: Option<String>,
   status: Option<String>,
@@ -406,7 +417,7 @@ async fn snapshot(
   let row = sqlx::query(
     "SELECT collateral_hash, collateral_index, collateral_address, owner_address, operator_pubkey, \
             voting_address, addr_core_p2p, addr_platform_p2p, addr_platform_https, \
-            payout_address, operator_reward, validator_type, status, \
+            payout_address, operator_payout_address, operator_reward, validator_type, status, \
             registered_height, last_updated_height \
      FROM validators WHERE pro_tx_hash = $1",
   )
@@ -426,6 +437,7 @@ async fn snapshot(
     addr_platform_p2p: row.get("addr_platform_p2p"),
     addr_platform_https: row.get("addr_platform_https"),
     payout_address: row.get("payout_address"),
+    operator_payout_address: row.get("operator_payout_address"),
     operator_reward: row.get("operator_reward"),
     validator_type: row.get("validator_type"),
     status: row.get("status"),
@@ -438,14 +450,14 @@ async fn snapshot(
        height, sequence, pro_tx_hash, existed,
        collateral_hash, collateral_index, collateral_address, owner_address, operator_pubkey,
        voting_address, addr_core_p2p, addr_platform_p2p, addr_platform_https,
-       payout_address, operator_reward, validator_type, status,
+       payout_address, operator_payout_address, operator_reward, validator_type, status,
        registered_height, last_updated_height
      ) VALUES (
        $1, $2, $3, $4,
        $5, $6, $7, $8, $9,
        $10, $11, $12, $13,
-       $14, $15, $16, $17,
-       $18, $19
+       $14, $15, $16, $17, $18,
+       $19, $20
      )",
   )
   .bind(height)
@@ -466,6 +478,11 @@ async fn snapshot(
       .and_then(|s| s.addr_platform_https.clone()),
   )
   .bind(snapshot.as_ref().and_then(|s| s.payout_address.clone()))
+  .bind(
+    snapshot
+      .as_ref()
+      .and_then(|s| s.operator_payout_address.clone()),
+  )
   .bind(snapshot.as_ref().and_then(|s| s.operator_reward))
   .bind(snapshot.as_ref().and_then(|s| s.validator_type.clone()))
   .bind(snapshot.as_ref().and_then(|s| s.status.clone()))
@@ -500,14 +517,15 @@ pub async fn insert_validator(
   sqlx::query(
     "INSERT INTO validators (
        pro_tx_hash, collateral_hash, collateral_index, collateral_address,
-       owner_address, operator_pubkey, voting_address, operator_reward,
-       validator_type, status, registered_height, last_updated_height,
-       addr_core_p2p, addr_platform_p2p, addr_platform_https, payout_address
+     owner_address, operator_pubkey, voting_address, operator_reward,
+      validator_type, status, registered_height, last_updated_height,
+      addr_core_p2p, addr_platform_p2p, addr_platform_https, payout_address,
+      operator_payout_address
      ) VALUES (
        $1, $2, $3, $4,
        $5, $6, $7, $8,
        $9, 'registered', $10, $10,
-       $11, $12, $13, $14
+       $11, $12, $13, $14, $15
      )
      ON CONFLICT (pro_tx_hash) DO UPDATE SET
        collateral_hash = EXCLUDED.collateral_hash,
@@ -524,7 +542,8 @@ pub async fn insert_validator(
        addr_core_p2p = EXCLUDED.addr_core_p2p,
        addr_platform_p2p = EXCLUDED.addr_platform_p2p,
        addr_platform_https = EXCLUDED.addr_platform_https,
-       payout_address = EXCLUDED.payout_address",
+       payout_address = EXCLUDED.payout_address,
+       operator_payout_address = EXCLUDED.operator_payout_address",
   )
   .bind(v.pro_tx_hash.as_slice())
   .bind(v.collateral_hash.as_slice())
@@ -540,6 +559,7 @@ pub async fn insert_validator(
   .bind(&v.plat_p2p_addrs)
   .bind(&v.plat_https_addrs)
   .bind(&v.payout_addr)
+  .bind(&v.operator_payout_addr)
   .execute(conn)
   .await
   .map_err(|e| DaemonError::Pg(format!("insert validator: {e}")))?;
@@ -590,6 +610,7 @@ pub async fn update_service(
   core_addrs: &[String],
   plat_p2p_addrs: &[String],
   plat_https_addrs: &[String],
+  operator_payout_addr: &Option<String>,
   height: i32,
   sequence: i32,
 ) -> Result<(), DaemonError> {
@@ -597,12 +618,13 @@ pub async fn update_service(
 
   sqlx::query(
     "UPDATE validators SET addr_core_p2p = $1, addr_platform_p2p = $2, \
-       addr_platform_https = $3, last_updated_height = $4 \
-     WHERE pro_tx_hash = $5",
+       addr_platform_https = $3, operator_payout_address = $4, last_updated_height = $5 \
+     WHERE pro_tx_hash = $6",
   )
   .bind(core_addrs)
   .bind(plat_p2p_addrs)
   .bind(plat_https_addrs)
+  .bind(operator_payout_addr)
   .bind(height)
   .bind(pro_tx_hash)
   .execute(conn)
@@ -670,6 +692,52 @@ pub async fn revoke(
   Ok(())
 }
 
+/// Remove validators whose collateral outpoint was spent in the current block.
+///
+/// # Errors
+///
+/// Returns an error when validator snapshotting or PostgreSQL query execution
+/// fails.
+pub async fn reap_spent_collateral(
+  conn: &mut sqlx::PgConnection,
+  collateral_hash: &[u8],
+  collateral_index: i32,
+  height: i32,
+  sequence: i32,
+) -> Result<(), DaemonError> {
+  let pro_tx_hashes = sqlx::query_scalar::<_, Vec<u8>>(
+    "SELECT pro_tx_hash
+       FROM validators
+      WHERE collateral_hash = $1
+        AND collateral_index = $2",
+  )
+  .bind(collateral_hash)
+  .bind(collateral_index)
+  .fetch_all(&mut *conn)
+  .await
+  .map_err(|e| DaemonError::Pg(format!("find validator by spent collateral: {e}")))?;
+
+  if pro_tx_hashes.is_empty() {
+    return Ok(());
+  }
+
+  for pro_tx_hash in &pro_tx_hashes {
+    snapshot(conn, height, sequence, pro_tx_hash).await?;
+  }
+
+  sqlx::query(
+    "DELETE FROM validators
+      WHERE collateral_hash = $1
+        AND collateral_index = $2",
+  )
+  .bind(collateral_hash)
+  .bind(collateral_index)
+  .execute(&mut *conn)
+  .await
+  .map_err(|e| DaemonError::Pg(format!("reap validator by spent collateral: {e}")))?;
+  Ok(())
+}
+
 /// Restore validator rows from the history snapshot recorded for one height.
 ///
 /// # Errors
@@ -684,7 +752,7 @@ pub async fn restore_history(
   let rows = sqlx::query(
     "SELECT sequence, pro_tx_hash, existed, collateral_hash, collateral_index, collateral_address, owner_address,
             operator_pubkey, voting_address, addr_core_p2p, addr_platform_p2p,
-            addr_platform_https, payout_address, operator_reward, validator_type,
+            addr_platform_https, payout_address, operator_payout_address, operator_reward, validator_type,
             status, registered_height, last_updated_height
      FROM validator_history
      WHERE height = $1
@@ -715,6 +783,7 @@ pub async fn restore_history(
           row.get::<Option<Vec<String>>, _>("addr_platform_p2p"),
           row.get::<Option<Vec<String>>, _>("addr_platform_https"),
           row.get::<Option<String>, _>("payout_address"),
+          row.get::<Option<String>, _>("operator_payout_address"),
           row.get::<Option<i32>, _>("operator_reward"),
           row.get::<Option<String>, _>("validator_type"),
           row.get::<Option<String>, _>("status"),
@@ -732,6 +801,7 @@ pub async fn restore_history(
          pro_tx_hash, collateral_hash, collateral_index, collateral_address,
          owner_address, operator_pubkey, voting_address, addr_core_p2p,
          addr_platform_p2p, addr_platform_https, payout_address,
+         operator_payout_address,
          operator_reward, validator_type, status, registered_height,
          last_updated_height
        ) ",
@@ -749,11 +819,12 @@ pub async fn restore_history(
         .push_bind(&row.7)
         .push_bind(&row.8)
         .push_bind(&row.9)
-        .push_bind(row.10)
-        .push_bind(&row.11)
+        .push_bind(&row.10)
+        .push_bind(row.11)
         .push_bind(&row.12)
-        .push_bind(row.13)
-        .push_bind(row.14);
+        .push_bind(&row.13)
+        .push_bind(row.14)
+        .push_bind(row.15);
     });
     query.push(
       " ON CONFLICT (pro_tx_hash) DO UPDATE SET
@@ -767,6 +838,7 @@ pub async fn restore_history(
           addr_platform_p2p = EXCLUDED.addr_platform_p2p,
           addr_platform_https = EXCLUDED.addr_platform_https,
           payout_address = EXCLUDED.payout_address,
+          operator_payout_address = EXCLUDED.operator_payout_address,
           operator_reward = EXCLUDED.operator_reward,
           validator_type = EXCLUDED.validator_type,
           status = EXCLUDED.status,
@@ -888,9 +960,9 @@ mod tests {
   use sqlx::Row;
 
   use super::{
-    insert_validator, list_validators, refresh_validator_counts_tx, restore_history, revoke,
-    update_registrar, update_service, validator, validator_count, validator_history,
-    ValidatorInsert,
+    insert_validator, list_validators, reap_spent_collateral, refresh_validator_counts_tx,
+    restore_history, revoke, update_registrar, update_service, validator, validator_count,
+    validator_history, ValidatorInsert,
   };
 
   /// Build one representative validator registration payload for route and restore tests.
@@ -906,6 +978,7 @@ mod tests {
       operator_reward: 5_000,
       validator_type: "regular".to_owned(),
       payout_addr: Some("Xpayout111111111111111111111111111".to_owned()),
+      operator_payout_addr: Some("Xpayee1111111111111111111111111111".to_owned()),
       core_addrs: vec!["1.2.3.4:9999".to_owned()],
       plat_p2p_addrs: vec!["5.6.7.8:26656".to_owned()],
       plat_https_addrs: vec!["5.6.7.8:443".to_owned()],
@@ -1029,6 +1102,49 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn spent_collateral_reaps_validator_and_restore_history_recovers_it_when_pg_is_configured(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(pool) = crate::tests::pg_pool().await? else {
+      return Ok(());
+    };
+    crate::sql::bootstrap::reset(&pool).await?;
+
+    let insert = sample_validator_insert();
+    seed_collateral_output(
+      &pool,
+      &insert.collateral_hash,
+      insert.collateral_index,
+      "Xcollateral111111111111111111111111",
+    )
+    .await?;
+
+    let mut conn = pool.acquire().await?;
+    insert_validator(&mut conn, insert.clone(), 10, 0).await?;
+
+    reap_spent_collateral(
+      &mut conn,
+      &insert.collateral_hash,
+      insert.collateral_index,
+      11,
+      0,
+    )
+    .await?;
+
+    assert!(validator(&pool, &insert.pro_tx_hash).await?.is_none());
+
+    let mut tx = pool.begin().await?;
+    restore_history(&mut tx, 11).await?;
+    tx.commit().await?;
+
+    let restored = validator(&pool, &insert.pro_tx_hash)
+      .await?
+      .ok_or("restored validator missing")?;
+    assert_eq!(restored.collateral_hash, insert.collateral_hash);
+    assert_eq!(restored.collateral_index, insert.collateral_index);
+    Ok(())
+  }
+
+  #[tokio::test]
   async fn validator_history_restores_previous_state_when_pg_is_configured(
   ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(pool) = crate::tests::pg_pool().await? else {
@@ -1048,6 +1164,7 @@ mod tests {
       &["9.9.9.9:9999".to_owned()],
       &["9.9.9.9:26656".to_owned()],
       &["9.9.9.9:443".to_owned()],
+      &Some("Xpayee2222222222222222222222222222".to_owned()),
       1,
       0,
     )
@@ -1066,7 +1183,7 @@ mod tests {
     drop(conn);
 
     let row = sqlx::query(
-      "SELECT status, voting_address, payout_address, addr_core_p2p, last_updated_height
+      "SELECT status, voting_address, payout_address, operator_payout_address, addr_core_p2p, last_updated_height
        FROM validators
        WHERE pro_tx_hash = $1",
     )
@@ -1083,6 +1200,12 @@ mod tests {
       Some("Xpayout222222222222222222222222222")
     );
     assert_eq!(
+      row
+        .get::<Option<String>, _>("operator_payout_address")
+        .as_deref(),
+      Some("Xpayee2222222222222222222222222222")
+    );
+    assert_eq!(
       row.get::<Vec<String>, _>("addr_core_p2p"),
       vec!["9.9.9.9:9999"]
     );
@@ -1093,7 +1216,7 @@ mod tests {
     tx.commit().await?;
 
     let row = sqlx::query(
-      "SELECT status, voting_address, payout_address, addr_core_p2p, last_updated_height
+      "SELECT status, voting_address, payout_address, operator_payout_address, addr_core_p2p, last_updated_height
        FROM validators
        WHERE pro_tx_hash = $1",
     )
@@ -1108,6 +1231,12 @@ mod tests {
     assert_eq!(
       row.get::<Option<String>, _>("payout_address").as_deref(),
       Some("Xpayout222222222222222222222222222")
+    );
+    assert_eq!(
+      row
+        .get::<Option<String>, _>("operator_payout_address")
+        .as_deref(),
+      Some("Xpayee2222222222222222222222222222")
     );
     assert_eq!(
       row.get::<Vec<String>, _>("addr_core_p2p"),

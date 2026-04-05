@@ -159,8 +159,16 @@ pub async fn reindex(ctx: CommandCtx, id: u64, stage_name: String) {
     let guard =
       super::acquire_chain_state_write(Arc::clone(&ctx.chain_state_lock), "ipc_reindex").await;
     let hold_started = Instant::now();
-    let result =
-      force_reindex_stage_shared(ctx.pool.clone(), ctx.db.clone(), stage.name().to_owned()).await;
+    let result = force_reindex_stage_shared(
+      ctx.pool.clone(),
+      ctx.db.clone(),
+      Some(Arc::clone(&ctx.secondary_stores)),
+      stage.name().to_owned(),
+      ctx.p2pkh_version,
+      ctx.p2sh_version,
+      ctx.block_time_secs,
+    )
+    .await;
     let hold_ms = hold_started.elapsed().as_millis() as u64;
     drop(guard);
     tracing::info!(

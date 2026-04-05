@@ -35,7 +35,7 @@
   }
 
   function formatOutputLabel(output: ApiTxOutput): string {
-    return output.address ?? tr("Unknown output");
+    return output.address ?? tr("Data Inscribed");
   }
 
   function formatAddressHref(address: string | null): string | undefined {

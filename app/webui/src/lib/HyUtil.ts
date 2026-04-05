@@ -18,6 +18,7 @@ import {
   getSelectedLocaleLabel,
   getSelectedLocaleTag,
   hydrateSelectedLocale,
+  refreshLocaleDictionaries,
   setSelectedLocaleCode,
   type WebUiLocaleOption,
 } from "./config/locale.svelte";
@@ -160,6 +161,11 @@ export function HyUtilSetSelectedLocaleCode(locale: string): void {
 /** Restores the selected locale when storage is available. */
 export function HyUtilHydrateSelectedLocale(): void {
   hydrateSelectedLocale();
+}
+
+/** Reapplies locale dictionaries after config changes affect translation overrides. */
+export function HyUtilRefreshLocaleDictionaries(): void {
+  refreshLocaleDictionaries();
 }
 
 /** Reads one unknown failure into stable route and panel copy. */

@@ -8,7 +8,7 @@ const config = {
     adapter: adapter({
       pages: "public",
       assets: "public",
-      fallback: undefined,
+      fallback: "200.html",
       precompress: false,
       strict: true,
     }),
