@@ -27,6 +27,7 @@
     HyUtilGetSelectedLocaleLabel,
     HyUtilHydrateSelectedDenominationKey,
     HyUtilHydrateSelectedLocale,
+    HyUtilRefreshLocaleDictionaries,
     HyUtilSetSelectedDenominationKey,
     HyUtilSetSelectedLocaleCode,
   } from "$lib/HyUtil";
@@ -289,6 +290,7 @@
           return;
         }
 
+        HyUtilRefreshLocaleDictionaries();
         HyUtilHydrateSelectedDenominationKey(getWebUiConfig());
         explorer.init();
       })

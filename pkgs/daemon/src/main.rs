@@ -88,7 +88,7 @@ fn run() -> Result<(), DaemonError> {
 
   match options.startup_mode {
     StartupMode::ReindexAll => {
-      rt.block_on(run_reindex(&cfg, &db, &options))?;
+      rt.block_on(run_reindex(&cfg, Arc::clone(&db), &options, &dir))?;
       info!("reindex request completed");
       drop(db);
       drop(rt);
@@ -96,7 +96,7 @@ fn run() -> Result<(), DaemonError> {
       return Ok(());
     }
     StartupMode::Reindex(_) => {
-      rt.block_on(run_reindex(&cfg, &db, &options))?;
+      rt.block_on(run_reindex(&cfg, Arc::clone(&db), &options, &dir))?;
       info!("reindex request completed");
       drop(db);
       drop(rt);
@@ -142,22 +142,52 @@ fn run() -> Result<(), DaemonError> {
 
 async fn run_reindex(
   cfg: &config::Config,
-  db: &rocksdb::DB,
+  db: Arc<rocksdb::DB>,
   options: &Options,
+  datadir: &std::path::Path,
 ) -> Result<(), DaemonError> {
   info!(url = %cfg.postgres.url, "connecting to postgres for reindex");
   let pg_pools = sql::create_pools(&cfg.postgres).await?;
   sql::bootstrap::bootstrap(&pg_pools.write).await?;
+  let secondary_stores = Arc::new(store::manager::SecondaryStoreSet::open(
+    datadir,
+    &cfg.chain,
+    cfg.rocksdb.as_ref(),
+  )?);
 
   match options.startup_mode {
     StartupMode::ReindexAll => {
       warn!("running --reindex-all: resetting the entire PostgreSQL schema");
-      sql::bootstrap::reset(&pg_pools.write).await?;
+      let enabled_stages = index::enabled_stage_order(index::IndexStageFlags {
+        address: options.indices.address,
+        metrics: options.indices.metrics,
+        validator: options.indices.validator,
+      });
+      let message = sql::verbs::reindex::force_reindex_all(
+        &pg_pools.write,
+        Arc::clone(&db),
+        Some(Arc::clone(&secondary_stores)),
+        &enabled_stages,
+        cfg.chain.p2pkh_version,
+        cfg.chain.p2sh_version,
+        cfg.chain.block_time_secs,
+      )
+      .await?;
+      info!(%message, "reindex complete");
     }
     StartupMode::Reindex(target) => {
       let stage = target.as_stage_name();
       warn!(stage, "running --reindex");
-      let message = sql::verbs::reindex::force_reindex_stage(&pg_pools.write, db, stage).await?;
+      let message = sql::verbs::reindex::force_reindex_stage(
+        &pg_pools.write,
+        Arc::clone(&db),
+        Some(Arc::clone(&secondary_stores)),
+        stage,
+        cfg.chain.p2pkh_version,
+        cfg.chain.p2sh_version,
+        cfg.chain.block_time_secs,
+      )
+      .await?;
       info!(%message, "reindex complete");
     }
     StartupMode::Serve => {}

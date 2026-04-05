@@ -51,15 +51,12 @@
   @include view.media-down(tablet) {
     .page-frame {
       overflow: auto;
+      padding-bottom: var(--hy-mobile-dock-clearance);
       scroll-padding-bottom: var(--hy-mobile-dock-clearance);
     }
 
-    .page-frame::after {
-      content: "";
-      display: block;
-      flex: 0 0 var(--hy-mobile-dock-clearance);
-      pointer-events: none;
-      width: 100%;
+    :global(.page-frame > :first-child) {
+      flex: 0 0 auto;
     }
   }
 </style>

@@ -429,6 +429,7 @@ fn row_addresses(row: &super::sql::ValidatorRow) -> ValidatorAddresses {
     owner: row.owner_address.clone(),
     voting: row.voting_address.clone(),
     payout: row.payout_address.clone(),
+    payee: row.operator_payout_address.clone(),
   }
 }
 
@@ -578,6 +579,7 @@ mod tests {
       operator_reward: 5_000,
       validator_type: "regular".to_owned(),
       payout_addr: Some("Xpayout111111111111111111111111111".to_owned()),
+      operator_payout_addr: Some("Xpayee1111111111111111111111111111".to_owned()),
       core_addrs: vec!["1.2.3.4:9999".to_owned()],
       plat_p2p_addrs: vec!["5.6.7.8:26656".to_owned()],
       plat_https_addrs: vec!["5.6.7.8:443".to_owned()],
@@ -607,6 +609,7 @@ mod tests {
       addr_platform_p2p: Vec::new(),
       addr_platform_https: Vec::new(),
       payout_address: None,
+      operator_payout_address: Some("Xpayee1111111111111111111111111111".to_owned()),
       registered_height: 123,
       last_updated_height: 123,
     };
@@ -644,6 +647,7 @@ mod tests {
       addr_platform_p2p: Vec::new(),
       addr_platform_https: Vec::new(),
       payout_address: None,
+      operator_payout_address: Some("Xpayee1111111111111111111111111111".to_owned()),
       registered_height: 123,
       last_updated_height: 123,
     };
@@ -665,6 +669,10 @@ mod tests {
     let summary = row_to_summary(&row, Some(&overlay), &live_times);
     assert_eq!(summary.status, "registered");
     assert_eq!(summary.validator_type, "evonode");
+    assert_eq!(
+      summary.addresses.payee.as_deref(),
+      Some("Xpayee1111111111111111111111111111")
+    );
     assert_eq!(summary.live.current_type.as_deref(), Some("evonode"));
     assert_eq!(summary.live.enabled, Some(true));
     assert_eq!(summary.live.current_status.as_deref(), Some("enabled"));

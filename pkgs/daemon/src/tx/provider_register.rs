@@ -46,6 +46,7 @@ pub fn to_effect(
     operator_reward: p.operator_reward as i32,
     validator_type: format!("{:?}", p.mn_type),
     payout_addr,
+    operator_payout_addr: None,
     core_addrs,
     plat_p2p_addrs,
     plat_https_addrs,

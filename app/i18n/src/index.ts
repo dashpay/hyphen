@@ -38,6 +38,7 @@ export interface I18nMetaLanguage {
   readonly locale: string;
   readonly name: string;
   readonly src: string;
+  readonly dict: Readonly<Record<string, string>>;
 }
 
 /**
@@ -191,7 +192,26 @@ export function parseMetaDocument(text: string, source = "<meta>"): I18nMetaDocu
         throw new Error("Expected langs[" + String(index) + "] to contain name and src in " + source);
       }
 
+      const dict = entry["dict"];
+      if (dict != null && !isRecord(dict)) {
+        throw new Error("Expected langs[" + String(index) + "].dict to be an object in " + source);
+      }
+
+      const normalizedDict: Record<string, string> = {};
+      if (dict != null) {
+        for (const [key, value] of Object.entries(dict)) {
+          if (typeof value !== "string") {
+            throw new Error(
+              "Expected langs[" + String(index) + "].dict[" + JSON.stringify(key) + "] to be a string in " + source
+            );
+          }
+
+          normalizedDict[key] = value;
+        }
+      }
+
       return {
+        dict: normalizedDict,
         name: entry["name"],
         locale,
         src: entry["src"],

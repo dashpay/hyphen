@@ -75,6 +75,7 @@ fn sample_validator_insert() -> hyphend::tx::ValidatorInsert {
     operator_reward: 5_000,
     validator_type: "regular".to_owned(),
     payout_addr: Some("Xpayout111111111111111111111111111".to_owned()),
+    operator_payout_addr: Some("Xpayee1111111111111111111111111111".to_owned()),
     core_addrs: vec!["1.2.3.4:9999".to_owned()],
     plat_p2p_addrs: vec!["5.6.7.8:26656".to_owned()],
     plat_https_addrs: vec!["5.6.7.8:443".to_owned()],

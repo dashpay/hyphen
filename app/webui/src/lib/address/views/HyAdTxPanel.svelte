@@ -89,6 +89,7 @@
 <HyTxExpandablePanel
   {fullHeight}
   {hasMore}
+  hidePayloadForTypes={["coinbase"]}
   {loadingMore}
   ioAmountLayout="stacked"
   {onloadmore}

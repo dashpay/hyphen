@@ -172,7 +172,7 @@
     text-transform: uppercase;
   }
 
-  @include view.container-down(narrow-phone) {
+  @include view.media-down(tablet) {
     .tx-detail-grid {
       grid-template-columns: 1fr;
     }

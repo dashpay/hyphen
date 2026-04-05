@@ -63,11 +63,16 @@ async fn apply_validator_effect(
   let h = height as i32;
   match effect {
     ValidatorEffect::Insert(v) => sql::insert_validator(conn, v, h, sequence).await,
+    ValidatorEffect::ReapSpentCollateral {
+      collateral_hash,
+      collateral_index,
+    } => sql::reap_spent_collateral(conn, &collateral_hash, collateral_index, h, sequence).await,
     ValidatorEffect::UpdateService {
       pro_tx_hash,
       core_addrs,
       plat_p2p_addrs,
       plat_https_addrs,
+      operator_payout_addr,
     } => {
       sql::update_service(
         conn,
@@ -75,6 +80,7 @@ async fn apply_validator_effect(
         &core_addrs,
         &plat_p2p_addrs,
         &plat_https_addrs,
+        &operator_payout_addr,
         h,
         sequence,
       )
@@ -134,6 +140,18 @@ impl ValidatorBlockPlan {
             "failed to decode special tx payload: {e}"
           );
         }
+      }
+    }
+
+    for transaction in &block.block().transactions {
+      for input in &transaction.inputs {
+        if input.prevout.hash.0 == [0u8; 32] {
+          continue;
+        }
+        effects.push(ValidatorEffect::ReapSpentCollateral {
+          collateral_hash: input.prevout.hash.as_bytes().to_vec(),
+          collateral_index: input.prevout.index as i32,
+        });
       }
     }
 

@@ -1,11 +1,78 @@
 {
   langs: {
-    "en-US": { name: "English", src: "en.json5" },
-    "ru-RU": { name: "Русский", src: "ru.json5" },
-    "es-MX": { name: "Español", src: "es.json5" },
-    "tr-TR": { name: "Türkçe", src: "tr.json5" },
-    "zh-CN": { name: "简体中文", src: "zh.json5" },
-    "uk-UA": { name: "Українська", src: "uk.json5" },
+    "en-US": {
+      name: "English",
+      src: "en.json5",
+      dict: {
+        masternode: "masternode",
+        masternodes: "masternodes",
+        masternodes_count: "{count, plural, one {# masternode} other {# masternodes}}",
+        masternodes_active_count:
+          "{totalCount, plural, one {# masternode} other {# masternodes}} ({enabledCount} active)",
+        masternodes_voted: "Masternodes Voted",
+      },
+    },
+    "ru-RU": {
+      name: "Русский",
+      src: "ru.json5",
+      dict: {
+        masternode: "мастернода",
+        masternodes: "мастерноды",
+        masternodes_count:
+          "{count, plural, one {# мастернода} few {# мастерноды} many {# мастернод} other {# мастерноды}}",
+        masternodes_active_count:
+          "{totalCount, plural, one {# мастернода} few {# мастерноды} many {# мастернод} other {# мастерноды}} ({enabledCount} активных)",
+        masternodes_voted: "Проголосовавшие мастерноды",
+      },
+    },
+    "es-MX": {
+      name: "Español",
+      src: "es.json5",
+      dict: {
+        masternode: "masternodo",
+        masternodes: "masternodos",
+        masternodes_count: "{count, plural, one {# masternodo} other {# masternodos}}",
+        masternodes_active_count:
+          "{totalCount, plural, one {# masternodo} other {# masternodos}} ({enabledCount} activos)",
+        masternodes_voted: "Masternodos que votaron",
+      },
+    },
+    "tr-TR": {
+      name: "Türkçe",
+      src: "tr.json5",
+      dict: {
+        masternode: "ana düğüm",
+        masternodes: "ana düğümler",
+        masternodes_count: "{count, plural, one {# ana düğüm} other {# ana düğüm}}",
+        masternodes_active_count:
+          "{totalCount, plural, one {# ana düğüm} other {# ana düğüm}} ({enabledCount} aktif)",
+        masternodes_voted: "Oy veren ana düğümler",
+      },
+    },
+    "zh-CN": {
+      name: "简体中文",
+      src: "zh.json5",
+      dict: {
+        masternode: "主节点",
+        masternodes: "主节点",
+        masternodes_count: "{count, plural, other {# 个主节点}}",
+        masternodes_active_count: "{totalCount, plural, other {# 个主节点}}（{enabledCount} 个活跃）",
+        masternodes_voted: "已投票主节点",
+      },
+    },
+    "uk-UA": {
+      name: "Українська",
+      src: "uk.json5",
+      dict: {
+        masternode: "мастернода",
+        masternodes: "мастерноди",
+        masternodes_count:
+          "{count, plural, one {# мастернода} few {# мастерноди} many {# мастернод} other {# мастерноди}}",
+        masternodes_active_count:
+          "{totalCount, plural, one {# мастернода} few {# мастерноди} many {# мастернод} other {# мастерноди}} ({enabledCount} активних)",
+        masternodes_voted: "Мастерноди, що голосували",
+      },
+    },
   },
   blocklist: [
     "Bits",

@@ -1242,6 +1242,115 @@ pub(crate) async fn block_indexer_loop(
   Ok(())
 }
 
+/// Rebuild PostgreSQL index stages from the local RocksDB block store, then
+/// exit once the selected stages reach the current local tip.
+pub(crate) async fn rebuild_from_local_rocks(
+  ctx: IndexerLoopCtx,
+  batch_sizer: Arc<Mutex<BatchSizer>>,
+  prefetch_blocks: u32,
+) -> Result<(), DaemonError> {
+  let pipeline = ForwardPipeline::new(&ctx);
+
+  if let Ok(mut state) = ctx.scheduler_state.lock() {
+    state.enter_loop_phase(wire::msg::SchedulerLoopPhase::FetchRocksTip);
+  }
+  let rocks_tip = tokio::time::timeout(
+    Duration::from_secs(WATCHDOG_OPERATION_TIMEOUT_SECS),
+    async {
+      let db = Arc::clone(&ctx.db);
+      tokio::task::spawn_blocking(move || db::get_tip_height(&db))
+        .await
+        .map_err(|e| DaemonError::Index(format!("spawn_blocking: {e}")))
+    },
+  )
+  .await
+  .map_err(|_| {
+    DaemonError::Index(format!(
+      "reindex stalled while fetching rocks tip for {}s",
+      WATCHDOG_OPERATION_TIMEOUT_SECS
+    ))
+  })??;
+
+  let Some(rocks_tip) = rocks_tip else {
+    if let Ok(mut state) = ctx.scheduler_state.lock() {
+      state.set_idle();
+    }
+    return Err(DaemonError::Index(
+      "cannot reindex from local RocksDB: canonical tip is missing".to_owned(),
+    ));
+  };
+
+  if let Ok(mut state) = ctx.scheduler_state.lock() {
+    state.enter_loop_phase(wire::msg::SchedulerLoopPhase::LoadStageHeights);
+  }
+  let mut stage_heights = tokio::time::timeout(
+    Duration::from_secs(WATCHDOG_OPERATION_TIMEOUT_SECS),
+    load_stage_heights(&ctx),
+  )
+  .await
+  .map_err(|_| {
+    DaemonError::Index(format!(
+      "reindex stalled while loading stage heights for {}s",
+      WATCHDOG_OPERATION_TIMEOUT_SECS
+    ))
+  })??;
+  let start_height = rebuild_progress_height(&ctx.enabled_stages, &stage_heights);
+  tracing::info!(
+    start_height,
+    rocks_tip,
+    stages = %join_stage_names(&ctx.enabled_stages),
+    "Starting postgres reindex replay from local RocksDB"
+  );
+  let rebuild_started = Instant::now();
+  let mut last_rebuild_log: Option<(u32, Instant)> = None;
+
+  loop {
+    if let Ok(mut state) = ctx.scheduler_state.lock() {
+      state.enter_loop_phase(wire::msg::SchedulerLoopPhase::ChooseLane);
+    }
+    let lanes = active_lanes(&ctx.enabled_stages, &stage_heights, rocks_tip);
+    update_scheduler_lanes(&ctx, &lanes);
+    let Some(lane) = lanes.first().copied() else {
+      if let Ok(mut state) = ctx.scheduler_state.lock() {
+        state.set_idle();
+      }
+      let indexed_height = rebuild_progress_height(&ctx.enabled_stages, &stage_heights);
+      tracing::info!(
+        indexed_height,
+        rocks_tip,
+        elapsed_ms = rebuild_started.elapsed().as_millis() as u64,
+        stages = %join_stage_names(&ctx.enabled_stages),
+        "Finished postgres reindex replay from local RocksDB"
+      );
+      return Ok(());
+    };
+
+    let shared = TurnShared {
+      ctx: &ctx,
+      pipeline: &pipeline,
+      rocks_tip,
+      batch_sizer: &batch_sizer,
+      prefetch_blocks,
+    };
+    run_rebuild_lane_turn(&shared, &mut stage_heights, lane).await?;
+    let indexed_height = rebuild_progress_height(&ctx.enabled_stages, &stage_heights);
+    if indexed_height >= 0 {
+      let indexed_height = indexed_height as u32;
+      if log_threshold_met(last_rebuild_log, indexed_height, rocks_tip) {
+        tracing::info!(
+          indexed_height,
+          rocks_tip,
+          remaining_blocks = rocks_tip.saturating_sub(indexed_height),
+          rebuild_pct = rebuild_progress_pct(start_height.max(0) as u32, indexed_height, rocks_tip),
+          stages = %join_stage_names(&ctx.enabled_stages),
+          "postgres reindex progress from local RocksDB"
+        );
+        last_rebuild_log = Some((indexed_height, Instant::now()));
+      }
+    }
+  }
+}
+
 async fn run_lane_turn(
   shared: &TurnShared<'_>,
   stage_heights: &mut HashMap<Stage, i32>,
@@ -1363,6 +1472,72 @@ async fn run_lane_turn(
   result.map(|_| elapsed_ms)
 }
 
+async fn run_rebuild_lane_turn(
+  shared: &TurnShared<'_>,
+  stage_heights: &mut HashMap<Stage, i32>,
+  lane: SchedulerLane,
+) -> Result<(), DaemonError> {
+  if let Ok(mut state) = shared.ctx.scheduler_state.lock() {
+    state.begin_turn(lane);
+  }
+  let result = match lane {
+    SchedulerLane::Forward => match run_forward_turn(shared, stage_heights, u64::MAX / 2).await {
+      Ok(()) => Ok(()),
+      Err(ForwardTurnError::Interrupted {
+        height,
+        phase,
+        reason,
+      }) => Err(DaemonError::Index(format!(
+        "reindex interrupted at height {height} phase {phase:?}: {reason}"
+      ))),
+      Err(ForwardTurnError::Fatal(error)) => Err(error),
+      Err(ForwardTurnError::Recoverable {
+        height,
+        phase,
+        reason,
+      }) => Err(DaemonError::Index(format!(
+        "reindex stalled at height {height} phase {phase:?}: {reason}"
+      ))),
+    },
+    SchedulerLane::TxTreeCatchUp => {
+      run_rebuild_catch_up_turn(
+        shared.ctx,
+        shared.pipeline,
+        stage_heights,
+        tx_tree_catch_up_work(stage_heights),
+      )
+      .await
+    }
+    SchedulerLane::MetricsCatchUp => {
+      run_rebuild_catch_up_turn(
+        shared.ctx,
+        shared.pipeline,
+        stage_heights,
+        lane_catch_up_work(stage_heights, SchedulerLane::MetricsCatchUp),
+      )
+      .await
+    }
+    SchedulerLane::ValidatorCatchUp => {
+      run_rebuild_catch_up_turn(
+        shared.ctx,
+        shared.pipeline,
+        stage_heights,
+        lane_catch_up_work(stage_heights, SchedulerLane::ValidatorCatchUp),
+      )
+      .await
+    }
+  };
+  if lane != SchedulerLane::Forward {
+    if let Ok(mut state) = shared.ctx.scheduler_state.lock() {
+      state.clear_catch_up_runtime();
+    }
+  }
+  if let Ok(mut state) = shared.ctx.scheduler_state.lock() {
+    state.finish_turn(lane, 0);
+  }
+  result
+}
+
 fn is_pg_shutdown_error(error: &DaemonError) -> bool {
   let DaemonError::Pg(message) = error else {
     return false;
@@ -1473,6 +1648,44 @@ async fn run_catch_up_turn(
   }
   if let Ok(mut state) = ctx.scheduler_state.lock() {
     state.clear_catch_up_runtime();
+  }
+  Ok(())
+}
+
+async fn run_rebuild_catch_up_turn(
+  ctx: &IndexerLoopCtx,
+  pipeline: &ForwardPipeline,
+  stage_heights: &mut HashMap<Stage, i32>,
+  mut work: Option<LaneWork>,
+) -> Result<(), DaemonError> {
+  let mut run_id: Option<u64> = None;
+  while let Some(item) = work {
+    if let Ok(mut state) = ctx.scheduler_state.lock() {
+      let current_run_id =
+        run_id.unwrap_or_else(|| state.start_catch_up_run(item.lane, item.height));
+      state.record_catch_up_activity(current_run_id, item.lane, item.height);
+      run_id = Some(current_run_id);
+    }
+    execute_catch_up_height(
+      ctx,
+      pipeline,
+      item.height,
+      &item.active_stages,
+      Some(item.lane),
+      true,
+    )
+    .await?;
+    if let (Some(run_id), Ok(mut state)) = (run_id, ctx.scheduler_state.lock()) {
+      state.record_catch_up_progress(run_id, item.lane, item.height);
+    }
+    update_stage_heights(stage_heights, item.height, &item.active_stages);
+    work = match item.lane {
+      SchedulerLane::TxTreeCatchUp => tx_tree_catch_up_work(stage_heights),
+      SchedulerLane::MetricsCatchUp | SchedulerLane::ValidatorCatchUp => {
+        lane_catch_up_work(stage_heights, item.lane)
+      }
+      SchedulerLane::Forward => None,
+    };
   }
   Ok(())
 }
@@ -1941,10 +2154,10 @@ async fn execute_height(
   lane: Option<SchedulerLane>,
 ) -> Result<(), DaemonError> {
   if lane != Some(SchedulerLane::Forward) {
-    return execute_catch_up_height(ctx, pipeline, height, active_stages, lane).await;
+    return execute_catch_up_height(ctx, pipeline, height, active_stages, lane, false).await;
   }
 
-  execute_height_inner(ctx, pipeline, height, active_stages, lane).await
+  execute_height_inner(ctx, pipeline, height, active_stages, lane, false).await
 }
 
 async fn execute_catch_up_height(
@@ -1953,6 +2166,7 @@ async fn execute_catch_up_height(
   height: u32,
   active_stages: &[Stage],
   lane: Option<SchedulerLane>,
+  skip_chain_lock: bool,
 ) -> Result<(), DaemonError> {
   let lane_name = lane.map(lane_name).unwrap_or("catch_up");
   tracing::debug!(
@@ -1964,7 +2178,7 @@ async fn execute_catch_up_height(
   let started = Instant::now();
   let result = tokio::time::timeout(
     Duration::from_secs(WATCHDOG_OPERATION_TIMEOUT_SECS),
-    execute_height_inner(ctx, pipeline, height, active_stages, lane),
+    execute_height_inner(ctx, pipeline, height, active_stages, lane, skip_chain_lock),
   )
   .await;
   let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -2002,6 +2216,7 @@ async fn execute_height_inner(
   height: u32,
   active_stages: &[Stage],
   lane: Option<SchedulerLane>,
+  skip_chain_lock: bool,
 ) -> Result<(), DaemonError> {
   let mut shutdown = ctx.lifecycle.subscribe();
   let lane_label = lane.map(lane_name).unwrap_or("catch_up");
@@ -2012,20 +2227,31 @@ async fn execute_height_inner(
     "catch-up step start"
   );
   let acquire_started = Instant::now();
-  let _chain_guard = tokio::select! {
-    guard = acquire_chain_state_read(ctx, height, lane_label) => guard?,
-    _ = shutdown.changed() => {
-      return Err(DaemonError::Index("catch-up run interrupted".to_owned()));
-    }
+  let _chain_guard = if skip_chain_lock {
+    tracing::debug!(
+      lane = lane_label,
+      height,
+      step = "acquire_chain_state",
+      "catch-up step skipped"
+    );
+    None
+  } else {
+    let guard = tokio::select! {
+      guard = acquire_chain_state_read(ctx, height, lane_label) => guard?,
+      _ = shutdown.changed() => {
+        return Err(DaemonError::Index("catch-up run interrupted".to_owned()));
+      }
+    };
+    let acquire_elapsed_ms = acquire_started.elapsed().as_millis() as u64;
+    log_catch_up_step_complete(
+      lane_label,
+      height,
+      "acquire_chain_state",
+      acquire_elapsed_ms,
+      active_stages,
+    );
+    Some(guard)
   };
-  let acquire_elapsed_ms = acquire_started.elapsed().as_millis() as u64;
-  log_catch_up_step_complete(
-    lane_label,
-    height,
-    "acquire_chain_state",
-    acquire_elapsed_ms,
-    active_stages,
-  );
   tracing::debug!(
     lane = lane_label,
     height,
@@ -2201,6 +2427,17 @@ async fn load_stage_heights(ctx: &IndexerLoopCtx) -> Result<HashMap<Stage, i32>,
     );
   }
   Ok(heights)
+}
+
+fn rebuild_progress_height(enabled_stages: &[Stage], stage_heights: &HashMap<Stage, i32>) -> i32 {
+  if enabled_stages.is_empty() {
+    return stage_heights.get(&Stage::Block).copied().unwrap_or(-1);
+  }
+  enabled_stages
+    .iter()
+    .filter_map(|stage| stage_heights.get(stage).copied())
+    .min()
+    .unwrap_or(-1)
 }
 
 fn next_lagging_height(

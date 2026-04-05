@@ -31,6 +31,8 @@ export interface WebUiGovernanceConfig {
 
 export interface WebUiValidatorsConfig {
   readonly enabled: boolean;
+  readonly termPlural: string | null;
+  readonly termSingular: string | null;
 }
 
 export interface WebUiFeaturesConfig {
@@ -42,6 +44,7 @@ export interface WebUiFeaturesConfig {
 
 export interface WebUiNetworkConfig {
   readonly blockTimeSeconds: number;
+  readonly creditPoolStartHeight: number;
 }
 
 export interface WebUiBlockTagRule {
@@ -111,10 +114,13 @@ export const DEFAULT_WEBUI_CONFIG: WebUiConfig = {
     },
     validators: {
       enabled: true,
+      termPlural: "masternodes",
+      termSingular: "masternode",
     },
   },
   network: {
     blockTimeSeconds: 150,
+    creditPoolStartHeight: 0,
   },
   blockTags: [],
 };
@@ -146,6 +152,8 @@ interface PartialWebUiBalancesConfig {
 
 interface PartialWebUiFeatureToggle {
   readonly enabled?: unknown;
+  readonly term_plural?: unknown;
+  readonly term_singular?: unknown;
 }
 
 interface PartialWebUiGovernanceConfig extends PartialWebUiFeatureToggle {
@@ -169,6 +177,7 @@ interface PartialWebUiConfig {
 
 interface PartialWebUiNetworkConfig {
   readonly block_time_seconds?: unknown;
+  readonly credit_pool_start_height?: unknown;
 }
 
 interface PartialWebUiBlockTagRule {
@@ -336,12 +345,18 @@ export function normalizeWebUiConfig(value: unknown): WebUiConfig {
       },
       validators: {
         enabled: readBoolean(validatorsRecord.enabled, DEFAULT_WEBUI_CONFIG.features.validators.enabled),
+        termPlural: readNullableString(validatorsRecord.term_plural),
+        termSingular: readNullableString(validatorsRecord.term_singular),
       },
     },
     network: {
       blockTimeSeconds: readPositiveNumber(
         networkRecord.block_time_seconds,
         DEFAULT_WEBUI_CONFIG.network.blockTimeSeconds
+      ),
+      creditPoolStartHeight: readNonNegativeInteger(
+        networkRecord.credit_pool_start_height,
+        DEFAULT_WEBUI_CONFIG.network.creditPoolStartHeight
       ),
     },
     blockTags: normalizeBlockTags(record.block_tags),

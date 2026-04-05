@@ -146,6 +146,7 @@ async fn search_returns_canonical_validator_id_when_query_uses_opposite_endian(
       operator_reward: 0,
       validator_type: "regular".to_owned(),
       payout_addr: None,
+      operator_payout_addr: None,
       core_addrs: Vec::new(),
       plat_p2p_addrs: Vec::new(),
       plat_https_addrs: Vec::new(),

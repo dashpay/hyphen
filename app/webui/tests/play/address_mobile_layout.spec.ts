@@ -62,4 +62,50 @@ test.describe("address mobile layout", () => {
       })
       .toBe(0);
   });
+
+  test("keeps the last address transaction row reachable above the dock on mobile", async ({ page }) => {
+    const address = await findScrollableAddress(page);
+    test.skip(address == null, "no address discovered");
+    if (address == null) {
+      return;
+    }
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(`/address?id=${address}`);
+
+    const frame = page.locator(".page-frame");
+    const dock = page.locator(".mobile-dock");
+    const rows = page.locator(".address-transactions .tx-row");
+    const rowCount = await rows.count();
+    test.skip(rowCount === 0, "no address transaction rows available");
+
+    const lastRow = rows.nth(rowCount - 1);
+    await lastRow.scrollIntoViewIfNeeded();
+
+    const [rowBox, dockBox] = await Promise.all([lastRow.boundingBox(), dock.boundingBox()]);
+    expect(rowBox).not.toBeNull();
+    expect(dockBox).not.toBeNull();
+    expect((rowBox?.y ?? 0) + (rowBox?.height ?? 0) <= (dockBox?.y ?? Number.POSITIVE_INFINITY)).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return frame.evaluate((node) => node.scrollTop);
+      })
+      .toBeGreaterThan(0);
+  });
+
+  test("does not show payload for reward transactions on address mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto("/address?id=XssjzLKgsfATYGqTQmiJURQzeKdpL5K1k3");
+
+    const rewardRow = page
+      .locator(".address-transactions .tx-entry")
+      .filter({ has: page.locator(".hy-tx-tag", { hasText: "Reward" }) })
+      .first();
+
+    test.skip((await rewardRow.count()) === 0, "no reward row available");
+
+    await rewardRow.locator(".tx-row").click();
+    await expect(rewardRow.locator("text=Payload")).toHaveCount(0);
+  });
 });

@@ -52,7 +52,7 @@
       id: "protx",
       label: "ProTxHash",
       flexible: true,
-      minWidth: containerWidth <= HyUtilGetBreakpointWidth("phone") ? "196px" : "320px",
+      minWidth: containerWidth <= HyUtilGetBreakpointWidth("phone") ? "196px" : "280px",
     },
     { id: "type", label: tr("Type"), width: "var(--hy-browser-vl-type-width)", dropBelow: "tablet" },
     { id: "address", label: tr("IP"), width: "var(--hy-browser-vl-address-width)", dropBelow: "tablet" },
@@ -73,6 +73,10 @@
   }
 
   function formatLastPaid(validator: ApiValidatorSummary): string {
+    if ((validator.live.lastPaidHeight ?? 0) <= 0) {
+      return tr("Unavailable");
+    }
+
     if (validator.live.lastPaidHeight != null && validator.live.lastPaidAt != null) {
       return fmt(
         "#{} ({})",
@@ -300,7 +304,9 @@
                 </span>
               {/if}
               {#if HyTableHasColumn(visibleColumns, "paid")}
-                <span class="col col-reg muted">{formatLastPaid(validator)}</span>
+                <span class="col col-reg muted">
+                  <span class="paid-text hy-truncate-text">{formatLastPaid(validator)}</span>
+                </span>
               {/if}
             </div>
           {/each}
@@ -381,6 +387,13 @@
 
   .col-reg {
     justify-content: flex-end;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .paid-text {
+    max-width: 100%;
+    text-align: right;
   }
 
   .mono {
