@@ -45,7 +45,7 @@
 
 <div class="summary-panel">
   <VwPanel border={true} padding={0} radius="sm" variant="glass">
-    <HyPanelHeader {onback} subtitle={tr("Mined on {}", HyUtilFormatFullDate(block.time))} title={tr("Block")} />
+    <HyPanelHeader {onback} subtitle={tr("Mined on {}", HyUtilFormatFullDate(block.blockTime))} title={tr("Block")} />
 
     <HyScrollBody container={true}>
       <div class="summary-stack">
@@ -53,13 +53,15 @@
         <div class="section-title">{tr("Hash")}</div>
         <div class="hy-reference-hash-row">
           <div class="hash-inline">
-            <a class="block-link mono hash-full hy-wrap-anywhere" href={formatBlockHref(block.hash)}>{block.hash}</a>
+            <a class="block-link mono hash-full hy-wrap-anywhere" href={formatBlockHref(block.blockHash)}>
+              {block.blockHash}
+            </a>
             <HyCopyButton
-              copied={copiedHash === block.hash}
+              copied={copiedHash === block.blockHash}
               inline={true}
               label={tr("Copy hash")}
               onpress={(): void => {
-                copyToClipboard(block.hash);
+                copyToClipboard(block.blockHash);
               }}
               title={tr("Copy hash")}
             />
@@ -98,15 +100,15 @@
           <div class="detail-row detail-row-wide">
             <span class="kv-label">{tr("Prev Block")}</span>
             <span class="kv-value">
-              <a class="block-link mono wrap" href={formatBlockHref(block.previousblockhash)}>
-                {block.previousblockhash}
+              <a class="block-link mono wrap" href={formatBlockHref(block.prevBlockHash)}>
+                {block.prevBlockHash}
               </a>
               <HyCopyButton
-                copied={copiedHash === block.previousblockhash}
+                copied={copiedHash === block.prevBlockHash}
                 inline={true}
                 label={tr("Copy block hash")}
                 onpress={(): void => {
-                  copyToClipboard(block.previousblockhash);
+                  copyToClipboard(block.prevBlockHash);
                 }}
                 title={tr("Copy block hash")}
               />
@@ -115,7 +117,7 @@
 
           <div class="detail-row detail-row-wide">
             <span class="kv-label">Merkle Root</span>
-            <span class="kv-value mono wrap">{block.merkleroot}</span>
+            <span class="kv-value mono wrap">{block.merkle}</span>
           </div>
 
           {#if block.chainwork != null}
@@ -127,14 +129,14 @@
 
           <div class="detail-row">
             <span class="kv-label">{tr("Block")}</span>
-            <span class="kv-value">{fmt("#{}", HyUtilFormatNumber(block.height))}</span>
+            <span class="kv-value">{fmt("#{}", HyUtilFormatNumber(block.blockHeight))}</span>
             <span class="kv-label">{tr("Time")}</span>
-            <span class="kv-value">{HyUtilFormatFullDate(block.time)}</span>
+            <span class="kv-value">{HyUtilFormatFullDate(block.blockTime)}</span>
           </div>
 
           <div class="detail-row">
             <span class="kv-label">{tr("Size")}</span>
-            <span class="kv-value">{HyUtilFormatBytes(block.size)}</span>
+            <span class="kv-value">{HyUtilFormatBytes(block.blockSize)}</span>
           </div>
 
           <div class="detail-row">
@@ -146,7 +148,7 @@
 
           <div class="detail-row">
             <span class="kv-label">{tr("Version")}</span>
-            <span class="kv-value mono">{HyUtilFormatNumber(block.version)}</span>
+            <span class="kv-value mono">{HyUtilFormatNumber(block.blockVersion)}</span>
             <span class="kv-label">Bits</span>
             <span class="kv-value mono">{block.bits}</span>
           </div>

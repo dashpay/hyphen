@@ -20,7 +20,7 @@ class ExplorerStore {
   }
 
   get blockHeight(): number {
-    return this.latestMetrics?.height ?? this.blocks[0]?.height ?? 0;
+    return this.latestMetrics?.height ?? this.blocks[0]?.blockHeight ?? 0;
   }
 
   get difficulty(): number {
@@ -40,7 +40,7 @@ class ExplorerStore {
   }
 
   get latestBlockSize(): number {
-    return this.blocks[0]?.size ?? 0;
+    return this.blocks[0]?.blockSize ?? 0;
   }
 
   init(): void {

@@ -52,6 +52,7 @@ export { statusRawRouteDescriptors as ApStatusRawRouteDescriptors } from "./rout
 export {
   type GovernanceSearchRoutes as ApGovernanceSearchRoutes,
   type ProposalDetail as ApProposalDetail,
+  type ProposalVoteSummary as ApProposalVoteSummary,
   type ProposalVote as ApProposalVote,
   type SearchAddressResult as ApSearchAddressResult,
   type SearchBlockResult as ApSearchBlockResult,
@@ -89,6 +90,8 @@ export {
   type MempoolSummary as ApMempoolSummary,
   type MempoolTransactionSummary as ApMempoolTransactionSummary,
   type NetworkInfo as ApNetworkInfo,
+  type NetworkValidatorClassSummary as ApNetworkValidatorClassSummary,
+  type NetworkValidatorSummary as ApNetworkValidatorSummary,
   type NetworkSnapshot as ApNetworkSnapshot,
   type PeerInfo as ApPeerInfo,
 } from "./routes/live.js";
@@ -112,6 +115,7 @@ export {
   type ValidatorHistoryEntry as ApValidatorHistoryEntry,
   type ValidatorListParams as ApValidatorListParams,
   type ValidatorLive as ApValidatorLive,
+  type ValidatorPose as ApValidatorPose,
   type ValidatorRoutes as ApValidatorRoutes,
   type ValidatorServices as ApValidatorServices,
   type ValidatorSummary as ApValidatorSummary,

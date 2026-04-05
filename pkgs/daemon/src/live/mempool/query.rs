@@ -581,7 +581,10 @@ mod tests {
   }
 
   fn provider_register_tx_bytes(payload: &[u8]) -> Vec<u8> {
-    assert!(payload.len() < 0xfd, "test payload must fit in one-byte CompactSize");
+    assert!(
+      payload.len() < 0xfd,
+      "test payload must fit in one-byte CompactSize"
+    );
 
     let mut buf = Vec::new();
     let n_version: i32 = 3 | (1 << 16);

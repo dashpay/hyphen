@@ -46,14 +46,14 @@ export type AddressTransactionDirection = "in" | "out";
  */
 export interface AddressTransactionSummary {
   readonly blockTime?: string;
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockHeight?: number;
   readonly blockPos?: number;
   readonly direction: AddressTransactionDirection;
-  readonly version: number;
+  readonly txVersion: number;
   readonly netValue: number;
   readonly txType: string;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly fee?: number;
   readonly tags: TransactionTags;
@@ -202,14 +202,14 @@ function parseAddressTransactionSummary(value: unknown, path: string): AddressTr
   }
   return {
     ...(blockTime == null ? {} : { blockTime }),
-    txid: expectString(readField(object, "txid", path), `${path}.txid`),
+    txHash: expectString(readField(object, "txHash", path), `${path}.txHash`),
     ...(blockHeight == null ? {} : { blockHeight }),
     ...(blockPos == null ? {} : { blockPos }),
     direction,
-    version: expectNumber(readField(object, "version", path), `${path}.version`),
+    txVersion: expectNumber(readField(object, "txVersion", path), `${path}.txVersion`),
     netValue,
     txType: expectString(readField(object, "txType", path), `${path}.txType`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    txSize: expectNumber(readField(object, "txSize", path), `${path}.txSize`),
     valueOut: expectNumber(readField(object, "valueOut", path), `${path}.valueOut`),
     ...(fee == null ? {} : { fee }),
     tags: parseTransactionTags(readField(object, "tags", path), `${path}.tags`),

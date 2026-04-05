@@ -240,6 +240,64 @@ pub fn verify_recent(
   Ok(())
 }
 
+pub fn catch_up_recent(
+  raw_db: &DB,
+  stores: &SecondaryStoreSet,
+  expected_tip: Option<u32>,
+  chain: &crate::config::ChainConfig,
+) -> Result<(), DaemonError> {
+  let Some(raw_tip) = crate::db::get_tip_height(raw_db) else {
+    return Ok(());
+  };
+  let Some(expected_tip) = expected_tip else {
+    return Ok(());
+  };
+  if expected_tip > raw_tip {
+    return Err(DaemonError::Index(format!(
+      "secondary store expected tip {expected_tip} exceeds raw tip {raw_tip}"
+    )));
+  }
+
+  let mut catch_up_start: Option<u32> = None;
+  for id in StoreId::ALL {
+    let meta = stores.meta(id)?;
+    let state = meta
+      .recovery_state
+      .unwrap_or(crate::store::RecoveryState::Clean);
+    if state != crate::store::RecoveryState::Clean {
+      return Err(DaemonError::Index(format!(
+        "secondary store {} is not clean at startup",
+        id.as_str()
+      )));
+    }
+    if meta.tip_height.is_some_and(|store_tip| store_tip > raw_tip) {
+      return Err(DaemonError::Index(format!(
+        "secondary store {} tip {:?} exceeds raw tip {raw_tip}",
+        id.as_str(),
+        meta.tip_height
+      )));
+    }
+    if meta
+      .tip_height
+      .is_none_or(|store_tip| store_tip < expected_tip)
+    {
+      let start = meta
+        .tip_height
+        .map_or(0, |store_tip| store_tip.saturating_add(1));
+      catch_up_start = Some(catch_up_start.map_or(start, |current: u32| current.min(start)));
+    }
+  }
+
+  let Some(start) = catch_up_start else {
+    return Ok(());
+  };
+  info!(
+    start_height = start,
+    expected_tip, raw_tip, "Catching up lagging secondary stores from local raw blocks"
+  );
+  replay_raw_range(raw_db, stores, chain, start, Some(expected_tip))
+}
+
 fn replay_raw_range(
   raw_db: &DB,
   stores: &SecondaryStoreSet,
@@ -660,6 +718,54 @@ mod tests {
       &crate::config::ChainConfig::default(),
       500,
     )?;
+
+    std::fs::remove_dir_all(&datadir)?;
+    Ok(())
+  }
+
+  #[test]
+  fn catch_up_recent_replays_lagging_address_history_store(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    let datadir = std::env::temp_dir().join(format!(
+      "hyphen-store-manager-catch-up-{}",
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos()
+    ));
+    std::fs::create_dir_all(&datadir)?;
+    let chain = crate::config::ChainConfig::default();
+    let raw = crate::db::open(&datadir, None)?;
+    seed_raw_block(&raw, 0, &crate::tests::minimal_block_bytes(31))?;
+    seed_raw_block(&raw, 1, &crate::tests::minimal_block_bytes(32))?;
+    let stores = rebuild_target(&raw, &datadir, &chain, None, crate::store::StoreTarget::All)?;
+
+    let address_history = stores.db(crate::store::StoreId::AddressHistory)?;
+    let prevout = stores.db(crate::store::StoreId::PrevoutLookup)?;
+    let block = crate::store::load_block_ctx(&raw, 1)?;
+    crate::store::address_history::disconnect_block(
+      address_history,
+      prevout,
+      &block,
+      chain.p2pkh_version,
+      chain.p2sh_version,
+      Some(0),
+      Some(crate::store::load_block_ctx(&raw, 0)?.block_hash()),
+    )?;
+    assert_eq!(
+      stores
+        .meta(crate::store::StoreId::AddressHistory)?
+        .tip_height,
+      Some(0)
+    );
+
+    super::catch_up_recent(&raw, &stores, Some(1), &chain)?;
+    assert_eq!(
+      stores
+        .meta(crate::store::StoreId::AddressHistory)?
+        .tip_height,
+      Some(1)
+    );
+    verify_recent(&raw, &stores, Some(1), &chain, 500)?;
 
     std::fs::remove_dir_all(&datadir)?;
     Ok(())

@@ -69,7 +69,7 @@
   const tableTemplate = $derived(HyTableGetTemplate(visibleColumns));
 
   function getValidatorEnabled(validator: ApiValidatorSummary): boolean {
-    return validator.live.enabled === true;
+    return validator.live.status?.toLowerCase() === "enabled";
   }
 
   function formatLastPaid(validator: ApiValidatorSummary): string {
@@ -244,11 +244,7 @@
         <div class="scroll-body" style:--hy-table-columns={tableTemplate}>
           {#each validators as validator (validator.proTxHash)}
             {@const typeTag = getValidatorTypeTag(validator.type)}
-            {@const statusTag = getValidatorStatusTag(
-              validator.status,
-              validator.live.enabled,
-              validator.live.currentStatus
-            )}
+            {@const statusTag = getValidatorStatusTag(validator.status, validator.live.status)}
             <div
               class="table-row"
               onclick={(): void => {

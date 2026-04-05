@@ -18,7 +18,7 @@ describe("block transactions", (): void => {
 
     unwrapBenchResult(
       "blocks.getTransactions",
-      await benchClient.blocks.getTransactions(current.block.hash, { limit: 25 })
+      await benchClient.blocks.getTransactions(current.block.blockHash, { limit: 25 })
     );
   });
 });

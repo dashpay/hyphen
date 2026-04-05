@@ -26,7 +26,7 @@
     readonly loadingMore?: boolean;
     readonly onloadmore?: (() => unknown) | undefined;
     readonly transactions: readonly ApiTxSummary[];
-    readonly ontxclick?: (txid: string) => void;
+    readonly ontxclick?: (txHash: string) => void;
   }
 
   type HyTxColumnId = "size" | "txid" | "type" | "value";
@@ -138,16 +138,16 @@
 
     <HyScrollBody {hasMore} {loadingMore} {onloadmore}>
       <div class="tx-table" style:--hy-table-columns={tableTemplate}>
-        {#each transactions as transaction (transaction.txid)}
+        {#each transactions as transaction (transaction.txHash)}
           {@const txDisplay = getTransactionDisplay(transaction.txType, transaction.blockPos)}
           <div
             class="tx-row"
             onclick={(): void => {
-              ontxclick?.(transaction.txid);
+              ontxclick?.(transaction.txHash);
             }}
             onkeydown={(event: KeyboardEvent): void => {
               if (event.key === "Enter") {
-                ontxclick?.(transaction.txid);
+                ontxclick?.(transaction.txHash);
               }
             }}
             role="button"
@@ -155,13 +155,13 @@
           >
             {#if HyTableHasColumn(visibleColumns, "txid")}
               <span class="col col-txid">
-                <span class="hash-text mono accent">{transaction.txid}</span>
+                <span class="hash-text mono accent">{transaction.txHash}</span>
                 <HyCopyButton
-                  copied={copiedHash === transaction.txid}
+                  copied={copiedHash === transaction.txHash}
                   copiedTitle={tr("Copied to clipboard")}
                   label={tr("Copy transaction ID")}
                   onpress={(event: MouseEvent): void => {
-                    copyHash(transaction.txid, event);
+                    copyHash(transaction.txHash, event);
                   }}
                   title={tr("Copy txid")}
                 />
@@ -176,7 +176,7 @@
               <span class="col col-value">{HyUtilFormatTableAmount(transaction.valueOut, getWebUiConfig(), 4)}</span>
             {/if}
             {#if HyTableHasColumn(visibleColumns, "size")}
-              <span class="col col-size muted">{fmt("{} B", HyUtilFormatNumber(transaction.size))}</span>
+              <span class="col col-size muted">{fmt("{} B", HyUtilFormatNumber(transaction.txSize))}</span>
             {/if}
           </div>
         {/each}

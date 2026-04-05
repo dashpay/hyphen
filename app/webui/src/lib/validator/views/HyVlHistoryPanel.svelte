@@ -67,13 +67,13 @@
       lockTime: 0,
       outputCount: 0,
       payload,
-      size: 0,
+      txSize: 0,
       live: { tags: null },
       tags: { mined: true, coinbase: false },
       txType: normalizeHistoryType(txType),
-      txid: "",
+      txHash: "",
       valueOut: 0,
-      version: 0,
+      txVersion: 0,
       vin: [],
       vout: [],
     } satisfies ApiTxDetail);
@@ -89,13 +89,13 @@
       lockTime: 0,
       outputCount: 0,
       payload,
-      size: 0,
+      txSize: 0,
       live: { tags: null },
       tags: { mined: true, coinbase: false },
       txType: renderer.type,
-      txid: "",
+      txHash: "",
       valueOut: 0,
-      version: 0,
+      txVersion: 0,
       vin: [],
       vout: [],
     } satisfies ApiTxDetail;
@@ -110,8 +110,8 @@
 
     <HyScrollBody container={true} {scrollMode}>
       <div class="hy-reference-history-list">
-        {#each validator.history as entry, index (entry.txid)}
-          {@const expanded = expandedTxids.has(entry.txid)}
+        {#each validator.history as entry, index (entry.txHash)}
+          {@const expanded = expandedTxids.has(entry.txHash)}
           {@const renderer = getHistoryRenderer(entry.txType, entry.payload)}
           {@const txDisplay = getTransactionDisplay(renderer.type)}
           {@const payloadFields = getHistoryPayloadFields(entry.txType, entry.payload)}
@@ -119,11 +119,11 @@
             <div
               class="tx-row"
               onclick={(event: MouseEvent): void => {
-                toggleExpanded(entry.txid, event);
+                toggleExpanded(entry.txHash, event);
               }}
               onkeydown={(event: KeyboardEvent): void => {
                 if (event.key === "Enter") {
-                  toggleExpanded(entry.txid, event as unknown as MouseEvent);
+                  toggleExpanded(entry.txHash, event as unknown as MouseEvent);
                 }
               }}
               role="button"
@@ -144,19 +144,19 @@
               <div class="tx-hash-col">
                 <a
                   class="mono tx-hash tx-link"
-                  href={"/transaction?hash=" + encodeURIComponent(entry.txid)}
+                  href={"/transaction?hash=" + encodeURIComponent(entry.txHash)}
                   onclick={(event: MouseEvent): void => {
                     event.stopPropagation();
                   }}
                 >
-                  {entry.txid}
+                  {entry.txHash}
                 </a>
                 <HyCopyButton
-                  copied={copiedHash === entry.txid}
+                  copied={copiedHash === entry.txHash}
                   inline={true}
                   label={tr("Copy transaction ID")}
                   onpress={(event: MouseEvent): void => {
-                    copyToClipboard(entry.txid, event);
+                    copyToClipboard(entry.txHash, event);
                   }}
                   title={tr("Copy txid")}
                 />
@@ -172,7 +172,7 @@
                     <span class:mono={field.mono ?? false} class="kv-value">{field.value}</span>
                   </div>
                 {/each}
-                <a class="open-tx-btn" href={"/transaction?hash=" + encodeURIComponent(entry.txid)}>
+                <a class="open-tx-btn" href={"/transaction?hash=" + encodeURIComponent(entry.txHash)}>
                   {tr("View Transaction")}
                 </a>
               </div>

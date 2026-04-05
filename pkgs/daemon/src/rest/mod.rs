@@ -637,6 +637,14 @@ fn swagger_ui() -> utoipa_swagger_ui::SwaggerUi {
     .url("/api/docs/openapi.json", openapi::ApiDoc::openapi())
 }
 
+/// Build the docs-only router containing just Swagger UI and OpenAPI JSON.
+pub fn docs_router(cors_origin: Option<&str>) -> Router {
+  Router::new()
+    .layer(CompressionLayer::new())
+    .layer(cors_layer(cors_origin))
+    .merge(swagger_ui())
+}
+
 /// Build CORS layer. If `origin` is set, only that origin is
 /// allowed; otherwise all origins are permitted.
 fn cors_layer(origin: Option<&str>) -> CorsLayer {
@@ -691,6 +699,37 @@ pub async fn serve(
     .await
     .map_err(|e| DaemonError::Io {
       context: "api serve",
+      source: e,
+    })?;
+  Ok(())
+}
+
+/// Bind and serve only Swagger UI and OpenAPI JSON until shutdown is signalled.
+///
+/// # Errors
+///
+/// Returns `DaemonError::Io` when the listener cannot be bound or served.
+pub async fn serve_docs_only(
+  bind: &str,
+  mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+  cors_origin: Option<&str>,
+) -> Result<(), DaemonError> {
+  let app = docs_router(cors_origin);
+  let listener = tokio::net::TcpListener::bind(bind)
+    .await
+    .map_err(|e| DaemonError::Io {
+      context: "api bind",
+      source: e,
+    })?;
+  tracing::info!(bind, "API docs server listening");
+  axum::serve(listener, app)
+    .with_graceful_shutdown(async move {
+      let _ = shutdown_rx.changed().await;
+      tracing::info!("API docs server shutting down");
+    })
+    .await
+    .map_err(|e| DaemonError::Io {
+      context: "api docs serve",
       source: e,
     })?;
   Ok(())

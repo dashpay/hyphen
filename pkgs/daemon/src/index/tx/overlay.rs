@@ -157,7 +157,7 @@ pub(crate) async fn live_search_response(
     return Ok(None);
   }
   Ok(Some(SearchResponse::Tx(SearchTxResult {
-    id: utils::view_hex(&primary_txid, HashEndian::View),
+    tx_hash: utils::view_hex(&primary_txid, HashEndian::View),
     tx_tags: TxTags {
       mined: false,
       coinbase: false,

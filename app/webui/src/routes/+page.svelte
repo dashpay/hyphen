@@ -24,7 +24,6 @@
   import type { ChartPoint } from "$lib/data/chart";
   import { getTimeRangeSeconds, type TimeRange } from "$lib/data/hashrate";
   import { HyBlList } from "$lib/block/views";
-  import { hydrateMempoolTransactions } from "$lib/mempool/hydrate";
   import { HyTxFormatTransactionFlow } from "$lib/tx/HyTxUtil";
   import { HyTxList } from "$lib/tx/views";
   import {
@@ -51,8 +50,8 @@
   const displayBlocks = $derived.by((): readonly ApiBlockSummary[] => explorer.blocks);
   const displayTransactions = $derived.by(() => {
     return transactions.map((transaction) => ({
-      hash: transaction.summary.txid,
-      txid: transaction.summary.txid,
+      hash: transaction.summary.txHash,
+      txid: transaction.summary.txHash,
       detail: getTransactionDisplay(transaction.summary.txType ?? "normal", null).label,
       detailTone: getTransactionDisplay(transaction.summary.txType ?? "normal", null).tone,
       amount:
@@ -61,7 +60,7 @@
           : HyUtilFormatSelectedAmount(transaction.summary.valueOut, getWebUiConfig()),
       blockLabel: null,
       metaLabel: HyUtilFormatFullDate(transaction.summary.lastSeenAt),
-      sizeLabel: HyUtilFormatBytes(transaction.summary.size),
+      sizeLabel: HyUtilFormatBytes(transaction.summary.txSize),
       flow: HyTxFormatTransactionFlow(transaction.detail),
     }));
   });
@@ -137,17 +136,18 @@
       const errors: string[] = [];
 
       if (transactionResult.status === "fulfilled") {
-        void hydrateMempoolTransactions(transactionResult.value.value)
-          .then(async (hydratedRows): Promise<readonly DashboardTransaction[]> => {
-            return Promise.all(
-              hydratedRows.map(
-                async (transaction: ApiMempoolTxSummary): Promise<DashboardTransaction> => ({
-                  summary: transaction,
-                  detail: await getTransaction(transaction.txid),
-                })
-              )
-            );
+        void Promise.all(
+          transactionResult.value.value.map(async (transaction: ApiMempoolTxSummary): Promise<DashboardTransaction> => {
+            const detail = await getTransaction(transaction.txHash);
+            return {
+              summary: {
+                ...transaction,
+                txType: detail?.txType ?? transaction.txType ?? null,
+              },
+              detail,
+            };
           })
+        )
           .then((detailedTransactions): void => {
             transactions = detailedTransactions;
           });
@@ -233,11 +233,11 @@
     {#snippet right()}
       <HyBlList
         blocks={displayBlocks.map((block) => ({
-          height: block.height,
-          hash: block.hash,
-          time: HyUtilFormatFullDate(block.time),
+          height: block.blockHeight,
+          hash: block.blockHash,
+          time: HyUtilFormatFullDate(block.blockTime),
           txCount: block.txCount,
-          size: HyUtilFormatBytes(block.size),
+          size: HyUtilFormatBytes(block.blockSize),
         }))}
         onviewall={(): void => {
           void goto("/blocks");

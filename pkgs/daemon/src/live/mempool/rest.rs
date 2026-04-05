@@ -119,6 +119,7 @@ pub async fn recent_txs(
   for row in &rows {
     value.push(MempoolTxSummary {
       txid: utils::view_hex(&row.txid, HashEndian::Ser),
+      tx_type: row.tx_type.clone(),
       size: row.size as usize,
       value_out: row.value_out,
       first_seen_at: rfc3339_time(row.first_seen_at)?,

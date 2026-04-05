@@ -21,15 +21,15 @@ describe("address routes", (): void => {
         asOfHeight: 2441849,
         value: [
           {
-            txid: "tx-address-1",
+            txHash: "tx-address-1",
             blockTime: "2026-03-20T00:00:00Z",
             blockHeight: 2441848,
             blockPos: 2,
             direction: "in",
-            version: 3,
+            txVersion: 3,
             netValue: 1.24,
             txType: "normal",
-            size: 225,
+            txSize: 225,
             valueOut: 1.25,
             fee: 0.0001,
             tags: {
@@ -38,12 +38,12 @@ describe("address routes", (): void => {
             },
           },
           {
-            txid: "tx-address-2",
+            txHash: "tx-address-2",
             direction: "out",
-            version: 3,
+            txVersion: 3,
             netValue: -0.11,
             txType: "data",
-            size: 180,
+            txSize: 180,
             valueOut: 0.1,
             tags: {
               mined: false,
@@ -155,12 +155,12 @@ describe("address routes", (): void => {
         totalCount: 1,
         value: [
           {
-            txid: "tx-bad-direction",
+            txHash: "tx-bad-direction",
             direction: "mixed",
-            version: 3,
+            txVersion: 3,
             netValue: 0,
             txType: "normal",
-            size: 225,
+            txSize: 225,
             valueOut: 1.25,
             tags: {
               mined: true,

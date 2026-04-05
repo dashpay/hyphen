@@ -74,7 +74,8 @@ pub async fn verify_pg_undo_coverage_or_empty(pool: &SqlPool) -> Result<(), Daem
 
   let expected_rows = i64::from(progress.canonical_tip_height) + 1;
   let covered_rows =
-    crate::sql::progress::count_block_undo_rows_through(pool, progress.canonical_tip_height).await?;
+    crate::sql::progress::count_block_undo_rows_through(pool, progress.canonical_tip_height)
+      .await?;
 
   if progress.undo_tip_height >= progress.canonical_tip_height && covered_rows == expected_rows {
     tracing::debug!(

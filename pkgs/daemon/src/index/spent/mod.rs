@@ -135,13 +135,7 @@ impl SpentIndex {
 
     let started_at = std::time::Instant::now();
     plan
-      .apply(
-        tx,
-        prevout_db,
-        address_history_db,
-        false,
-        reporter,
-      )
+      .apply(tx, prevout_db, address_history_db, false, reporter)
       .await?;
     if let Ok(mut sizer) = self.batch_sizer.lock() {
       sizer.adjust(

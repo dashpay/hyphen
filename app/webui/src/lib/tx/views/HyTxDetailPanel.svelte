@@ -65,10 +65,10 @@
         <div class="tx-detail-grid">
           <div class="hy-detail-kv-column">
             <span class="hy-detail-kv-label">{tr("Size")}</span>
-            <span class="hy-detail-kv-value">{formatTransactionSize(transaction.size)}</span>
+            <span class="hy-detail-kv-value">{formatTransactionSize(transaction.txSize)}</span>
 
             <span class="hy-detail-kv-label">{tr("Version")}</span>
-            <span class="hy-detail-kv-value">{HyUtilFormatNumber(transaction.version)}</span>
+            <span class="hy-detail-kv-value">{HyUtilFormatNumber(transaction.txVersion)}</span>
 
             <span class="hy-detail-kv-label">Locktime</span>
             <span class="hy-detail-kv-value mono truncate">{formatLockTime(transaction.lockTime)}</span>

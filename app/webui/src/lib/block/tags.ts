@@ -7,11 +7,11 @@ export interface BlockTag {
 }
 
 function matchesBlockTagRule(block: ApiBlockDetail, rule: WebUiBlockTagRule): boolean {
-  if (rule.block_hash != null && rule.block_hash !== block.hash) {
+  if (rule.block_hash != null && rule.block_hash !== block.blockHash) {
     return false;
   }
 
-  if (rule.height != null && rule.height !== block.height) {
+  if (rule.height != null && rule.height !== block.blockHeight) {
     return false;
   }
 

@@ -420,7 +420,7 @@ pub(crate) fn command_supervised_task(
 
 #[cfg(test)]
 mod tests {
-  use super::{HEARTBEAT_STALE_SECS, IpcWorker};
+  use super::{IpcWorker, HEARTBEAT_STALE_SECS};
   use crate::lifecycle::Lifecycle;
   use crate::visor::{ProgressState, RecoveryDisposition, RunState, ShutdownPhase, Supervisable};
   use std::sync::Arc;

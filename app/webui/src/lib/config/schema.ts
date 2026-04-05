@@ -114,8 +114,8 @@ export const DEFAULT_WEBUI_CONFIG: WebUiConfig = {
     },
     validators: {
       enabled: true,
-      termPlural: "masternodes",
-      termSingular: "masternode",
+      termPlural: null,
+      termSingular: null,
     },
   },
   network: {

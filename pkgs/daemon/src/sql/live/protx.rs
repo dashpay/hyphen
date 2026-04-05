@@ -6,6 +6,8 @@
 
 //! SQL helpers for the live validator `protx` snapshot used by overlays.
 
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
@@ -14,6 +16,14 @@ use crate::error::DaemonError;
 pub struct ValidatorProTxSummaryRow {
   pub total_nodes: i64,
   pub enabled_nodes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatorProTxAggregateRow {
+  pub regular_total: i64,
+  pub regular_status_buckets: HashMap<String, i64>,
+  pub evonode_total: i64,
+  pub evonode_status_buckets: HashMap<String, i64>,
 }
 
 /// One current validator `protx` overlay row.
@@ -187,9 +197,174 @@ pub async fn summary(pool: &PgPool) -> Result<ValidatorProTxSummaryRow, DaemonEr
   })
 }
 
+/// Read aggregate counts for the current validator `protx` overlay snapshot.
+///
+/// # Errors
+///
+/// Returns `DaemonError::Pg` when PostgreSQL rejects the query.
+pub async fn aggregates(pool: &PgPool) -> Result<ValidatorProTxAggregateRow, DaemonError> {
+  use sqlx::Row;
+
+  let rows = snapshot(pool).await?;
+  let indexed_types = if rows.is_empty() {
+    HashMap::new()
+  } else {
+    let pro_tx_hashes = rows
+      .iter()
+      .map(|row| row.pro_tx_hash.clone())
+      .collect::<Vec<_>>();
+    sqlx::query(
+      "SELECT pro_tx_hash, validator_type
+         FROM validators
+        WHERE pro_tx_hash = ANY($1::bytea[])",
+    )
+    .bind(&pro_tx_hashes)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+      DaemonError::Pg(format!(
+        "read indexed validator types for protx aggregate: {e}"
+      ))
+    })?
+    .into_iter()
+    .map(|row| {
+      (
+        row.get::<Vec<u8>, _>("pro_tx_hash"),
+        row.get::<String, _>("validator_type"),
+      )
+    })
+    .collect::<HashMap<_, _>>()
+  };
+  let mut regular_status_buckets = HashMap::new();
+  let mut evonode_status_buckets = HashMap::new();
+  let mut regular_total = 0i64;
+  let mut evonode_total = 0i64;
+
+  for row in &rows {
+    let validator_type = indexed_types
+      .get(&row.pro_tx_hash)
+      .map(String::as_str)
+      .or(row.validator_type.as_deref());
+    match public_validator_type(validator_type) {
+      "regular" => {
+        regular_total += 1;
+        if let Some(status) = row.current_status.as_deref() {
+          *regular_status_buckets
+            .entry(public_validator_status(status).to_owned())
+            .or_insert(0) += 1;
+        }
+      }
+      "evonode" => {
+        evonode_total += 1;
+        if let Some(status) = row.current_status.as_deref() {
+          *evonode_status_buckets
+            .entry(public_validator_status(status).to_owned())
+            .or_insert(0) += 1;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  Ok(ValidatorProTxAggregateRow {
+    regular_total,
+    regular_status_buckets,
+    evonode_total,
+    evonode_status_buckets,
+  })
+}
+
+fn public_validator_type(value: Option<&str>) -> &'static str {
+  let compact = value
+    .unwrap_or_default()
+    .chars()
+    .filter(|ch| ch.is_ascii_alphanumeric())
+    .flat_map(char::to_lowercase)
+    .collect::<String>();
+  match compact.as_str() {
+    "regular" => "regular",
+    "highperformance" | "evo" | "evonode" => "evonode",
+    _ => "unknown",
+  }
+}
+
+fn public_validator_status(status: &str) -> &'static str {
+  match status {
+    "valid" => "valid",
+    "registered" => "registered",
+    "revoked" => "revoked",
+    "pose_banned" => "banned",
+    _ => "unknown",
+  }
+}
+
 fn is_missing_relation(error: &sqlx::Error) -> bool {
   error
     .as_database_error()
     .and_then(|db| db.code())
     .is_some_and(|code| code == "42P01")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{aggregates, replace_snapshot, ValidatorProTxSnapshotRow};
+
+  #[tokio::test]
+  async fn aggregates_prefer_indexed_validator_type_when_snapshot_disagrees(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(pool) = crate::tests::pg_pool().await? else {
+      return Ok(());
+    };
+    crate::sql::bootstrap::reset(&pool).await?;
+
+    let mut conn = pool.acquire().await?;
+    crate::sql::index::validator::insert_validator(
+      &mut conn,
+      crate::tx::ValidatorInsert {
+        pro_tx_hash: vec![0x11; 32],
+        collateral_hash: vec![0x22; 32],
+        collateral_index: 1,
+        collateral_address: None,
+        operator_pubkey: vec![0x33; 48],
+        owner_address: None,
+        voting_address: None,
+        operator_reward: 0,
+        validator_type: "Regular".to_owned(),
+        payout_addr: None,
+        operator_payout_addr: None,
+        core_addrs: Vec::new(),
+        plat_p2p_addrs: Vec::new(),
+        plat_https_addrs: Vec::new(),
+      },
+      10,
+      0,
+    )
+    .await?;
+    drop(conn);
+
+    let mut tx = pool.begin().await?;
+    replace_snapshot(
+      &mut tx,
+      &[ValidatorProTxSnapshotRow {
+        pro_tx_hash: vec![0x11; 32],
+        validator_type: Some("Evo".to_owned()),
+        current_status: Some("valid".to_owned()),
+        last_paid_height: None,
+        consecutive_payments: None,
+        pose_penalty: None,
+        pose_revived_height: None,
+        pose_ban_height: None,
+        revocation_reason: None,
+        updated_at: 42,
+      }],
+    )
+    .await?;
+    tx.commit().await?;
+
+    let row = aggregates(&pool).await?;
+    assert_eq!(row.regular_total, 1);
+    assert_eq!(row.evonode_total, 0);
+    assert_eq!(row.regular_status_buckets.get("valid"), Some(&1));
+    Ok(())
+  }
 }

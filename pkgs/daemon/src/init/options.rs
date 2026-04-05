@@ -21,6 +21,7 @@ use hyphend::wire::msg::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupMode {
   Serve,
+  DocsOnly,
   Reindex(ReindexTarget),
   ReindexAll,
   RebuildStore(crate::store::StoreTarget),
@@ -106,7 +107,9 @@ impl Options {
   ///
   /// Returns `DaemonError::Config` when the combined startup policy is invalid.
   pub fn resolve(args: &Args, cfg: &Config) -> Result<Self, DaemonError> {
-    let startup_mode = if args.reindex_all {
+    let startup_mode = if args.docs_only {
+      StartupMode::DocsOnly
+    } else if args.reindex_all {
       StartupMode::ReindexAll
     } else if let Some(target) = args.reindex {
       StartupMode::Reindex(target)
@@ -118,57 +121,59 @@ impl Options {
       StartupMode::Serve
     };
 
-    let rpc_enabled = cfg.core.rpc.as_ref().is_some_and(|rpc| rpc.enabled);
-    let zmq_enabled = cfg.core.zmq.as_ref().is_some_and(|zmq| zmq.enabled);
     let live_cfg = cfg.live.clone().unwrap_or_default();
     let overlay_cfg = cfg.overlays.clone().unwrap_or_default();
     let cache_cfg = cfg.cache.clone().unwrap_or_default();
-    if live_cfg.enable_mempool && !rpc_enabled {
-      return Err(DaemonError::Config(
-        "live.enable_mempool requires core.rpc.enabled".to_owned(),
-      ));
-    }
-    if live_cfg.enable_mempool && !zmq_enabled {
-      return Err(DaemonError::Config(
-        "live.enable_mempool requires core.zmq.enabled".to_owned(),
-      ));
-    }
-    if live_cfg.enable_islock && !zmq_enabled {
-      return Err(DaemonError::Config(
-        "live.enable_islock requires core.zmq.enabled".to_owned(),
-      ));
-    }
-    if live_cfg.enable_network && !rpc_enabled {
-      return Err(DaemonError::Config(
-        "live.enable_network requires core.rpc.enabled".to_owned(),
-      ));
-    }
-    if live_cfg.enable_governance && !rpc_enabled {
-      return Err(DaemonError::Config(
-        "live.enable_governance requires core.rpc.enabled".to_owned(),
-      ));
-    }
-    if live_cfg.enable_stream && !zmq_enabled {
-      return Err(DaemonError::Config(
-        "live.enable_stream requires core.zmq.enabled".to_owned(),
-      ));
-    }
-    if overlay_cfg.enable_protx && !rpc_enabled {
-      return Err(DaemonError::Config(
-        "overlays.enable_protx requires core.rpc.enabled".to_owned(),
-      ));
-    }
+    if startup_mode != StartupMode::DocsOnly {
+      let rpc_enabled = cfg.core.rpc.as_ref().is_some_and(|rpc| rpc.enabled);
+      let zmq_enabled = cfg.core.zmq.as_ref().is_some_and(|zmq| zmq.enabled);
+      if live_cfg.enable_mempool && !rpc_enabled {
+        return Err(DaemonError::Config(
+          "live.enable_mempool requires core.rpc.enabled".to_owned(),
+        ));
+      }
+      if live_cfg.enable_mempool && !zmq_enabled {
+        return Err(DaemonError::Config(
+          "live.enable_mempool requires core.zmq.enabled".to_owned(),
+        ));
+      }
+      if live_cfg.enable_islock && !zmq_enabled {
+        return Err(DaemonError::Config(
+          "live.enable_islock requires core.zmq.enabled".to_owned(),
+        ));
+      }
+      if live_cfg.enable_network && !rpc_enabled {
+        return Err(DaemonError::Config(
+          "live.enable_network requires core.rpc.enabled".to_owned(),
+        ));
+      }
+      if live_cfg.enable_governance && !rpc_enabled {
+        return Err(DaemonError::Config(
+          "live.enable_governance requires core.rpc.enabled".to_owned(),
+        ));
+      }
+      if live_cfg.enable_stream && !zmq_enabled {
+        return Err(DaemonError::Config(
+          "live.enable_stream requires core.zmq.enabled".to_owned(),
+        ));
+      }
+      if overlay_cfg.enable_protx && !rpc_enabled {
+        return Err(DaemonError::Config(
+          "overlays.enable_protx requires core.rpc.enabled".to_owned(),
+        ));
+      }
 
-    let chainlock_requested = live_cfg.enable_chainlock || overlay_cfg.enable_chainlock;
-    if chainlock_requested && !rpc_enabled {
-      return Err(DaemonError::Config(
-        "chainlock live/overlay requires core.rpc.enabled".to_owned(),
-      ));
-    }
-    if chainlock_requested && live_cfg.chainlock_start_block.is_none() {
-      return Err(DaemonError::Config(
-        "chainlock live/overlay requires live.chainlock_start_block".to_owned(),
-      ));
+      let chainlock_requested = live_cfg.enable_chainlock || overlay_cfg.enable_chainlock;
+      if chainlock_requested && !rpc_enabled {
+        return Err(DaemonError::Config(
+          "chainlock live/overlay requires core.rpc.enabled".to_owned(),
+        ));
+      }
+      if chainlock_requested && live_cfg.chainlock_start_block.is_none() {
+        return Err(DaemonError::Config(
+          "chainlock live/overlay requires live.chainlock_start_block".to_owned(),
+        ));
+      }
     }
 
     let address_budget_bytes = if cache_cfg.enabled && cache_cfg.address.enabled {
@@ -402,6 +407,7 @@ mod tests {
       datadir: None,
       loglevel: 2,
       logconsole: false,
+      docs_only: false,
       reindex: None,
       reindex_all: true,
       rebuild_store: None,
@@ -418,6 +424,7 @@ mod tests {
       datadir: None,
       loglevel: 2,
       logconsole: false,
+      docs_only: false,
       reindex: None,
       reindex_all: false,
       rebuild_store: None,
@@ -444,6 +451,7 @@ mod tests {
       datadir: None,
       loglevel: 2,
       logconsole: false,
+      docs_only: false,
       reindex: None,
       reindex_all: false,
       rebuild_store: Some(StoreTargetArg::All),
@@ -463,6 +471,7 @@ mod tests {
       datadir: None,
       loglevel: 2,
       logconsole: false,
+      docs_only: false,
       reindex: None,
       reindex_all: false,
       rebuild_store: None,
@@ -474,5 +483,28 @@ mod tests {
       options.startup_mode,
       StartupMode::VerifyStore(crate::store::StoreTarget::PrevoutLookup)
     );
+  }
+
+  #[test]
+  fn options_resolve_docs_only_mode_without_source_validation() {
+    let args = crate::init::Args {
+      datadir: None,
+      loglevel: 2,
+      logconsole: false,
+      docs_only: true,
+      reindex: None,
+      reindex_all: false,
+      rebuild_store: None,
+      verify_store: None,
+    };
+    let cfg = crate::config::Config {
+      live: Some(crate::config::LiveConfig {
+        enable_mempool: true,
+        ..crate::config::LiveConfig::default()
+      }),
+      ..crate::config::Config::default()
+    };
+    let options = Options::resolve(&args, &cfg).expect("docs-only should bypass source validation");
+    assert_eq!(options.startup_mode, StartupMode::DocsOnly);
   }
 }

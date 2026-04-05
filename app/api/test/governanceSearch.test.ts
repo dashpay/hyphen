@@ -17,14 +17,9 @@ describe("governance and search routes", (): void => {
             paymentAmount: 50,
             startTime: "2026-03-01T00:00:00Z",
             endTime: "2026-03-31T00:00:00Z",
-            yesCount: 10,
-            noCount: 1,
-            abstainCount: 0,
-            voteCount: 11,
-            totalNodes: 4000,
-            enabledNodes: 3900,
-            participatingNodes: 3500,
+            votes: { yes: 10, no: 1, abstain: 0 },
             fundingThreshold: 2341,
+            meetsFundingThreshold: true,
             funded: true,
             valid: true,
             creationTime: "2026-02-28T00:00:00Z",
@@ -40,14 +35,9 @@ describe("governance and search routes", (): void => {
         paymentAmount: 50,
         startTime: "2026-03-01T00:00:00Z",
         endTime: "2026-03-31T00:00:00Z",
-        yesCount: 10,
-        noCount: 1,
-        abstainCount: 0,
-        voteCount: 11,
-        totalNodes: 4000,
-        enabledNodes: 3900,
-        participatingNodes: 3500,
+        votes: { yes: 10, no: 1, abstain: 0 },
         fundingThreshold: 2341,
+        meetsFundingThreshold: true,
         funded: true,
         valid: true,
         creationTime: "2026-02-28T00:00:00Z",
@@ -126,6 +116,8 @@ describe("governance and search routes", (): void => {
     expect(proposals.value[0]?.funded).toBe(true);
     expect(proposal.paymentAddress).toBe("Xproposal");
     expect(proposal.fundingThreshold).toBe(2341);
+    expect(proposal.votes.yes).toBe(10);
+    expect(proposal.meetsFundingThreshold).toBe(true);
     expect(votes.value[0]?.vote).toBe("yes");
     expect(votes.totalCount).toBe(200);
     expect(block.value[0]?.type).toBe("block");
@@ -165,14 +157,9 @@ describe("governance and search routes", (): void => {
         hash: "proposal-2",
         name: "Minimal Proposal",
         paymentAmount: 10,
-        yesCount: 1,
-        noCount: 0,
-        abstainCount: 0,
-        voteCount: 1,
-        totalNodes: 4000,
-        enabledNodes: 3900,
-        participatingNodes: 1,
+        votes: { yes: 1, no: 0, abstain: 0 },
         fundingThreshold: 2341,
+        meetsFundingThreshold: false,
         funded: false,
         valid: true,
       },
@@ -200,7 +187,8 @@ describe("governance and search routes", (): void => {
     expect(proposal.startTime).toBeUndefined();
     expect(proposal.endTime).toBeUndefined();
     expect(proposal.creationTime).toBeUndefined();
-    expect(proposal.voteCount).toBe(1);
+    expect(proposal.votes.yes).toBe(1);
+    expect(proposal.meetsFundingThreshold).toBe(false);
     expect(votes.value[0]?.voteTime).toBeUndefined();
     expect(votes.totalCount).toBe(1);
   });

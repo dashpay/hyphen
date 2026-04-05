@@ -89,13 +89,13 @@ export interface TransactionOutput {
  * Indexed transaction summary returned by paginated list routes.
  */
 export interface TransactionSummary {
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockHeight: number;
   readonly blockPos: number;
-  readonly version: number;
+  readonly txVersion: number;
   readonly txType: string;
   readonly lockTime: number;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly inputCount: number;
   readonly outputCount: number;
@@ -110,13 +110,13 @@ export interface TransactionSummary {
  */
 export interface TransactionDetail {
   readonly asOfHeight?: number;
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockHeight?: number;
   readonly blockPos?: number;
-  readonly version: number;
+  readonly txVersion: number;
   readonly txType: string;
   readonly lockTime: number;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly inputCount: number;
   readonly outputCount: number;
@@ -244,13 +244,13 @@ function parseTransactionOutput(value: unknown, path: string): TransactionOutput
 function parseTransactionSummary(value: unknown, path: string): TransactionSummary {
   const object = expectObject(value, path);
   return {
-    txid: expectString(readField(object, "txid", path), `${path}.txid`),
+    txHash: expectString(readField(object, "txHash", path), `${path}.txHash`),
     blockHeight: expectNumber(readField(object, "blockHeight", path), `${path}.blockHeight`),
     blockPos: expectNumber(readField(object, "blockPos", path), `${path}.blockPos`),
-    version: expectNumber(readField(object, "version", path), `${path}.version`),
+    txVersion: expectNumber(readField(object, "txVersion", path), `${path}.txVersion`),
     txType: expectString(readField(object, "txType", path), `${path}.txType`),
     lockTime: expectNumber(readField(object, "lockTime", path), `${path}.lockTime`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    txSize: expectNumber(readField(object, "txSize", path), `${path}.txSize`),
     valueOut: expectNumber(readField(object, "valueOut", path), `${path}.valueOut`),
     inputCount: expectNumber(readField(object, "inputCount", path), `${path}.inputCount`),
     outputCount: expectNumber(readField(object, "outputCount", path), `${path}.outputCount`),
@@ -267,13 +267,13 @@ function parseTransactionDetail(value: unknown, path: string): TransactionDetail
   const payload = readOptionalField(object, "payload");
   return {
     ...(asOfHeight == null ? {} : { asOfHeight }),
-    txid: expectString(readField(object, "txid", path), `${path}.txid`),
+    txHash: expectString(readField(object, "txHash", path), `${path}.txHash`),
     ...(blockHeight == null ? {} : { blockHeight }),
     ...(blockPos == null ? {} : { blockPos }),
-    version: expectNumber(readField(object, "version", path), `${path}.version`),
+    txVersion: expectNumber(readField(object, "txVersion", path), `${path}.txVersion`),
     txType: expectString(readField(object, "txType", path), `${path}.txType`),
     lockTime: expectNumber(readField(object, "lockTime", path), `${path}.lockTime`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    txSize: expectNumber(readField(object, "txSize", path), `${path}.txSize`),
     valueOut: expectNumber(readField(object, "valueOut", path), `${path}.valueOut`),
     inputCount: expectNumber(readField(object, "inputCount", path), `${path}.inputCount`),
     outputCount: expectNumber(readField(object, "outputCount", path), `${path}.outputCount`),

@@ -38,24 +38,23 @@ function isBannedStatus(status: string | null | undefined): boolean {
 /** Maps validator statuses to the shared tag label and tone. */
 export function getValidatorStatusTag(
   indexedStatus: string,
-  liveEnabled?: boolean | null,
-  liveCurrentStatus?: string | null
+  liveStatus?: string | null
 ): ValidatorTag {
-  if (liveEnabled === true) {
+  if (liveStatus?.toLowerCase() === "enabled") {
     return {
       label: tr("Active"),
       tone: "green",
     };
   }
 
-  if (isBannedStatus(liveCurrentStatus) || isBannedStatus(indexedStatus)) {
+  if (isBannedStatus(liveStatus) || isBannedStatus(indexedStatus)) {
     return {
       label: tr("Banned"),
       tone: "red",
     };
   }
 
-  switch ((liveCurrentStatus ?? indexedStatus).toLowerCase()) {
+  switch ((liveStatus ?? indexedStatus).toLowerCase()) {
     case "registered":
     case "enabled":
       return {
@@ -64,7 +63,7 @@ export function getValidatorStatusTag(
       };
     default:
       return {
-        label: liveCurrentStatus ?? indexedStatus,
+        label: liveStatus ?? indexedStatus,
         tone: "mint",
       };
   }

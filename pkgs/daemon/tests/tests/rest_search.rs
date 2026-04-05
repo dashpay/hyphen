@@ -8,7 +8,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 
 use hyphend::rest::openapi::{
-  SearchBlockResult, SearchResponse, SearchTxResult, SearchValidatorResult,
+  SearchAddressResult, SearchBlockResult, SearchResponse, SearchTxResult, SearchValidatorResult,
 };
 use hyphend::rest::search::{search, SearchParams};
 use hyphend::rest::{LiveCapabilities, OverlayCapabilities};
@@ -36,6 +36,111 @@ async fn search_returns_empty_results_for_short_query() {
   .expect("short autocomplete query should resolve")
   .0;
   assert!(value.value.is_empty());
+}
+
+#[tokio::test]
+async fn search_resolves_exact_short_block_height_when_pg_is_configured(
+) -> Result<(), Box<dyn std::error::Error>> {
+  let Some(pool) = hyphend::tests::pg_pool().await? else {
+    return Ok(());
+  };
+  hyphend::sql::bootstrap::reset(&pool).await?;
+
+  let canonical_hash = vec![0x11; 32];
+  let mut tx = pool.begin().await?;
+  hyphend::sql::index::block::insert_block(
+    &mut tx,
+    7,
+    &canonical_hash,
+    &[0; 32],
+    &[1; 32],
+    1,
+    1,
+    1,
+    1,
+    100,
+    2,
+    "01",
+    &hyphend::index::block::util::CbTxFields::default(),
+  )
+  .await?;
+  tx.commit().await?;
+
+  let state = hyphend::tests::app_state_with_pool(
+    pool,
+    LiveCapabilities {
+      mempool: false,
+      islock: false,
+      network: false,
+      governance: false,
+      stream: false,
+    },
+    OverlayCapabilities {
+      protx: false,
+      chainlock: false,
+    },
+    25,
+  );
+  let value = search(State(state), Query(SearchParams { q: "7".to_owned() }))
+    .await
+    .expect("short block height search should resolve")
+    .0;
+  assert_eq!(
+    value.value,
+    vec![SearchResponse::Block(SearchBlockResult {
+      block_hash: hex::encode(&canonical_hash),
+      status: "canonical".to_owned(),
+      block_tags: hyphend::rest::openapi::BlockTags { orphan: false },
+    })]
+  );
+  Ok(())
+}
+
+#[tokio::test]
+async fn search_resolves_exact_address_before_autocomplete_cutoff_when_pg_is_configured(
+) -> Result<(), Box<dyn std::error::Error>> {
+  let Some(pool) = hyphend::tests::pg_pool().await? else {
+    return Ok(());
+  };
+  hyphend::sql::bootstrap::reset(&pool).await?;
+
+  sqlx::query(
+    "INSERT INTO address_stats (
+       address, balance, total_received, tx_count, utxo_count, first_seen_height, last_seen_height
+     ) VALUES ($1, 0, 0, 0, 0, 0, 0)",
+  )
+  .bind("Xy")
+  .execute(&pool)
+  .await?;
+
+  let mut state = hyphend::tests::app_state_with_pool(
+    pool,
+    LiveCapabilities {
+      mempool: false,
+      islock: false,
+      network: false,
+      governance: false,
+      stream: false,
+    },
+    OverlayCapabilities {
+      protx: false,
+      chainlock: false,
+    },
+    25,
+  );
+  state.indices.address = true;
+
+  let value = search(State(state), Query(SearchParams { q: "Xy".to_owned() }))
+    .await
+    .expect("exact short address search should resolve")
+    .0;
+  assert_eq!(
+    value.value,
+    vec![SearchResponse::Address(SearchAddressResult {
+      address: "Xy".to_owned(),
+    })]
+  );
+  Ok(())
 }
 
 #[tokio::test]
@@ -113,7 +218,7 @@ async fn search_returns_live_mempool_tx_tags_when_pg_is_configured(
   assert_eq!(
     value.value,
     vec![SearchResponse::Tx(SearchTxResult {
-      id: hyphend::utils::view_hex(&txid, hyphend::utils::HashEndian::Ser),
+      tx_hash: hyphend::utils::view_hex(&txid, hyphend::utils::HashEndian::Ser),
       tx_tags: hyphend::rest::openapi::TxTags {
         mined: false,
         coinbase: false,
@@ -181,7 +286,7 @@ async fn search_returns_canonical_validator_id_when_query_uses_opposite_endian(
   assert_eq!(
     value.value,
     vec![SearchResponse::Validator(SearchValidatorResult {
-      id: hyphend::utils::view_hex(&pro_tx_hash, hyphend::utils::HashEndian::Ser),
+      pro_tx_hash: hyphend::utils::view_hex(&pro_tx_hash, hyphend::utils::HashEndian::Ser),
       status: "registered".to_owned(),
     })]
   );
@@ -261,7 +366,7 @@ async fn search_distinguishes_canonical_and_orphan_blocks_when_pg_is_configured(
   assert_eq!(
     canonical.value,
     vec![SearchResponse::Block(SearchBlockResult {
-      id: hex::encode(&canonical_hash),
+      block_hash: hex::encode(&canonical_hash),
       status: "canonical".to_owned(),
       block_tags: hyphend::rest::openapi::BlockTags { orphan: false },
     })]
@@ -279,7 +384,7 @@ async fn search_distinguishes_canonical_and_orphan_blocks_when_pg_is_configured(
   assert_eq!(
     canonical_by_height.value,
     vec![SearchResponse::Block(SearchBlockResult {
-      id: hex::encode(&canonical_hash),
+      block_hash: hex::encode(&canonical_hash),
       status: "canonical".to_owned(),
       block_tags: hyphend::rest::openapi::BlockTags { orphan: false },
     })]
@@ -297,7 +402,7 @@ async fn search_distinguishes_canonical_and_orphan_blocks_when_pg_is_configured(
   assert_eq!(
     orphan.value,
     vec![SearchResponse::Block(SearchBlockResult {
-      id: hex::encode(&orphan_hash),
+      block_hash: hex::encode(&orphan_hash),
       status: "orphan".to_owned(),
       block_tags: hyphend::rest::openapi::BlockTags { orphan: true },
     })]

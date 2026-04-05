@@ -17,8 +17,9 @@ describe("live routes", (): void => {
       "/api/v1/mempool/txs?limit=2": {
         value: [
           {
-            txid: "mempool-a",
-            size: 225,
+            txHash: "mempool-a",
+            txType: "payment",
+            txSize: 225,
             valueOut: 123_456,
             firstSeenAt: "2026-03-21T00:00:01Z",
             lastSeenAt: "2026-03-21T00:00:02Z",
@@ -54,6 +55,22 @@ describe("live routes", (): void => {
           },
         ],
         peerCount: 1,
+        validators: {
+          regular: {
+            total: 100,
+            status: {
+              enabled: 77,
+              registered: 23,
+            },
+          },
+          evonode: {
+            total: 12,
+            status: {
+              enabled: 10,
+              pose_banned: 2,
+            },
+          },
+        },
         updatedAt: "2026-03-21T00:00:03Z",
       },
     });
@@ -64,11 +81,14 @@ describe("live routes", (): void => {
 
     expect(summary.maxBytes).toBe(1000);
     expect(page.nextCursor).toBe("mempool-next");
+    expect(page.value[0]?.txHash).toBe("mempool-a");
+    expect(page.value[0]?.txType).toBe("payment");
     expect(page.value[0]?.valueOut).toBe(123_456);
     expect(page.value[0]?.tags.mined).toBe(false);
     expect(network.networkInfo.protocolVersion).toBe(70231);
     expect(network.peerInfo[0]?.addrLocal).toBe("10.0.0.5:9999");
     expect(network.peerInfo[0]?.startingHeight).toBe(2441800);
+    expect(network.validators.regular.status["enabled"]).toBe(77);
   });
 
   it("classifies a disabled live capability as capability-unavailable", async (): Promise<void> => {
@@ -97,12 +117,24 @@ describe("live routes", (): void => {
   });
 
   it("accepts daemon-style alias fixtures and sparse live pages", async (): Promise<void> => {
-    const networkFixture = await loadJsonFixture("network-aliases.json");
+    const networkFixture = (await loadJsonFixture("network-aliases.json")) as Record<string, unknown>;
     const client = createClient({
       "/api/v1/mempool/txs": {
         value: [],
       },
-      "/api/v1/network": networkFixture,
+      "/api/v1/network": {
+        ...networkFixture,
+        validators: {
+          regular: {
+            total: 0,
+            status: {},
+          },
+          evonode: {
+            total: 0,
+            status: {},
+          },
+        },
+      },
     });
 
     const page = expectOk(await client.live.listMempoolTransactions());
@@ -141,6 +173,16 @@ describe("live routes", (): void => {
           },
         ],
         peerCount: 1,
+        validators: {
+          regular: {
+            total: 0,
+            status: {},
+          },
+          evonode: {
+            total: 0,
+            status: {},
+          },
+        },
         updatedAt: "2026-03-21T00:00:04Z",
       },
     });
@@ -175,6 +217,16 @@ describe("live routes", (): void => {
         networkInfo: {},
         peerInfo: [{}],
         peerCount: 1,
+        validators: {
+          regular: {
+            total: 0,
+            status: {},
+          },
+          evonode: {
+            total: 0,
+            status: {},
+          },
+        },
         updatedAt: "2026-03-21T00:00:05Z",
       },
     });

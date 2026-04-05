@@ -52,8 +52,8 @@
   async function hydrateTransactionTypes(rows: readonly ApiMempoolTxSummary[]): Promise<void> {
     const hydratedRows = await hydrateMempoolTransactions(rows);
 
-    const hydratedMap = new Map(hydratedRows.map((row): [string, ApiMempoolTxSummary] => [row.txid, row]));
-    transactions = transactions.map((row): ApiMempoolTxSummary => hydratedMap.get(row.txid) ?? row);
+    const hydratedMap = new Map(hydratedRows.map((row): [string, ApiMempoolTxSummary] => [row.txHash, row]));
+    transactions = transactions.map((row): ApiMempoolTxSummary => hydratedMap.get(row.txHash) ?? row);
   }
 
   async function loadMore(): Promise<void> {

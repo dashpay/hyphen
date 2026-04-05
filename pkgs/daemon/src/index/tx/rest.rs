@@ -370,7 +370,7 @@ pub(crate) async fn search_by_txid(
     .map_err(|e| ApiError::from_daemon(e, "search transaction"))?
   {
     return Ok(Some(SearchResponse::Tx(SearchTxResult {
-      id: utils::view_hex(&row.txid, HashEndian::Ser),
+      tx_hash: utils::view_hex(&row.txid, HashEndian::Ser),
       tx_tags: TxTags {
         mined: true,
         coinbase: row.block_pos == 0,
@@ -400,7 +400,7 @@ pub(crate) async fn search_by_txid_prefix(
       .into_iter()
       .map(|row| {
         SearchResponse::Tx(SearchTxResult {
-          id: utils::view_hex(&row.txid, HashEndian::Ser),
+          tx_hash: utils::view_hex(&row.txid, HashEndian::Ser),
           tx_tags: TxTags {
             mined: true,
             coinbase: row.block_pos == 0,

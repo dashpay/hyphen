@@ -31,11 +31,11 @@
 
       return {
         label: txDisplay.label,
-        metaLabel: HyUtilFormatFullDate(block.time),
-        metaValue: "#" + HyUtilFormatNumber(block.height),
-        size: transaction.size,
+        metaLabel: HyUtilFormatFullDate(block.blockTime),
+        metaValue: "#" + HyUtilFormatNumber(block.blockHeight),
+        size: transaction.txSize,
         tone: txDisplay.tone,
-        txid: transaction.txid,
+        txid: transaction.txHash,
         valueOut: transaction.valueOut,
       };
     });
@@ -45,7 +45,7 @@
     transactions = [];
     transactionsError = null;
 
-    void getBlockTxs(block.hash, 100)
+    void getBlockTxs(block.blockHash, 100)
       .then((response): void => {
         transactions = response.value;
         nextCursor = response.nextCursor ?? null;
@@ -65,7 +65,7 @@
     loadingMore = true;
 
     try {
-      const response = await getBlockTxs(block.hash, 100, nextCursor);
+      const response = await getBlockTxs(block.blockHash, 100, nextCursor);
       transactions = [...transactions, ...response.value];
       nextCursor = response.nextCursor ?? null;
     } catch {

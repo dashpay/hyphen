@@ -42,6 +42,36 @@ async fn network_snapshot_returns_persisted_live_network_payload_when_pg_is_conf
     },
   )
   .await?;
+  hyphend::sql::live::protx::replace_snapshot(
+    &mut tx,
+    &[
+      hyphend::sql::live::protx::ValidatorProTxSnapshotRow {
+        pro_tx_hash: vec![0x11; 32],
+        validator_type: Some("Evo".to_owned()),
+        current_status: Some("valid".to_owned()),
+        last_paid_height: None,
+        consecutive_payments: None,
+        pose_penalty: None,
+        pose_revived_height: None,
+        pose_ban_height: None,
+        revocation_reason: None,
+        updated_at: 42,
+      },
+      hyphend::sql::live::protx::ValidatorProTxSnapshotRow {
+        pro_tx_hash: vec![0x22; 32],
+        validator_type: Some("Regular".to_owned()),
+        current_status: Some("registered".to_owned()),
+        last_paid_height: None,
+        consecutive_payments: None,
+        pose_penalty: None,
+        pose_revived_height: None,
+        pose_ban_height: None,
+        revocation_reason: None,
+        updated_at: 42,
+      },
+    ],
+  )
+  .await?;
   tx.commit().await?;
 
   let value = snapshot(State(hyphend::tests::app_state_with_pool(
@@ -69,6 +99,10 @@ async fn network_snapshot_returns_persisted_live_network_payload_when_pg_is_conf
   );
   assert_eq!(value.peer_info[0].id, Some(7));
   assert_eq!(value.peer_count, 1);
+  assert_eq!(value.validators.regular.total, 1);
+  assert_eq!(value.validators.regular.status.get("registered"), Some(&1));
+  assert_eq!(value.validators.evonode.total, 1);
+  assert_eq!(value.validators.evonode.status.get("valid"), Some(&1));
   assert_eq!(value.updated_at, "1970-01-01T00:00:42Z");
   Ok(())
 }
@@ -195,6 +229,7 @@ async fn mempool_handlers_return_persisted_live_rows_when_pg_is_configured(
     txs_value.value[0].txid,
     utils::view_hex(&txid, HashEndian::Ser)
   );
+  assert_eq!(txs_value.value[0].tx_type, "normal");
   assert_eq!(txs_value.value[0].value_out, 42);
   assert_eq!(txs_value.value[0].first_seen_at, "1970-01-01T00:00:10Z");
   assert_eq!(txs_value.value[0].last_seen_at, "1970-01-01T00:00:20Z");

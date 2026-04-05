@@ -14,7 +14,6 @@
     '{count, plural, one {# pending} other {# pending}}': '{count, plural, one {# bekleyen} other {# bekleyen}}',
     '{count, plural, one {# validator} other {# validators}}': '{count, plural, one {# doğrulayıcı} other {# doğrulayıcı}}',
     '{} ({} enabled)': '{} ({} etkin)',
-    '{} Regular / {} Evo': '{} Regular / {} Evo',
     '{count} funded': '{count} finanse edildi',
     '{totalCount, plural, one {# validator} other {# validators}} ({enabledCount} active)': '{totalCount, plural, one {# doğrulayıcı} other {# doğrulayıcı}} ({enabledCount} aktif)',
     '#{} ({})': '#{} ({})',

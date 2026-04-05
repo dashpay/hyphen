@@ -15,10 +15,10 @@ use crate::error::DaemonError;
 use crate::tx::ValidatorInsert;
 
 const PUBLIC_VALIDATOR_TYPE_SQL: &str = "CASE
-         WHEN lower(regexp_replace(COALESCE(vps.validator_type, validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g'))
+         WHEN lower(regexp_replace(COALESCE(validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g'))
            IN ('highperformance', 'evo', 'evonode')
            THEN 'evonode'
-         WHEN lower(regexp_replace(COALESCE(vps.validator_type, validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g')) = 'regular'
+         WHEN lower(regexp_replace(COALESCE(validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g')) = 'regular'
            THEN 'regular'
          ELSE 'unknown'
        END";
@@ -52,6 +52,12 @@ pub struct ValidatorHistoryRow {
   pub tx_type: crate::sql::types::TxTypeDb,
   pub payload: Value,
   pub block_height: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidatorCollateralSpendRow {
+  pub spent_txid: Vec<u8>,
+  pub spent_height: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,6 +326,85 @@ pub async fn validator(
   )
 }
 
+/// Read the latest historical snapshot row for one validator when the current
+/// row has already been reaped.
+///
+/// # Errors
+///
+/// Returns an error when PostgreSQL query execution fails.
+pub async fn historical_validator(
+  pool: &PgPool,
+  pro_tx_hash: &[u8],
+) -> Result<Option<ValidatorRow>, DaemonError> {
+  let row = sqlx::query(
+    "SELECT pro_tx_hash, collateral_hash, collateral_index, collateral_address,
+            owner_address, voting_address, operator_pubkey, operator_reward, validator_type, status,
+            addr_core_p2p, addr_platform_p2p, addr_platform_https,
+            payout_address, operator_payout_address, registered_height, last_updated_height
+       FROM validator_history
+      WHERE pro_tx_hash = $1
+        AND existed = TRUE
+      ORDER BY height DESC, sequence DESC
+      LIMIT 1",
+  )
+  .bind(pro_tx_hash)
+  .fetch_optional(pool)
+  .await
+  .map_err(|e| DaemonError::Pg(format!("read historical validator: {e}")))?;
+
+  let Some(row) = row else {
+    return Ok(None);
+  };
+
+  let Some(collateral_hash) = row.get::<Option<Vec<u8>>, _>("collateral_hash") else {
+    return Ok(None);
+  };
+  let Some(collateral_index) = row.get::<Option<i32>, _>("collateral_index") else {
+    return Ok(None);
+  };
+  let Some(operator_reward) = row.get::<Option<i32>, _>("operator_reward") else {
+    return Ok(None);
+  };
+  let Some(validator_type) = row.get::<Option<String>, _>("validator_type") else {
+    return Ok(None);
+  };
+  let Some(status) = row.get::<Option<String>, _>("status") else {
+    return Ok(None);
+  };
+  let Some(registered_height) = row.get::<Option<i32>, _>("registered_height") else {
+    return Ok(None);
+  };
+  let Some(last_updated_height) = row.get::<Option<i32>, _>("last_updated_height") else {
+    return Ok(None);
+  };
+
+  Ok(Some(ValidatorRow {
+    pro_tx_hash: row.get("pro_tx_hash"),
+    collateral_hash,
+    collateral_index,
+    collateral_address: row.get("collateral_address"),
+    owner_address: row.get("owner_address"),
+    voting_address: row.get("voting_address"),
+    operator_pubkey: row.get("operator_pubkey"),
+    operator_reward,
+    validator_type,
+    status,
+    addr_core_p2p: row
+      .get::<Option<Vec<String>>, _>("addr_core_p2p")
+      .unwrap_or_default(),
+    addr_platform_p2p: row
+      .get::<Option<Vec<String>>, _>("addr_platform_p2p")
+      .unwrap_or_default(),
+    addr_platform_https: row
+      .get::<Option<Vec<String>>, _>("addr_platform_https")
+      .unwrap_or_default(),
+    payout_address: row.get("payout_address"),
+    operator_payout_address: row.get("operator_payout_address"),
+    registered_height,
+    last_updated_height,
+  }))
+}
+
 /// Read the special transaction history for one validator.
 ///
 /// # Errors
@@ -352,6 +437,36 @@ pub async fn validator_history(
       })
       .collect(),
   )
+}
+
+/// Read the transaction that spent the validator collateral outpoint.
+///
+/// # Errors
+///
+/// Returns an error when PostgreSQL query execution fails.
+pub async fn validator_collateral_spend(
+  pool: &PgPool,
+  collateral_hash: &[u8],
+  collateral_index: i32,
+) -> Result<Option<ValidatorCollateralSpendRow>, DaemonError> {
+  let row = sqlx::query(
+    "SELECT o.spent_txid, t.block_height AS spent_height
+       FROM tx_outputs o
+       JOIN transactions t ON t.txid = o.spent_txid
+      WHERE o.txid = $1
+        AND o.vout_index = $2
+        AND o.spent_txid IS NOT NULL",
+  )
+  .bind(collateral_hash)
+  .bind(collateral_index)
+  .fetch_optional(pool)
+  .await
+  .map_err(|e| DaemonError::Pg(format!("read validator collateral spend: {e}")))?;
+
+  Ok(row.map(|row| ValidatorCollateralSpendRow {
+    spent_txid: row.get("spent_txid"),
+    spent_height: row.get("spent_height"),
+  }))
 }
 
 /// Read validator suggestions by canonical ProTx-hash prefix.
@@ -1420,7 +1535,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn validator_list_prefers_live_type_filter_when_overlay_snapshot_exists(
+  async fn validator_list_uses_indexed_type_filter_when_overlay_snapshot_exists(
   ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(pool) = crate::tests::pg_pool().await? else {
       return Ok(());
@@ -1456,15 +1571,18 @@ mod tests {
     .await?;
     tx.commit().await?;
 
-    let evonodes = list_validators(&pool, None, Some("evonode"), 10, None).await?;
-    assert_eq!(evonodes.len(), 1);
-    assert_eq!(evonodes[0].pro_tx_hash, validator_row.pro_tx_hash);
-
     let regular = list_validators(&pool, None, Some("regular"), 10, None).await?;
-    assert!(regular.is_empty());
+    assert_eq!(regular.len(), 1);
+    assert_eq!(regular[0].pro_tx_hash, validator_row.pro_tx_hash);
+
+    let evonodes = list_validators(&pool, None, Some("evonode"), 10, None).await?;
+    assert!(evonodes.is_empty());
 
     let count = validator_count(&pool, None, Some("evonode")).await?;
-    assert_eq!(count.total, 1);
+    assert_eq!(count.total, 0);
+
+    let regular_count = validator_count(&pool, None, Some("regular")).await?;
+    assert_eq!(regular_count.total, 1);
     Ok(())
   }
 

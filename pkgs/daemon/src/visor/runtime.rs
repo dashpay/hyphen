@@ -182,6 +182,13 @@ impl ServeRuntime {
       .map(|height| height as i32)
       .unwrap_or(-1);
     let chain_progress = crate::sql::progress::chain_progress(&pg_pools.write).await?;
+    crate::store::manager::catch_up_recent(
+      &db,
+      &secondary_stores,
+      (chain_progress.canonical_tip_height >= 0)
+        .then_some(chain_progress.canonical_tip_height as u32),
+      &cfg.chain,
+    )?;
     crate::store::manager::verify_recent(
       &db,
       &secondary_stores,
