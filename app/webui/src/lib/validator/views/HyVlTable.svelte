@@ -25,6 +25,7 @@
   } from "$lib/views";
 
   interface Props {
+    readonly globalEnabledCount?: number | null;
     readonly onvalidatorclick?: (proTxHash: string) => void;
     readonly onsummarychange?: (summary: string) => void;
     readonly scrollMode?: "page" | "self";
@@ -32,7 +33,7 @@
 
   type HyVlColumnId = "address" | "protx" | "status" | "type" | "paid";
 
-  const { onvalidatorclick, onsummarychange, scrollMode = "self" }: Props = $props();
+  const { globalEnabledCount = null, onvalidatorclick, onsummarychange, scrollMode = "self" }: Props = $props();
 
   let validators = $state<readonly ApiValidatorSummary[]>([]);
   let totalCount = $state(0);
@@ -68,8 +69,24 @@
   const visibleColumns = $derived(HyTableGetVisibleColumns(baseColumns, containerWidth));
   const tableTemplate = $derived(HyTableGetTemplate(visibleColumns));
 
+  function mergeValidators(
+    currentRows: readonly ApiValidatorSummary[],
+    nextRows: readonly ApiValidatorSummary[]
+  ): readonly ApiValidatorSummary[] {
+    if (currentRows.length === 0) {
+      return nextRows;
+    }
+
+    const nextByHash = new Map(nextRows.map((row): readonly [string, ApiValidatorSummary] => [row.proTxHash, row]));
+    const mergedRows = currentRows.map((row): ApiValidatorSummary => nextByHash.get(row.proTxHash) ?? row);
+    const knownHashes = new Set(mergedRows.map((row): string => row.proTxHash));
+    const appendedRows = nextRows.filter((row): boolean => !knownHashes.has(row.proTxHash));
+    return [...mergedRows, ...appendedRows];
+  }
+
   function getValidatorEnabled(validator: ApiValidatorSummary): boolean {
-    return validator.live.status?.toLowerCase() === "enabled";
+    const liveStatus = validator.live.status?.toLowerCase();
+    return liveStatus === "valid";
   }
 
   function formatLastPaid(validator: ApiValidatorSummary): string {
@@ -97,10 +114,11 @@
   }
 
   const validatorsSummary = $derived.by((): string => {
-    const enabledCount = validators.filter((validator): boolean => getValidatorEnabled(validator)).length;
+    const enabledCount =
+      globalEnabledCount ?? validators.filter((validator): boolean => getValidatorEnabled(validator)).length;
     return tr("{totalCount, plural, one {# validator} other {# validators}} ({enabledCount} active)", {
       totalCount,
-      enabledCount,
+      enabledCount: HyUtilFormatNumber(enabledCount),
     });
   });
 
@@ -129,21 +147,6 @@
   });
 
   $effect(() => {
-    const mergeValidators = (
-      currentRows: readonly ApiValidatorSummary[],
-      nextRows: readonly ApiValidatorSummary[]
-    ): readonly ApiValidatorSummary[] => {
-      if (currentRows.length === 0) {
-        return nextRows;
-      }
-
-      const nextByHash = new Map(nextRows.map((row): readonly [string, ApiValidatorSummary] => [row.proTxHash, row]));
-      const mergedRows = currentRows.map((row): ApiValidatorSummary => nextByHash.get(row.proTxHash) ?? row);
-      const knownHashes = new Set(mergedRows.map((row): string => row.proTxHash));
-      const appendedRows = nextRows.filter((row): boolean => !knownHashes.has(row.proTxHash));
-      return [...mergedRows, ...appendedRows];
-    };
-
     const readValidators = async (background: boolean): Promise<void> => {
       if (!background) {
         validators = [];
@@ -199,7 +202,7 @@
 
     try {
       const response = await getValidators(100, nextCursor);
-      validators = [...validators, ...response.value];
+      validators = mergeValidators(validators, response.value);
       totalCount = response.totalCount ?? validators.length;
       nextCursor = response.nextCursor ?? null;
     } catch {

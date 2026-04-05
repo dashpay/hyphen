@@ -1,6 +1,107 @@
 import { expect, test } from "playwright/test";
 
 test.describe("mobile dashboard integrity", () => {
+  test("uses the intended overview mobile composition and page-owned list scroll", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.goto("/");
+
+    const frame = page.locator(".page-frame");
+    const mobileSummary = page.locator(".overview-mobile-summary").first();
+    const mobileBlocks = page.locator(".overview-mobile-blocks").first();
+    const mobileGraphs = page.locator(".overview-mobile-graphs").first();
+    const blockHeightCard = mobileSummary.getByText("Block Height", { exact: true });
+    const latestBlocksPanel = mobileBlocks.locator(".block-panel .panel").first();
+    const latestBlocksHeading = latestBlocksPanel.getByText("Latest Blocks", { exact: true });
+    const processedCard = mobileGraphs.getByText("Processed Transactions", { exact: true });
+    const hashRateCard = mobileGraphs.getByText("Hash Rate", { exact: true });
+    const pendingPanel = page.locator(".overview-pending .tx-panel .panel").first();
+    const pendingHeading = pendingPanel.getByText("Pending Transactions", { exact: true });
+    const latestBlocksScrollBody = latestBlocksPanel.locator(".scroll-body").first();
+    const pendingScrollBody = pendingPanel.locator(".scroll-body").first();
+
+    await expect(frame).toBeVisible();
+    await expect(blockHeightCard).toBeVisible();
+    await expect(latestBlocksHeading).toBeVisible();
+    await expect(processedCard).toBeVisible();
+    await expect(hashRateCard).toBeVisible();
+    await expect(pendingHeading).toBeVisible();
+
+    const [blockHeightBox, latestBlocksBox, processedBox, hashRateBox, pendingBox] = await Promise.all([
+      blockHeightCard.boundingBox(),
+      latestBlocksPanel.boundingBox(),
+      processedCard.boundingBox(),
+      hashRateCard.boundingBox(),
+      pendingPanel.boundingBox(),
+    ]);
+
+    expect(blockHeightBox).not.toBeNull();
+    expect(latestBlocksBox).not.toBeNull();
+    expect(processedBox).not.toBeNull();
+    expect(hashRateBox).not.toBeNull();
+    expect(pendingBox).not.toBeNull();
+
+    expect((latestBlocksBox?.y ?? 0) > (blockHeightBox?.y ?? 0)).toBe(true);
+    expect(Math.abs((processedBox?.y ?? 0) - (hashRateBox?.y ?? 0)) < 24).toBe(true);
+    expect((hashRateBox?.x ?? 0) > (processedBox?.x ?? 0)).toBe(true);
+    expect((processedBox?.y ?? 0) > (latestBlocksBox?.y ?? 0)).toBe(true);
+    expect((pendingBox?.y ?? 0) > (processedBox?.y ?? 0)).toBe(true);
+
+    await frame.hover();
+    await page.mouse.wheel(0, 1200);
+
+    await expect
+      .poll(async () => {
+        return frame.evaluate((node) => node.scrollTop);
+      })
+      .toBeGreaterThan(0);
+
+    await expect
+      .poll(async () => {
+        return latestBlocksScrollBody.evaluate((node) => node.scrollTop);
+      })
+      .toBe(0);
+
+    await expect
+      .poll(async () => {
+        return pendingScrollBody.evaluate((node) => node.scrollTop);
+      })
+      .toBe(0);
+  });
+
+  test("uses the intended network mobile composition", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.goto("/network");
+
+    const versionsPanel = page.locator(".versions-panel .panel").first();
+    const mobileCounters = page.locator(".mobile-network-counters").first();
+    const utxoCard = mobileCounters.getByText("UTXO Set", { exact: true });
+    const chainstateCard = mobileCounters.getByText("Chainstate", { exact: true });
+    const nodeStatusPanel = page.locator(".donut-panel .panel").first();
+
+    await expect(versionsPanel).toBeVisible();
+    await expect(mobileCounters).toBeVisible();
+    await expect(utxoCard).toBeVisible();
+    await expect(chainstateCard).toBeVisible();
+    await expect(nodeStatusPanel).toBeVisible();
+
+    const [versionsBox, utxoBox, chainstateBox, nodeStatusBox] = await Promise.all([
+      versionsPanel.boundingBox(),
+      utxoCard.boundingBox(),
+      chainstateCard.boundingBox(),
+      nodeStatusPanel.boundingBox(),
+    ]);
+
+    expect(versionsBox).not.toBeNull();
+    expect(utxoBox).not.toBeNull();
+    expect(chainstateBox).not.toBeNull();
+    expect(nodeStatusBox).not.toBeNull();
+
+    expect((utxoBox?.y ?? 0) > (versionsBox?.y ?? 0)).toBe(true);
+    expect(Math.abs((utxoBox?.y ?? 0) - (chainstateBox?.y ?? 0)) < 24).toBe(true);
+    expect((chainstateBox?.x ?? 0) > (utxoBox?.x ?? 0)).toBe(true);
+    expect((nodeStatusBox?.y ?? 0) > (utxoBox?.y ?? 0)).toBe(true);
+  });
+
   test("uses Huninn for chinese locale", async ({ page }) => {
     await page.addInitScript(() => {
       globalThis.localStorage.setItem("hyphen-webui-locale", "zh");
@@ -192,12 +293,13 @@ test.describe("mobile dashboard integrity", () => {
     await page.goto("/");
 
     const frame = page.locator(".page-frame");
+    const latestBlocksHeading = page.locator(".overview-mobile-blocks").getByText("Latest Blocks", { exact: true });
     await expect(frame).toBeVisible();
 
     await frame.evaluate((node) => {
       node.scrollTop = node.scrollHeight;
     });
 
-    await expect(page.getByText("Latest Blocks", { exact: true })).toBeVisible();
+    await expect(latestBlocksHeading).toBeVisible();
   });
 });

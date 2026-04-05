@@ -16,6 +16,11 @@ const VALIDATOR_COUNT_KEY = "{count, plural, one {# validator} other {# validato
 const VALIDATOR_ACTIVE_COUNT_KEY =
   "{totalCount, plural, one {# validator} other {# validators}} ({enabledCount} active)";
 
+interface TermReplacement {
+  readonly search: string;
+  readonly replace: string;
+}
+
 function upperFirst(value: string): string {
   if (value.length === 0) {
     return value;
@@ -27,6 +32,16 @@ function upperFirst(value: string): string {
 function readOverrideValue(dict: Readonly<Record<string, string>>, key: string): string | null {
   const value = dict[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function applyTermReplacements(value: string, replacements: readonly TermReplacement[]): string {
+  return replacements.reduce((nextValue: string, replacement: TermReplacement): string => {
+    if (replacement.search.length === 0 || replacement.search === replacement.replace) {
+      return nextValue;
+    }
+
+    return nextValue.replaceAll(replacement.search, replacement.replace);
+  }, value);
 }
 
 export function applyValidatorTermOverridesForSelection(
@@ -64,6 +79,16 @@ export function applyValidatorTermOverridesForSelection(
   const activeCountLabel = readOverrideValue(language.dict, selection.pluralKey + "_active_count");
   if (activeCountLabel != null) {
     nextStrings[VALIDATOR_ACTIVE_COUNT_KEY] = activeCountLabel;
+  }
+
+  const replacements: readonly TermReplacement[] = [
+    { search: strings["Validators"] ?? "Validators", replace: upperFirst(plural) },
+    { search: strings["validator"] ?? "validator", replace: singular },
+    { search: strings["Validator"] ?? "Validator", replace: upperFirst(singular) },
+  ];
+
+  for (const [key, value] of Object.entries(nextStrings)) {
+    nextStrings[key] = applyTermReplacements(value, replacements);
   }
 
   return nextStrings;

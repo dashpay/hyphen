@@ -31,7 +31,6 @@
     HyCounterStack,
     HyDashboardLayout,
     HyGraphWidget,
-    HyPanelCopy,
     HyPlainCounter,
     HyPageFrame,
   } from "$lib/views";
@@ -44,7 +43,6 @@
 
   let transactions = $state<readonly DashboardTransaction[]>([]);
   let metricsHistory = $state<readonly ApiMetrics[]>([]);
-  let dashboardErrorMessage = $state<string | null>(null);
   let metricsLoadedHeight = $state<number | null>(null);
 
   const displayBlocks = $derived.by((): readonly ApiBlockSummary[] => explorer.blocks);
@@ -124,16 +122,9 @@
     };
   }
 
-  function readErrorMessage(caught: unknown): string {
-    return caught instanceof Error ? caught.message : String(caught);
-  }
-
   onMount((): void => {
-    dashboardErrorMessage = null;
-
     void Promise.allSettled([getMempoolTxs(8)]).then((results): void => {
       const [transactionResult] = results;
-      const errors: string[] = [];
 
       if (transactionResult.status === "fulfilled") {
         void Promise.all(
@@ -153,10 +144,7 @@
           });
       } else {
         transactions = [];
-        errors.push(readErrorMessage(transactionResult.reason));
       }
-
-      dashboardErrorMessage = errors.length > 0 ? (errors[0] ?? tr("Failed to load dashboard data.")) : null;
     });
   });
 
@@ -174,7 +162,7 @@
       })
       .catch((caught: unknown): void => {
         metricsHistory = [];
-        dashboardErrorMessage = readErrorMessage(caught);
+        void caught;
       });
   });
 </script>
@@ -186,36 +174,96 @@
 <HyPageFrame>
   <HyDashboardLayout>
     {#snippet left()}
-      <HyCounterPair>
-        <HyCounterStack>
-          <HyPlainCounter
-            icon={IconBlock}
-            label={tr("Block Height")}
-            value={HyUtilFormatNumber(explorer.blockHeight)}
-          />
-          <HyPlainCounter
-            icon={IconDifficulty}
-            label={tr("Difficulty")}
-            value={HyUtilFormatDifficulty(explorer.difficulty)}
-          />
-        </HyCounterStack>
+      <div class="overview-section desktop-only overview-desktop-hero">
+        <HyCounterPair>
+          <HyCounterStack>
+            <HyPlainCounter
+              icon={IconBlock}
+              label={tr("Block Height")}
+              value={HyUtilFormatNumber(explorer.blockHeight)}
+            />
+            <HyPlainCounter
+              icon={IconDifficulty}
+              label={tr("Difficulty")}
+              value={HyUtilFormatDifficulty(explorer.difficulty)}
+            />
+          </HyCounterStack>
 
-        <HyGraphWidget
-          blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
-          data={hashRatePoints}
-          icon={IconClock}
-          label={tr("Hash Rate")}
-          loadRange={(
-            range: TimeRange
-          ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
-            loadMetricRange(range, (metric): number => metric.hashrate)}
-          value={HyUtilFormatHashRate(explorer.latestMetrics?.hashrate ?? 0)}
-          valueFormatter={HyUtilFormatHashRate}
+          <HyGraphWidget
+            blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
+            data={hashRatePoints}
+            icon={IconClock}
+            label={tr("Hash Rate")}
+            loadRange={(
+              range: TimeRange
+            ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
+              loadMetricRange(range, (metric): number => metric.hashrate)}
+            value={HyUtilFormatHashRate(explorer.latestMetrics?.hashrate ?? 0)}
+            valueFormatter={HyUtilFormatHashRate}
+          />
+        </HyCounterPair>
+      </div>
+
+      <div class="overview-section mobile-only overview-mobile-summary">
+        <HyPlainCounter
+          icon={IconBlock}
+          label={tr("Block Height")}
+          value={HyUtilFormatNumber(explorer.blockHeight)}
         />
-      </HyCounterPair>
+      </div>
 
-      {#if transactions.length > 0}
+      <div class="overview-section mobile-only overview-mobile-blocks">
+        <HyBlList
+          mobileExpand={true}
+          blocks={displayBlocks.map((block) => ({
+            height: block.blockHeight,
+            hash: block.blockHash,
+            time: HyUtilFormatFullDate(block.blockTime),
+            txCount: block.txCount,
+            size: HyUtilFormatBytes(block.blockSize),
+          }))}
+          onviewall={(): void => {
+            void goto("/blocks");
+          }}
+          onblockclick={(hash: string): void => {
+            void goto("/block?hash=" + hash);
+          }}
+        />
+      </div>
+
+      <div class="overview-section mobile-only overview-mobile-graphs">
+        <HyCounterPair>
+          <HyGraphWidget
+            blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
+            data={processedTransactionPoints}
+            icon={IconTxVolume}
+            label={tr("Processed Transactions")}
+            loadRange={(
+              range: TimeRange
+            ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
+              loadMetricRange(range, (metric): number => metric.txCount)}
+            value={formatIntegerMetric(explorer.latestTransactionCount)}
+            valueFormatter={formatIntegerMetric}
+          />
+
+          <HyGraphWidget
+            blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
+            data={hashRatePoints}
+            icon={IconClock}
+            label={tr("Hash Rate")}
+            loadRange={(
+              range: TimeRange
+            ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
+              loadMetricRange(range, (metric): number => metric.hashrate)}
+            value={HyUtilFormatHashRate(explorer.latestMetrics?.hashrate ?? 0)}
+            valueFormatter={HyUtilFormatHashRate}
+          />
+        </HyCounterPair>
+      </div>
+
+      <div class="overview-section overview-pending">
         <HyTxList
+          mobileExpand={true}
           title={tr("Pending Transactions")}
           onviewall={(): void => {
             void goto("/transactions");
@@ -225,51 +273,93 @@
             void goto("/transaction?hash=" + txid);
           }}
         />
-      {:else}
-        <HyPanelCopy>{dashboardErrorMessage ?? tr("No pending transactions available.")}</HyPanelCopy>
-      {/if}
+      </div>
     {/snippet}
 
     {#snippet right()}
-      <HyBlList
-        blocks={displayBlocks.map((block) => ({
-          height: block.blockHeight,
-          hash: block.blockHash,
-          time: HyUtilFormatFullDate(block.blockTime),
-          txCount: block.txCount,
-          size: HyUtilFormatBytes(block.blockSize),
-        }))}
-        onviewall={(): void => {
-          void goto("/blocks");
-        }}
-        onblockclick={(hash: string): void => {
-          void goto("/block?hash=" + hash);
-        }}
-      />
-
-      <HyCounterPair>
-        <HyGraphWidget
-          blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
-          data={processedTransactionPoints}
-          icon={IconTxVolume}
-          label={tr("Processed Transactions")}
-          loadRange={(
-            range: TimeRange
-          ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
-            loadMetricRange(range, (metric): number => metric.txCount)}
-          value={formatIntegerMetric(explorer.latestTransactionCount)}
-          valueFormatter={formatIntegerMetric}
+      <div class="overview-section desktop-only overview-blocks">
+        <HyBlList
+          mobileExpand={true}
+          blocks={displayBlocks.map((block) => ({
+            height: block.blockHeight,
+            hash: block.blockHash,
+            time: HyUtilFormatFullDate(block.blockTime),
+            txCount: block.txCount,
+            size: HyUtilFormatBytes(block.blockSize),
+          }))}
+          onviewall={(): void => {
+            void goto("/blocks");
+          }}
+          onblockclick={(hash: string): void => {
+            void goto("/block?hash=" + hash);
+          }}
         />
+      </div>
 
-        <HyCounterStack>
-          <HyPlainCounter icon={IconSupply} label={tr("Circulating Supply")} value={circulatingSupplyValue} />
-          <HyPlainCounter
-            icon={IconDatabase}
-            label={tr("Blockchain Size")}
-            value={HyUtilFormatBytes(explorer.latestMetrics?.blockchainSize ?? 0)}
+      <div class="overview-section desktop-only overview-desktop-secondary">
+        <HyCounterPair>
+          <HyGraphWidget
+            blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
+            data={processedTransactionPoints}
+            icon={IconTxVolume}
+            label={tr("Processed Transactions")}
+            loadRange={(
+              range: TimeRange
+            ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> =>
+              loadMetricRange(range, (metric): number => metric.txCount)}
+            value={formatIntegerMetric(explorer.latestTransactionCount)}
+            valueFormatter={formatIntegerMetric}
           />
-        </HyCounterStack>
-      </HyCounterPair>
+
+          <HyCounterStack>
+            <HyPlainCounter icon={IconSupply} label={tr("Circulating Supply")} value={circulatingSupplyValue} />
+            <HyPlainCounter
+              icon={IconDatabase}
+              label={tr("Blockchain Size")}
+              value={HyUtilFormatBytes(explorer.latestMetrics?.blockchainSize ?? 0)}
+            />
+          </HyCounterStack>
+        </HyCounterPair>
+      </div>
     {/snippet}
   </HyDashboardLayout>
 </HyPageFrame>
+
+<style lang="scss">
+  @use "_views-mixins.scss" as view;
+
+  .mobile-only {
+    display: none;
+  }
+
+  /* --hy-breakpoint-tablet */
+  @include view.media-down(tablet) {
+    .desktop-only {
+      display: none;
+    }
+
+    .mobile-only {
+      display: block;
+    }
+
+    .overview-mobile-summary {
+      order: 1;
+    }
+
+    .overview-blocks {
+      order: 2;
+    }
+
+    .overview-mobile-blocks {
+      order: 2;
+    }
+
+    .overview-mobile-graphs {
+      order: 3;
+    }
+
+    .overview-pending {
+      order: 4;
+    }
+  }
+</style>

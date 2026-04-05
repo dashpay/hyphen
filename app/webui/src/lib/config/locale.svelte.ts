@@ -55,7 +55,7 @@ function getLocaleDefinition(code: string): LocaleDefinition | null {
 
 function ensureLocaleDictionaries(force = false): void {
   for (const entry of localeDefinitions) {
-    if (entry.code === DEFAULT_LOCALE || (!force && hasLocale(entry.code))) {
+    if (!force && hasLocale(entry.code)) {
       continue;
     }
 

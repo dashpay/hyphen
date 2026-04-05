@@ -43,9 +43,9 @@
       dict: {
         masternode: "ana düğüm",
         masternodes: "ana düğümler",
-        masternodes_count: "{count, plural, one {# ana düğüm} other {# ana düğüm}}",
+        masternodes_count: "{count, plural, one {# ana düğüm} other {# ana düğümler}}",
         masternodes_active_count:
-          "{totalCount, plural, one {# ana düğüm} other {# ana düğüm}} ({enabledCount} aktif)",
+          "{totalCount, plural, one {# ana düğüm} other {# ana düğümler}} ({enabledCount} aktif)",
         masternodes_voted: "Oy veren ana düğümler",
       },
     },

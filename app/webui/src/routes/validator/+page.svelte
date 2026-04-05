@@ -68,7 +68,13 @@
 </script>
 
 <svelte:head>
-  <title>{tr("{} | {}", HyUtilWebUiName, tr("Validator"))}</title>
+  <title>
+    {tr(
+      "{} | {}",
+      HyUtilWebUiName,
+      page.url.searchParams.get("hash") == null ? tr("Validator") : tr("Validator {}", page.url.searchParams.get("hash") ?? "")
+    )}
+  </title>
 </svelte:head>
 
 <HyPageFrame>
@@ -77,7 +83,7 @@
     {errorMessage}
     {errorStatus}
     missing={validator == null}
-    missingLabel="Validator not found"
+    missingLabel={tr("Validator not found")}
   >
     {#if validator != null}
       <div class:validator-route-dock={dockMode} class="validator-route">

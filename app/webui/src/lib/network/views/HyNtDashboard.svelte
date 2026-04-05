@@ -46,6 +46,12 @@
   const { snapshot, mempool, validatorsEnabled = true, metricsHistory }: Props = $props();
 
   const DONUT_COLORS = ["#4C7EFF", "#60F6D2", "#FF6B8A", "#FFB74D", "#AB7AFF", "#4DD0E1"] as const;
+  const STATUS_COLORS = {
+    active: "#60F6D2",
+    banned: "#FF6B8A",
+    registered: "#FFB74D",
+    unknown: "#4DD0E1",
+  } as const;
 
   let hoveredStatus = $state<number | null>(null);
   let hoveredVersion = $state<number | null>(null);
@@ -168,33 +174,46 @@
       return [];
     }
 
-    const counts = new Map<string, number>();
+    const counts = new Map<string, { label: string; value: number; color: string }>();
     const summaries = [snapshot.validators.regular, snapshot.validators.evonode];
 
     for (const summary of summaries) {
       for (const [status, value] of Object.entries(summary.status)) {
         const normalized = status.toLowerCase();
-        const label =
-          normalized === "enabled"
-            ? tr("Active")
+        const key =
+          normalized === "valid" || normalized === "enabled"
+            ? "active"
             : normalized === "registered"
-              ? tr("Registered")
+              ? "registered"
               : normalized === "banned" || normalized === "revoked" || normalized === "pose_banned"
+                ? "banned"
+                : normalized;
+        const label =
+          key === "active"
+            ? tr("Active")
+            : key === "registered"
+              ? tr("Registered")
+              : key === "banned"
                 ? tr("Banned")
                 : status;
-        counts.set(label, (counts.get(label) ?? 0) + value);
+        const color =
+          key === "active"
+            ? STATUS_COLORS.active
+            : key === "registered"
+              ? STATUS_COLORS.registered
+              : key === "banned"
+                ? STATUS_COLORS.banned
+                : STATUS_COLORS.unknown;
+        const previous = counts.get(key);
+        counts.set(key, {
+          label,
+          color,
+          value: (previous?.value ?? 0) + value,
+        });
       }
     }
 
-    return [...counts.entries()]
-      .sort((left, right): number => right[1] - left[1])
-      .map(
-        ([label, value], index): DonutSegment => ({
-          color: DONUT_COLORS[index % DONUT_COLORS.length] ?? DONUT_COLORS[0],
-          label,
-          value,
-        })
-      );
+    return [...counts.values()].sort((left, right): number => right.value - left.value);
   });
 
   const statusTotal = $derived(nodeStatusSegments.reduce((sum, segment) => sum + segment.value, 0));
@@ -223,7 +242,7 @@
 
   const nodeStatusCenterLabel = $derived.by((): string => {
     const index = hoveredStatus;
-    return index != null ? (nodeStatusSegments[index]?.label ?? tr("Node Status")) : tr("Node Status");
+    return index != null ? (nodeStatusSegments[index]?.label ?? tr("Validator Status")) : tr("Validator Status");
   });
 
   const nodeStatusCenterValue = $derived.by((): string => {
@@ -309,7 +328,7 @@
 
 <div bind:clientWidth={dashboardWidth} class="dashboard">
   <div class="col-left">
-    <div class="counters-top">
+    <div class="counters-top desktop-only">
       <HyGraphWidget
         blockTimeSeconds={getWebUiConfig().network.blockTimeSeconds}
         data={supplyPoints}
@@ -331,7 +350,7 @@
     <div class="donut-panel">
       <VwPanel border={true} padding={0} radius="sm" variant="glass">
         <div class="donut-header">
-          <VwText as="h2" size="md+" weight="extrabold">{tr("Node Status")}</VwText>
+          <VwText as="h2" size="md+" weight="extrabold">{tr("Validator Status")}</VwText>
         </div>
         <div bind:clientHeight={nodeBodyHeight} bind:clientWidth={nodeBodyWidth} class="donut-body">
           <div class="donut-center">
@@ -426,7 +445,12 @@
       </VwPanel>
     </div>
 
-    <div class="counters-bottom">
+    <div class="mobile-network-counters mobile-only">
+      <HyPlainCounter icon={IconUtxo} label={tr("UTXO Set")} value={utxoSetLabel} />
+      <HyPlainCounter icon={IconChainstate} label={tr("Chainstate")} value={chainstateLabel} />
+    </div>
+
+    <div class="counters-bottom desktop-only">
       <div class="counters-stack">
         {#each lowerCounters as counter (counter.label)}
           <HyPlainCounter icon={counter.icon} label={counter.label} value={counter.value} />
@@ -497,6 +521,10 @@
   .versions-panel {
     min-height: 0;
     min-width: 0;
+  }
+
+  .mobile-only {
+    display: none;
   }
 
   .donut-panel :global(.panel),
@@ -588,11 +616,11 @@
   }
 
   /* --hy-breakpoint-tablet */
-  @include view.container-down(tablet) {
+  @include view.media-down(tablet) {
     .dashboard {
-      display: flex;
-      flex-direction: column;
-      grid-template-columns: 1fr;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr);
       height: auto;
       min-height: 100%;
       overflow: visible;
@@ -601,10 +629,31 @@
 
     .col-left,
     .col-right {
-      display: flex;
-      flex-direction: column;
+      display: contents;
       grid-template-rows: auto;
       min-height: auto;
+    }
+
+    .desktop-only {
+      display: none;
+    }
+
+    .mobile-only {
+      display: grid;
+    }
+
+    .versions-panel {
+      order: 1;
+    }
+
+    .mobile-network-counters {
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      order: 2;
+    }
+
+    .donut-panel {
+      order: 3;
     }
 
     .donut-panel :global(.panel) {

@@ -104,7 +104,7 @@
 
     const totalNodes = network.validators.regular.total + network.validators.evonode.total;
     const enabledNodes =
-      (network.validators.regular.status["enabled"] ?? 0) + (network.validators.evonode.status["enabled"] ?? 0);
+      (network.validators.regular.status["valid"] ?? 0) + (network.validators.evonode.status["valid"] ?? 0);
 
     return tr(
       "{} ({} enabled)",
