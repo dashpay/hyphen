@@ -40,7 +40,7 @@ export function getValidatorStatusTag(
   indexedStatus: string,
   liveStatus?: string | null
 ): ValidatorTag {
-  if (liveStatus?.toLowerCase() === "enabled") {
+  if (liveStatus?.toLowerCase() === "valid") {
     return {
       label: tr("Active"),
       tone: "green",
@@ -56,7 +56,6 @@ export function getValidatorStatusTag(
 
   switch ((liveStatus ?? indexedStatus).toLowerCase()) {
     case "registered":
-    case "enabled":
       return {
         label: tr("Registered"),
         tone: "yellow",

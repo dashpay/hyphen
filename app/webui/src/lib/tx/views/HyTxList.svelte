@@ -20,16 +20,17 @@
   }
 
   interface Props {
+    readonly mobileExpand?: boolean;
     readonly title?: string;
     readonly transactions: readonly TransactionRow[];
     readonly onviewall?: () => void;
     readonly ontxclick?: (txid: string) => void;
   }
 
-  const { title = tr("Latest Transactions"), transactions, onviewall, ontxclick }: Props = $props();
+  const { mobileExpand = false, title = tr("Latest Transactions"), transactions, onviewall, ontxclick }: Props = $props();
 </script>
 
-<div class="tx-panel">
+<div class:mobile-expand={mobileExpand} class="tx-panel">
   <HyListPanel {title}>
     {#snippet action()}
       {#if onviewall != null}
@@ -150,8 +151,13 @@
 
   /* --hy-breakpoint-tablet */
   @include view.container-down(tablet) {
-    .tx-panel,
-    .tx-panel :global(.panel) {
+    .tx-panel.mobile-expand,
+    .tx-panel.mobile-expand :global(.panel) {
+      height: auto;
+    }
+
+    .tx-panel:not(.mobile-expand),
+    .tx-panel:not(.mobile-expand) :global(.panel) {
       height: 60vh;
     }
   }

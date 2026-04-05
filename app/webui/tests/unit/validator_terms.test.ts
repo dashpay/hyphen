@@ -33,6 +33,8 @@ void test("applyValidatorTermOverrides swaps validator labels from locale dict t
     Validator: "Validator",
     Validators: "Validators",
     "Validators Voted": "Validators Voted",
+    "Search validator, block, transaction": "Search validator, block, transaction",
+    "Open Validators page": "Open Validators page",
     validator: "validator",
     "{count, plural, one {# validator} other {# validators}}":
       "{count, plural, one {# validator} other {# validators}}",
@@ -49,6 +51,8 @@ void test("applyValidatorTermOverrides swaps validator labels from locale dict t
       Validator: "Masternode",
       Validators: "Masternodes",
       "Validators Voted": "Masternodes Voted",
+      "Search validator, block, transaction": "Search masternode, block, transaction",
+      "Open Validators page": "Open Masternodes page",
       validator: "masternode",
       "{count, plural, one {# validator} other {# validators}}":
         "{count, plural, one {# masternode} other {# masternodes}}",

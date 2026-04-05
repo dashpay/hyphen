@@ -5,25 +5,30 @@ export interface ChartPoint {
 
 /** Converts history points into a smooth SVG path for sparkline charts. */
 export function chartToSmoothPath(points: readonly ChartPoint[], width: number = 300, height: number = 65): string {
-  const pointCount = points.length;
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 300;
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : 65;
+  const validPoints = points.filter((point): boolean => {
+    return Number.isFinite(point.timestamp) && Number.isFinite(point.value);
+  });
+  const pointCount = validPoints.length;
 
   if (pointCount === 0) {
-    return "M0," + String(height) + "L" + String(width) + "," + String(height);
+    return "M0," + String(safeHeight) + "L" + String(safeWidth) + "," + String(safeHeight);
   }
 
   if (pointCount === 1) {
-    const midpoint = height / 2;
-    return "M0," + String(midpoint) + "L" + String(width) + "," + String(midpoint);
+    const midpoint = safeHeight / 2;
+    return "M0," + String(midpoint) + "L" + String(safeWidth) + "," + String(midpoint);
   }
 
-  const values = points.map((point: ChartPoint): number => point.value);
+  const values = validPoints.map((point: ChartPoint): number => point.value);
   const minimum = Math.min(...values);
   const maximum = Math.max(...values);
   const range = maximum - minimum || 1;
-  const step = width / Math.max(pointCount - 1, 1);
+  const step = safeWidth / Math.max(pointCount - 1, 1);
 
   const xs: number[] = Array.from({ length: pointCount }, (_, index: number): number => index * step);
-  const ys: number[] = values.map((value: number): number => height - ((value - minimum) / range) * height);
+  const ys: number[] = values.map((value: number): number => safeHeight - ((value - minimum) / range) * safeHeight);
 
   const at = (entries: readonly number[], index: number): number => entries[index] ?? 0;
 

@@ -49,11 +49,11 @@
   }
 
   /* --hy-breakpoint-tablet */
-  @include view.container-down(tablet) {
+  @include view.media-down(tablet) {
     .dashboard {
-      display: flex;
-      flex-direction: column;
+      display: grid;
       gap: var(--hy-dashboard-gap);
+      grid-template-columns: minmax(0, 1fr);
       height: auto;
       min-height: 100%;
       overflow: visible;
@@ -62,11 +62,7 @@
 
     .col-left,
     .col-right {
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-      gap: var(--hy-dashboard-gap);
-      min-height: auto;
+      display: contents;
     }
   }
 </style>

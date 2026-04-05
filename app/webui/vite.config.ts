@@ -1,8 +1,13 @@
 import path from "node:path";
+import process from "node:process";
 
 import { sveltekit } from "@sveltejs/kit/vite";
 import Icons from "unplugin-icons/vite";
 import { defineConfig } from "vite";
+
+const rawApiBaseUrl = process.env["API_BASE_URL"]?.trim() || "http://127.0.0.1:3080";
+const apiBaseUrl = new URL(rawApiBaseUrl);
+const apiProxyPrefix = apiBaseUrl.pathname.replace(/\/$/u, "");
 
 export default defineConfig({
   build: {
@@ -27,8 +32,15 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:3080",
+        target: apiBaseUrl.origin,
         changeOrigin: true,
+        rewrite: (requestPath: string): string => {
+          if (apiProxyPrefix.length === 0 || apiProxyPrefix === "/") {
+            return requestPath;
+          }
+
+          return requestPath.replace(/^\/api/u, apiProxyPrefix);
+        },
       },
     },
   },

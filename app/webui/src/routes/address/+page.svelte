@@ -2,10 +2,11 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
+  import { tr } from "@repo/hyphen-i18n";
 
   import type { ApiAddressSummary, ApiAddressTxSummary } from "$lib";
   import { getAddress, getAddressTxs } from "$lib";
-  import { HyUtilReadErrorMessage, HyUtilReadErrorStatus } from "$lib/HyUtil";
+  import { HyUtilReadErrorMessage, HyUtilReadErrorStatus, HyUtilWebUiName } from "$lib/HyUtil";
   import { observeDockMode } from "$lib/config/layout.svelte";
   import { HyAdSummaryPanel, HyAdTxPanel } from "$lib/address/views";
   import { getTransactionDisplay, type TransactionTone } from "$lib/tx/display";
@@ -30,6 +31,23 @@
   let errorStatus = $state<number | null>(null);
   let nextCursor = $state<string | null>(null);
   let dockMode = $state(false);
+
+  function isBase58Address(value: string): boolean {
+    return /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/u.test(value);
+  }
+
+  function createEmptyAddressSummary(address: string): ApiAddressSummary {
+    return {
+      address,
+      asOfHeight: 0,
+      balance: 0,
+      totalReceived: 0,
+      totalSent: 0,
+      txCount: 0,
+      firstSeen: null,
+      lastSeen: null,
+    };
+  }
 
   onMount((): (() => void) => {
     return observeDockMode((nextValue: boolean): void => {
@@ -87,7 +105,13 @@
     void getAddress(address)
       .then(async (response): Promise<AddressPageData | null> => {
         if (response == null) {
-          return null;
+          return isBase58Address(address)
+            ? {
+                summary: createEmptyAddressSummary(address),
+                nextCursor: null,
+                transactions: [],
+              }
+            : null;
         }
 
         const txResponse = await getAddressTxs(response.address, 50);
@@ -123,13 +147,23 @@
   });
 </script>
 
+<svelte:head>
+  <title>
+    {tr(
+      "{} | {}",
+      HyUtilWebUiName,
+      page.url.searchParams.get("id") == null ? tr("Address") : tr("Address {}", page.url.searchParams.get("id") ?? "")
+    )}
+  </title>
+</svelte:head>
+
 <HyPageFrame>
   <HyDetailRouteState
     {loading}
     {errorMessage}
     {errorStatus}
     missing={summary == null || page.url.searchParams.get("id") == null}
-    missingLabel="Address not found"
+    missingLabel={tr("Address not found")}
   >
     {#if summary != null}
       <div class:dock-mode={dockMode} class="address-explorer">

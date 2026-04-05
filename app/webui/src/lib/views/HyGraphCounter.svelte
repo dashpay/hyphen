@@ -74,7 +74,9 @@
   </VwPanel>
 </button>
 
-<style>
+<style lang="scss">
+  @use "_views-mixins.scss" as view;
+
   .counter-wrap {
     background: none;
     border: none;
@@ -140,5 +142,12 @@
     position: absolute;
     right: var(--hy-graph-counter-action-inset);
     width: var(--hy-graph-counter-action-size);
+  }
+
+  /* --hy-breakpoint-tablet */
+  @include view.media-down(tablet) {
+    .counter-wrap :global(.panel) {
+      min-height: 200px;
+    }
   }
 </style>

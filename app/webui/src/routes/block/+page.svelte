@@ -54,7 +54,17 @@
 </script>
 
 <svelte:head>
-  <title>{tr("{} | {}", HyUtilWebUiName, tr("Block"))}</title>
+  <title>
+    {tr(
+      "{} | {}",
+      HyUtilWebUiName,
+      page.url.searchParams.get("hash") != null
+        ? tr("Block {}", page.url.searchParams.get("hash") ?? "")
+        : page.url.searchParams.get("height") != null
+          ? tr("Block {}", page.url.searchParams.get("height") ?? "")
+          : tr("Block")
+    )}
+  </title>
 </svelte:head>
 
 <HyPageFrame>

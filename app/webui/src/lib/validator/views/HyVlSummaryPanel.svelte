@@ -60,6 +60,10 @@
   });
 
   const lastPaidValue = $derived.by((): string | null => {
+    if ((validator.live.lastPaidHeight ?? 0) <= 0) {
+      return null;
+    }
+
     if (validator.live.lastPaidHeight != null && validator.live.lastPaidAt != null) {
       return fmt(
         "#{} ({})",

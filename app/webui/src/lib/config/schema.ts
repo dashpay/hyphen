@@ -114,8 +114,8 @@ export const DEFAULT_WEBUI_CONFIG: WebUiConfig = {
     },
     validators: {
       enabled: true,
-      termPlural: null,
-      termSingular: null,
+      termPlural: "masternodes",
+      termSingular: "masternode",
     },
   },
   network: {
@@ -345,8 +345,11 @@ export function normalizeWebUiConfig(value: unknown): WebUiConfig {
       },
       validators: {
         enabled: readBoolean(validatorsRecord.enabled, DEFAULT_WEBUI_CONFIG.features.validators.enabled),
-        termPlural: readNullableString(validatorsRecord.term_plural),
-        termSingular: readNullableString(validatorsRecord.term_singular),
+        termPlural: readString(validatorsRecord.term_plural, DEFAULT_WEBUI_CONFIG.features.validators.termPlural ?? ""),
+        termSingular: readString(
+          validatorsRecord.term_singular,
+          DEFAULT_WEBUI_CONFIG.features.validators.termSingular ?? ""
+        ),
       },
     },
     network: {

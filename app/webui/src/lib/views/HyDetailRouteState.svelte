@@ -1,9 +1,7 @@
 <script lang="ts">
   /** Shared full-page detail route state wrapper for loading, error, missing, and content states. */
   import type { Snippet } from "svelte";
-  import { tr } from "@repo/hyphen-i18n";
-
-  import { VwErrorState, VwNotFoundState, VwThrobber } from "@repo/hyphen-views";
+  import { VwErrorState, VwThrobber } from "@repo/hyphen-views";
 
   import HyCenteredState from "./HyCenteredState.svelte";
   import HyHttpError from "./HyHttpError.svelte";
@@ -25,7 +23,6 @@
     loading,
     missing,
     missingLabel,
-    missingMessage = tr("No data."),
   }: Props = $props();
 </script>
 
@@ -38,7 +35,7 @@
     <HyCenteredState><VwErrorState message={errorMessage} /></HyCenteredState>
   {/if}
 {:else if missing}
-  <HyCenteredState><VwNotFoundState message={missingMessage} title={missingLabel} /></HyCenteredState>
+  <HyHttpError message={missingLabel} status={404} />
 {:else}
   {@render children?.()}
 {/if}

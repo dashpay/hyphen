@@ -16,14 +16,15 @@
 
   interface Props {
     readonly blocks: readonly BlockRow[];
+    readonly mobileExpand?: boolean;
     readonly onviewall?: () => void;
     readonly onblockclick?: (hash: string) => void;
   }
 
-  const { blocks, onviewall, onblockclick }: Props = $props();
+  const { blocks, mobileExpand = false, onviewall, onblockclick }: Props = $props();
 </script>
 
-<div class="block-panel">
+<div class:mobile-expand={mobileExpand} class="block-panel">
   <HyListPanel title={tr("Latest Blocks")}>
     {#snippet action()}
       {#if onviewall != null}
@@ -129,8 +130,13 @@
 
   /* --hy-breakpoint-tablet */
   @include view.container-down(tablet) {
-    .block-panel,
-    .block-panel :global(.panel) {
+    .block-panel.mobile-expand,
+    .block-panel.mobile-expand :global(.panel) {
+      height: auto;
+    }
+
+    .block-panel:not(.mobile-expand),
+    .block-panel:not(.mobile-expand) :global(.panel) {
       height: 60vh;
     }
   }
