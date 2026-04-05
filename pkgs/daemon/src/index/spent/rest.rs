@@ -317,7 +317,7 @@ pub(crate) async fn search_address(
     .map_err(|e| ApiError::from_daemon(e, "query address existence"))?;
   Ok(exists.then(|| {
     SearchResponse::Address(SearchAddressResult {
-      id: addr.to_string(),
+      address: addr.to_string(),
     })
   }))
 }
@@ -336,7 +336,11 @@ pub(crate) async fn search_addresses_by_prefix(
   Ok(
     rows
       .into_iter()
-      .map(|row| SearchResponse::Address(SearchAddressResult { id: row.address }))
+      .map(|row| {
+        SearchResponse::Address(SearchAddressResult {
+          address: row.address,
+        })
+      })
       .collect(),
   )
 }

@@ -56,7 +56,7 @@
     void getTransaction(nextHash)
       .then((response): void => {
         transaction = response;
-        transactionHash = response?.txid ?? nextHash;
+        transactionHash = response?.txHash ?? nextHash;
         if (response == null) {
           transactionRenderer = null;
           payloadFields = [];
@@ -70,7 +70,7 @@
         if (response.blockHeight != null) {
           void getBlock(response.blockHeight)
             .then((block): void => {
-              transactionBlockTime = block?.time ?? null;
+              transactionBlockTime = block?.blockTime ?? null;
             })
             .catch((): void => {
               transactionBlockTime = null;
@@ -111,7 +111,7 @@
           <HyTxSummaryPanel
             {transaction}
             blockTime={transactionBlockTime}
-            transactionHash={transactionHash ?? transaction.txid}
+            transactionHash={transactionHash ?? transaction.txHash}
             {transactionLabel}
             {transactionRenderer}
           />

@@ -103,45 +103,45 @@
 
     <HyScrollBody {hasMore} {loadingMore} {onloadmore} {scrollMode}>
       <div class="table-body" style:--hy-table-columns={tableTemplate}>
-        {#each blocks as block (block.height)}
+        {#each blocks as block (block.blockHeight)}
           <div
             class="block-row"
             onclick={(): void => {
-              onblockclick?.(block.hash);
+              onblockclick?.(block.blockHash);
             }}
             onkeydown={(event: KeyboardEvent): void => {
               if (event.key === "Enter") {
-                onblockclick?.(block.hash);
+                onblockclick?.(block.blockHash);
               }
             }}
             role="button"
             tabindex="0"
           >
             {#if HyTableHasColumn(visibleColumns, "height")}
-              <span class="col col-height mono accent">{HyUtilFormatNumber(block.height)}</span>
+              <span class="col col-height mono accent">{HyUtilFormatNumber(block.blockHeight)}</span>
             {/if}
             {#if HyTableHasColumn(visibleColumns, "hash")}
               <span class="col col-hash">
-                <span class="hash-text mono muted">{block.hash}</span>
+                <span class="hash-text mono muted">{block.blockHash}</span>
                 <HyCopyButton
-                  copied={copiedHash === block.hash}
+                  copied={copiedHash === block.blockHash}
                   copiedTitle={tr("Copied to clipboard")}
                   label={tr("Copy block hash")}
                   onpress={(event: MouseEvent): void => {
-                    copyHash(block.hash, event);
+                    copyHash(block.blockHash, event);
                   }}
                   title={tr("Copy hash")}
                 />
               </span>
             {/if}
             {#if HyTableHasColumn(visibleColumns, "time")}
-              <span class="col col-time">{HyUtilFormatFullDate(block.time)}</span>
+              <span class="col col-time">{HyUtilFormatFullDate(block.blockTime)}</span>
             {/if}
             {#if HyTableHasColumn(visibleColumns, "txns")}
               <span class="col col-txns">{HyUtilFormatNumber(block.txCount)}</span>
             {/if}
             {#if HyTableHasColumn(visibleColumns, "size")}
-              <span class="col col-size">{HyUtilFormatBytes(block.size)}</span>
+              <span class="col col-size">{HyUtilFormatBytes(block.blockSize)}</span>
             {/if}
             {#if HyTableHasColumn(visibleColumns, "bits")}
               <span class="col col-bits mono">{block.bits}</span>

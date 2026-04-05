@@ -14,7 +14,6 @@
     '{count, plural, one {# pending} other {# pending}}': '{count, plural, one {# очікує} few {# очікують} many {# очікують} other {# очікують}}',
     '{count, plural, one {# validator} other {# validators}}': '{count, plural, one {# валідатор} few {# валідатори} many {# валідаторів} other {# валідаторів}}',
     '{} ({} enabled)': '{} ({} активних)',
-    '{} Regular / {} Evo': '{} Regular / {} Evo',
     '{count} funded': '{count} профінансовано',
     '{totalCount, plural, one {# validator} other {# validators}} ({enabledCount} active)': '{totalCount, plural, one {# валідатор} few {# валідатори} many {# валідаторів} other {# валідаторів}} ({enabledCount} активних)',
     '#{} ({})': '#{} ({})',

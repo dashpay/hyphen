@@ -88,7 +88,7 @@ pub async fn chain_progress(pool: &PgPool) -> Result<ChainProgressRow, DaemonErr
   )
   .fetch_one(pool)
   .await
-    .map_err(|e| DaemonError::Pg(format!("read chain_progress: {e}")))
+  .map_err(|e| DaemonError::Pg(format!("read chain_progress: {e}")))
 }
 
 /// Count undo rows covering canonical heights from genesis through `height`.
@@ -96,10 +96,7 @@ pub async fn chain_progress(pool: &PgPool) -> Result<ChainProgressRow, DaemonErr
 /// # Errors
 ///
 /// Returns `DaemonError::Pg` when PostgreSQL rejects the query.
-pub async fn count_block_undo_rows_through(
-  pool: &PgPool,
-  height: i32,
-) -> Result<i64, DaemonError> {
+pub async fn count_block_undo_rows_through(pool: &PgPool, height: i32) -> Result<i64, DaemonError> {
   sqlx::query_scalar::<_, i64>(
     "SELECT COUNT(*)::bigint
        FROM block_undo_meta

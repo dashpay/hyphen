@@ -5,7 +5,7 @@
 
   import { getWebUiConfig } from "$lib";
   import { HyUtilFormatNumber, HyUtilFormatRelativeDate, HyUtilFormatSelectedAmount } from "$lib/HyUtil";
-  import type { ApiProposalDetail } from "$lib/api";
+  import type { ApiNetworkResponse, ApiProposalDetail } from "$lib/api";
   import { HyPrGetNextSuperblock } from "$lib/proposal/HyPrUtil";
 
   interface DonutSegment {
@@ -18,17 +18,10 @@
     readonly fundedProposals: readonly ApiProposalDetail[];
     readonly focusProposal: ApiProposalDetail | null;
     readonly blockHeight: number | null;
-    readonly votedRegularCount?: number | null;
-    readonly votedEvoCount?: number | null;
+    readonly network: ApiNetworkResponse | null;
   }
 
-  const {
-    fundedProposals,
-    focusProposal,
-    blockHeight,
-    votedRegularCount = null,
-    votedEvoCount = null,
-  }: Props = $props();
+  const { fundedProposals, focusProposal, blockHeight, network }: Props = $props();
 
   const DONUT_COLORS = [
     "#4C7EFF",
@@ -105,27 +98,27 @@
   });
 
   const registeredNodesLabel = $derived.by((): string => {
+    if (network == null) {
+      return "—";
+    }
+
+    const totalNodes = network.validators.regular.total + network.validators.evonode.total;
+    const enabledNodes =
+      (network.validators.regular.status["enabled"] ?? 0) + (network.validators.evonode.status["enabled"] ?? 0);
+
+    return tr(
+      "{} ({} enabled)",
+      HyUtilFormatNumber(totalNodes),
+      HyUtilFormatNumber(enabledNodes)
+    );
+  });
+
+  const totalVotesLabel = $derived.by((): string => {
     if (focusProposal == null) {
       return "—";
     }
 
-    return tr(
-      "{} ({} enabled)",
-      HyUtilFormatNumber(focusProposal.totalNodes),
-      HyUtilFormatNumber(focusProposal.enabledNodes)
-    );
-  });
-
-  const votedByTypeLabel = $derived.by((): string => {
-    if (votedRegularCount == null || votedEvoCount == null) {
-      return "—";
-    }
-
-    return tr("{} Regular / {} Evo", HyUtilFormatNumber(votedRegularCount), HyUtilFormatNumber(votedEvoCount));
-  });
-
-  const totalVotesLabel = $derived.by((): string => {
-    return focusProposal == null ? "—" : HyUtilFormatNumber(focusProposal.voteCount);
+    return HyUtilFormatNumber(focusProposal.votes.yes + focusProposal.votes.no + focusProposal.votes.abstain);
   });
 
   const fundingThresholdLabel = $derived.by((): string => {
@@ -183,11 +176,6 @@
       <div class="info-row">
         <span class="detail-label">{tr("Registered Nodes")}</span>
         <span class="detail-value">{registeredNodesLabel}</span>
-      </div>
-
-      <div class="info-row">
-        <span class="detail-label">{tr("Validators Voted")}</span>
-        <span class="detail-value">{votedByTypeLabel}</span>
       </div>
 
       <div class="info-row">

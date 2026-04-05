@@ -33,17 +33,21 @@ export interface ProposalDetail {
   readonly paymentAmount: number;
   readonly startTime?: string;
   readonly endTime?: string;
-  readonly yesCount: number;
-  readonly noCount: number;
-  readonly abstainCount: number;
-  readonly voteCount: number;
-  readonly totalNodes: number;
-  readonly enabledNodes: number;
-  readonly participatingNodes: number;
+  readonly votes: ProposalVoteSummary;
   readonly fundingThreshold: number;
+  readonly meetsFundingThreshold: boolean;
   readonly funded: boolean;
   readonly valid: boolean;
   readonly creationTime?: string;
+}
+
+/**
+ * Live governance vote summary.
+ */
+export interface ProposalVoteSummary {
+  readonly yes: number;
+  readonly no: number;
+  readonly abstain: number;
 }
 
 /**
@@ -205,17 +209,24 @@ function parseProposalDetail(value: unknown, path: string): ProposalDetail {
     paymentAmount: expectNumber(readField(object, "paymentAmount", path), `${path}.paymentAmount`),
     ...(startTime == null ? {} : { startTime }),
     ...(endTime == null ? {} : { endTime }),
-    yesCount: expectNumber(readField(object, "yesCount", path), `${path}.yesCount`),
-    noCount: expectNumber(readField(object, "noCount", path), `${path}.noCount`),
-    abstainCount: expectNumber(readField(object, "abstainCount", path), `${path}.abstainCount`),
-    voteCount: expectNumber(readField(object, "voteCount", path), `${path}.voteCount`),
-    totalNodes: expectNumber(readField(object, "totalNodes", path), `${path}.totalNodes`),
-    enabledNodes: expectNumber(readField(object, "enabledNodes", path), `${path}.enabledNodes`),
-    participatingNodes: expectNumber(readField(object, "participatingNodes", path), `${path}.participatingNodes`),
+    votes: parseProposalVoteSummary(readField(object, "votes", path), `${path}.votes`),
     fundingThreshold: expectNumber(readField(object, "fundingThreshold", path), `${path}.fundingThreshold`),
+    meetsFundingThreshold: expectBoolean(
+      readField(object, "meetsFundingThreshold", path),
+      `${path}.meetsFundingThreshold`
+    ),
     funded: expectBoolean(readField(object, "funded", path), `${path}.funded`),
     valid: expectBoolean(readField(object, "valid", path), `${path}.valid`),
     ...(creationTime == null ? {} : { creationTime }),
+  };
+}
+
+function parseProposalVoteSummary(value: unknown, path: string): ProposalVoteSummary {
+  const object = expectObject(value, path);
+  return {
+    yes: expectNumber(readField(object, "yes", path), `${path}.yes`),
+    no: expectNumber(readField(object, "no", path), `${path}.no`),
+    abstain: expectNumber(readField(object, "abstain", path), `${path}.abstain`),
   };
 }
 

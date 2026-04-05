@@ -4,13 +4,14 @@
   import { tr } from "@repo/hyphen-i18n";
   import { onMount, tick } from "svelte";
 
-  import type { ApiProposalDetail } from "$lib";
-  import { getProposalVotes, getProposals, getStatus, getValidators } from "$lib";
+  import type { ApiNetworkResponse, ApiProposalDetail } from "$lib";
+  import { getNetwork, getProposals, getStatus } from "$lib";
   import { HyUtilReadErrorMessage, HyUtilReadErrorStatus, HyUtilWebUiName } from "$lib/HyUtil";
   import { HyPrExplorer } from "$lib/proposal/views";
   import { HyPageFrame, HyPageState } from "$lib/views";
 
   let proposals = $state<readonly ApiProposalDetail[]>([]);
+  let network = $state<ApiNetworkResponse | null>(null);
   let blockHeight = $state<number | null>(null);
   let loading = $state(true);
   let loadingMore = $state(false);
@@ -18,23 +19,10 @@
   let errorStatus = $state<number | null>(null);
   let nextCursor = $state<string | null>(null);
   let totalCount = $state<number | null>(null);
-  let validatorTypes = $state<Map<string, string> | null>(null);
-  let voteSplitHash = $state<string | null>(null);
-  let votedRegularCount = $state<number | null>(null);
-  let votedEvoCount = $state<number | null>(null);
-  let voteSplitRequestId = 0;
   let hasRevealedInitialHash = $state(false);
 
   const expandedHash = $derived.by((): string | null => {
     return page.url.searchParams.get("hash");
-  });
-
-  const focusProposalHash = $derived.by((): string | null => {
-    if (expandedHash != null) {
-      return expandedHash;
-    }
-
-    return proposals[0]?.hash ?? null;
   });
 
   function getProposalScrollNode(): HTMLDivElement | null {
@@ -83,10 +71,11 @@
   }
 
   onMount((): void => {
-    void Promise.allSettled([getProposals(100), getStatus()])
+    void Promise.allSettled([getProposals(100), getStatus(), getNetwork()])
       .then((results): void => {
         const proposalsResult = results[0];
         const statusResult = results[1];
+        const networkResult = results[2];
 
         if (proposalsResult.status === "fulfilled") {
           proposals = proposalsResult.value.value;
@@ -99,6 +88,10 @@
         if (statusResult.status === "fulfilled") {
           blockHeight = statusResult.value.blockHeight;
         }
+
+        if (networkResult.status === "fulfilled") {
+          network = networkResult.value;
+        }
       })
       .catch((caught: unknown): void => {
         errorMessage = HyUtilReadErrorMessage(caught);
@@ -108,88 +101,6 @@
       })
       .finally((): void => {
         loading = false;
-      });
-  });
-
-  async function readAllValidators(): Promise<Map<string, string>> {
-    const types = new Map<string, string>();
-    let cursor: string | null = null;
-
-    do {
-      const response = await getValidators(100, cursor ?? undefined);
-      for (const validator of response.value) {
-        types.set(validator.proTxHash, validator.type);
-      }
-      cursor = response.nextCursor ?? null;
-    } while (cursor != null);
-
-    return types;
-  }
-
-  async function readAllProposalVotes(hash: string): Promise<readonly { proTxHash: string }[]> {
-    const votes: { proTxHash: string }[] = [];
-    let cursor: string | null = null;
-
-    do {
-      const response = await getProposalVotes(hash, 500, cursor ?? undefined);
-      votes.push(...response.value);
-      cursor = response.nextCursor ?? null;
-    } while (cursor != null);
-
-    return votes;
-  }
-
-  async function ensureValidatorTypes(): Promise<Map<string, string>> {
-    if (validatorTypes != null) {
-      return validatorTypes;
-    }
-
-    const nextTypes = await readAllValidators();
-    validatorTypes = nextTypes;
-    return nextTypes;
-  }
-
-  $effect((): void => {
-    const hash = focusProposalHash;
-    if (hash == null) {
-      voteSplitHash = null;
-      votedRegularCount = null;
-      votedEvoCount = null;
-      return;
-    }
-
-    const requestId = ++voteSplitRequestId;
-    voteSplitHash = hash;
-    votedRegularCount = null;
-    votedEvoCount = null;
-
-    void Promise.all([ensureValidatorTypes(), readAllProposalVotes(hash)])
-      .then(([types, votes]): void => {
-        if (voteSplitHash !== hash || requestId !== voteSplitRequestId) {
-          return;
-        }
-
-        let regular = 0;
-        let evo = 0;
-        for (const vote of votes) {
-          const type = types.get(vote.proTxHash);
-          if (type === "evonode") {
-            evo += 1;
-          } else if (type === "regular") {
-            regular += 1;
-          }
-        }
-
-        votedRegularCount = regular;
-        votedEvoCount = evo;
-      })
-      .catch((): void => {
-        if (voteSplitHash !== hash || requestId !== voteSplitRequestId) {
-          return;
-        }
-
-        votedRegularCount = null;
-        votedEvoCount = null;
       });
   });
 
@@ -244,11 +155,10 @@
       {expandedHash}
       hasMore={nextCursor != null}
       {loadingMore}
+      {network}
       onloadmore={loadMore}
       {proposals}
       {totalCount}
-      {votedEvoCount}
-      {votedRegularCount}
       onProposalToggle={toggleProposal}
     />
   </HyPageState>

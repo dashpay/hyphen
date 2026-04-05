@@ -24,11 +24,9 @@
   let copiedHash = $state<string | null>(null);
 
   const typeTag = $derived.by(() => getValidatorTypeTag(validator.type));
-  const statusTag = $derived.by(() =>
-    getValidatorStatusTag(validator.status, validator.live.enabled, validator.live.currentStatus)
-  );
+  const statusTag = $derived.by(() => getValidatorStatusTag(validator.status, validator.live.status));
   const poseScoreLabel = $derived.by((): string => {
-    return validator.live.posePenalty == null ? "—" : HyUtilFormatNumber(validator.live.posePenalty);
+    return validator.live.pose?.banScore == null ? "—" : HyUtilFormatNumber(validator.live.pose.banScore);
   });
   const networkColumns = $derived.by((): readonly { label: string; value: string }[] => {
     const columns: { label: string; value: string }[] = [];
@@ -52,7 +50,7 @@
     return [
       { label: tr("Owner"), value: validator.addresses.owner ?? null, clickable: true },
       { label: tr("Payout"), value: validator.addresses.payout ?? null, clickable: true },
-      { label: tr("Payee"), value: validator.addresses.payout ?? null, clickable: true },
+      { label: tr("Payee"), value: validator.addresses.payee ?? null, clickable: true },
       { label: tr("Voting"), value: validator.addresses.voting ?? null, clickable: true },
       { label: tr("Operator"), value: validator.operatorPubKey ?? null, clickable: false },
     ];

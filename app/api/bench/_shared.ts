@@ -80,7 +80,7 @@ async function discoverContext(): Promise<BenchDiscoveryContext> {
     address,
     block,
     proposalHash,
-    searchQuery: transaction.txid,
+    searchQuery: transaction.txHash,
     transaction,
     validator,
   };

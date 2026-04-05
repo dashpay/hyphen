@@ -95,7 +95,10 @@ const COVERAGE: &[CoverageEntry] = &[
     "segment::ensure_spent_output_history_partition_sql",
     "pure SQL builder"
   ),
-  excluded!("segment::ensure_tx_outputs_partition_sql", "pure SQL builder"),
+  excluded!(
+    "segment::ensure_tx_outputs_partition_sql",
+    "pure SQL builder"
+  ),
   excluded!(
     "segment::ensure_core_canonical_partitions",
     "partition bootstrap helper"
@@ -321,7 +324,10 @@ const COVERAGE: &[CoverageEntry] = &[
     "index::spent::search_addresses_by_prefix",
     "search helper has no dedicated benchmark yet"
   ),
-  excluded!("index::spent::seed_address_history_tx_for_rest_tests", "test helper"),
+  excluded!(
+    "index::spent::seed_address_history_tx_for_rest_tests",
+    "test helper"
+  ),
   excluded!("index::spent::restore_spent_at_height", "disconnect helper"),
   excluded!(
     "index::spent::reverse_address_balances_at_height",

@@ -60,14 +60,14 @@ export interface CbTxFields {
  * Canonical block summary returned by block list routes.
  */
 export interface BlockSummary {
-  readonly height: number;
-  readonly hash: string;
-  readonly previousblockhash: string;
-  readonly time: string;
+  readonly blockHeight: number;
+  readonly blockHash: string;
+  readonly prevBlockHash: string;
+  readonly blockTime: string;
   readonly bits: string;
   readonly nonce: number;
-  readonly version: number;
-  readonly size: number;
+  readonly blockVersion: number;
+  readonly blockSize: number;
   readonly txCount: number;
   readonly tags: BlockTags;
   readonly live: BlockLive;
@@ -78,15 +78,15 @@ export interface BlockSummary {
  */
 export interface BlockDetail {
   readonly asOfHeight: number;
-  readonly height: number;
-  readonly hash: string;
-  readonly previousblockhash: string;
-  readonly merkleroot: string;
-  readonly time: string;
+  readonly blockHeight: number;
+  readonly blockHash: string;
+  readonly prevBlockHash: string;
+  readonly merkle: string;
+  readonly blockTime: string;
   readonly bits: string;
   readonly nonce: number;
-  readonly version: number;
-  readonly size: number;
+  readonly blockVersion: number;
+  readonly blockSize: number;
   readonly txCount: number;
   readonly status: string;
   readonly tags: BlockTags;
@@ -100,13 +100,13 @@ export interface BlockDetail {
  * Transaction summary returned by one block transaction page.
  */
 export interface BlockTxSummary {
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockHeight: number;
   readonly blockPos: number;
-  readonly version: number;
+  readonly txVersion: number;
   readonly txType: string;
   readonly lockTime: number;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly inputCount: number;
   readonly outputCount: number;
@@ -230,14 +230,14 @@ function parseCbTxFields(value: unknown, path: string): CbTxFields {
 function parseBlockSummary(value: unknown, path: string): BlockSummary {
   const object = expectObject(value, path);
   return {
-    height: expectNumber(readField(object, "height", path), `${path}.height`),
-    hash: expectString(readField(object, "hash", path), `${path}.hash`),
-    previousblockhash: expectString(readField(object, "previousblockhash", path), `${path}.previousblockhash`),
-    time: expectString(readField(object, "time", path), `${path}.time`),
+    blockHeight: expectNumber(readField(object, "blockHeight", path), `${path}.blockHeight`),
+    blockHash: expectString(readField(object, "blockHash", path), `${path}.blockHash`),
+    prevBlockHash: expectString(readField(object, "prevBlockHash", path), `${path}.prevBlockHash`),
+    blockTime: expectString(readField(object, "blockTime", path), `${path}.blockTime`),
     bits: expectString(readField(object, "bits", path), `${path}.bits`),
     nonce: expectNumber(readField(object, "nonce", path), `${path}.nonce`),
-    version: expectNumber(readField(object, "version", path), `${path}.version`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    blockVersion: expectNumber(readField(object, "blockVersion", path), `${path}.blockVersion`),
+    blockSize: expectNumber(readField(object, "blockSize", path), `${path}.blockSize`),
     txCount: expectNumber(readField(object, "txCount", path), `${path}.txCount`),
     tags: parseBlockTags(readField(object, "tags", path), `${path}.tags`),
     live: parseBlockLive(readField(object, "live", path), `${path}.live`),
@@ -251,15 +251,15 @@ function parseBlockDetail(value: unknown, path: string): BlockDetail {
   const cbTx = readOptionalField(object, "cbTx");
   return {
     asOfHeight: expectNumber(readField(object, "asOfHeight", path), `${path}.asOfHeight`),
-    height: expectNumber(readField(object, "height", path), `${path}.height`),
-    hash: expectString(readField(object, "hash", path), `${path}.hash`),
-    previousblockhash: expectString(readField(object, "previousblockhash", path), `${path}.previousblockhash`),
-    merkleroot: expectString(readField(object, "merkleroot", path), `${path}.merkleroot`),
-    time: expectString(readField(object, "time", path), `${path}.time`),
+    blockHeight: expectNumber(readField(object, "blockHeight", path), `${path}.blockHeight`),
+    blockHash: expectString(readField(object, "blockHash", path), `${path}.blockHash`),
+    prevBlockHash: expectString(readField(object, "prevBlockHash", path), `${path}.prevBlockHash`),
+    merkle: expectString(readField(object, "merkle", path), `${path}.merkle`),
+    blockTime: expectString(readField(object, "blockTime", path), `${path}.blockTime`),
     bits: expectString(readField(object, "bits", path), `${path}.bits`),
     nonce: expectNumber(readField(object, "nonce", path), `${path}.nonce`),
-    version: expectNumber(readField(object, "version", path), `${path}.version`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    blockVersion: expectNumber(readField(object, "blockVersion", path), `${path}.blockVersion`),
+    blockSize: expectNumber(readField(object, "blockSize", path), `${path}.blockSize`),
     txCount: expectNumber(readField(object, "txCount", path), `${path}.txCount`),
     status: expectString(readField(object, "status", path), `${path}.status`),
     tags: parseBlockTags(readField(object, "tags", path), `${path}.tags`),
@@ -281,13 +281,13 @@ function parseBlockTxTags(value: unknown, path: string): BlockTxTags {
 function parseBlockTxSummary(value: unknown, path: string): BlockTxSummary {
   const object = expectObject(value, path);
   return {
-    txid: expectString(readField(object, "txid", path), `${path}.txid`),
+    txHash: expectString(readField(object, "txHash", path), `${path}.txHash`),
     blockHeight: expectNumber(readField(object, "blockHeight", path), `${path}.blockHeight`),
     blockPos: expectNumber(readField(object, "blockPos", path), `${path}.blockPos`),
-    version: expectNumber(readField(object, "version", path), `${path}.version`),
+    txVersion: expectNumber(readField(object, "txVersion", path), `${path}.txVersion`),
     txType: expectString(readField(object, "txType", path), `${path}.txType`),
     lockTime: expectNumber(readField(object, "lockTime", path), `${path}.lockTime`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    txSize: expectNumber(readField(object, "txSize", path), `${path}.txSize`),
     valueOut: expectNumber(readField(object, "valueOut", path), `${path}.valueOut`),
     inputCount: expectNumber(readField(object, "inputCount", path), `${path}.inputCount`),
     outputCount: expectNumber(readField(object, "outputCount", path), `${path}.outputCount`),

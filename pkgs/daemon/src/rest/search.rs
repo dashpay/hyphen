@@ -53,10 +53,6 @@ pub async fn search(
   if query.is_empty() {
     return Err(ApiError::bad_request("search query must not be empty"));
   }
-  if query.chars().count() < MIN_AUTOCOMPLETE_QUERY_LEN {
-    return Ok(Json(SearchListResponse { value: Vec::new() }));
-  }
-
   let mut results = Vec::new();
   let mut seen = HashSet::new();
   if let Ok(height) = query.parse::<i32>() {
@@ -64,6 +60,15 @@ pub async fn search(
       push_unique(&mut results, &mut seen, result);
       return Ok(Json(SearchListResponse { value: results }));
     }
+  }
+  if is_base58(query) {
+    if let Some(result) = crate::index::spent::rest::search_address(&state, query).await? {
+      push_unique(&mut results, &mut seen, result);
+      return Ok(Json(SearchListResponse { value: results }));
+    }
+  }
+  if query.chars().count() < MIN_AUTOCOMPLETE_QUERY_LEN {
+    return Ok(Json(SearchListResponse { value: Vec::new() }));
   }
 
   if query.len() == 64 {
@@ -184,11 +189,11 @@ fn push_unique(
   result: SearchResponse,
 ) {
   let key = match &result {
-    SearchResponse::Block(row) => format!("block:{}", row.id),
-    SearchResponse::Tx(row) => format!("tx:{}", row.id),
-    SearchResponse::Address(row) => format!("address:{}", row.id),
-    SearchResponse::Validator(row) => format!("validator:{}", row.id),
-    SearchResponse::Proposal(row) => format!("proposal:{}", row.id),
+    SearchResponse::Block(row) => format!("block:{}", row.block_hash),
+    SearchResponse::Tx(row) => format!("tx:{}", row.tx_hash),
+    SearchResponse::Address(row) => format!("address:{}", row.address),
+    SearchResponse::Validator(row) => format!("validator:{}", row.pro_tx_hash),
+    SearchResponse::Proposal(row) => format!("proposal:{}", row.hash),
   };
   if seen.insert(key) {
     results.push(result);
@@ -254,25 +259,25 @@ mod tests {
   fn search_response_variants_keep_kind_specific_fields() {
     assert_eq!(
       SearchResponse::Block(SearchBlockResult {
-        id: "a".to_owned(),
+        block_hash: "a".to_owned(),
         status: "canonical".to_owned(),
         block_tags: canonical_block_tags(),
       }),
       SearchResponse::Block(SearchBlockResult {
-        id: "a".to_owned(),
+        block_hash: "a".to_owned(),
         status: "canonical".to_owned(),
         block_tags: canonical_block_tags(),
       })
     );
     let _ = SearchResponse::Address(SearchAddressResult {
-      id: "Xabc".to_owned(),
+      address: "Xabc".to_owned(),
     });
     let _ = SearchResponse::Validator(SearchValidatorResult {
-      id: "11".repeat(32),
+      pro_tx_hash: "11".repeat(32),
       status: "registered".to_owned(),
     });
     let _ = SearchResponse::Proposal(SearchProposalResult {
-      id: "22".repeat(32),
+      hash: "22".repeat(32),
     });
   }
 }

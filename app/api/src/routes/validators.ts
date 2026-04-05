@@ -22,8 +22,18 @@ import { requestJsonResult, type ClientContext } from "../internal/transport.js"
 export interface ValidatorAddresses {
   readonly collateral?: string;
   readonly owner?: string;
+  readonly payee?: string;
   readonly voting?: string;
   readonly payout?: string;
+}
+
+/**
+ * Nullable PoSe overlay attached to validator routes.
+ */
+export interface ValidatorPose {
+  readonly banHeight?: number;
+  readonly banScore?: number;
+  readonly revivedHeight?: number;
 }
 
 /**
@@ -39,15 +49,14 @@ export interface ValidatorServices {
  * Nullable live overlay attached to validator routes.
  */
 export interface ValidatorLive {
-  readonly enabled?: boolean;
-  readonly currentStatus?: string;
   readonly lastPaidAt?: string;
   readonly lastPaidHeight?: number;
   readonly consecutivePayments?: number;
-  readonly posePenalty?: number;
-  readonly poseRevivedHeight?: number;
-  readonly poseBanHeight?: number;
+  readonly pose?: ValidatorPose;
   readonly revocationReason?: number;
+  readonly status?: string;
+  readonly type?: string;
+  readonly valid?: boolean;
 }
 
 /**
@@ -151,11 +160,13 @@ function parseValidatorAddresses(value: unknown, path: string): ValidatorAddress
   const object = expectObject(value, path);
   const collateral = expectOptionalString(readOptionalField(object, "collateral"), `${path}.collateral`);
   const owner = expectOptionalString(readOptionalField(object, "owner"), `${path}.owner`);
+  const payee = expectOptionalString(readOptionalField(object, "payee"), `${path}.payee`);
   const voting = expectOptionalString(readOptionalField(object, "voting"), `${path}.voting`);
   const payout = expectOptionalString(readOptionalField(object, "payout"), `${path}.payout`);
   return {
     ...(collateral == null ? {} : { collateral }),
     ...(owner == null ? {} : { owner }),
+    ...(payee == null ? {} : { payee }),
     ...(voting == null ? {} : { voting }),
     ...(payout == null ? {} : { payout }),
   };
@@ -174,37 +185,44 @@ function parseValidatorServices(value: unknown, path: string): ValidatorServices
   };
 }
 
+function parseValidatorPose(value: unknown, path: string): ValidatorPose {
+  const object = expectObject(value, path);
+  const banHeight = expectOptionalNumber(readOptionalField(object, "banHeight"), `${path}.banHeight`);
+  const banScore = expectOptionalNumber(readOptionalField(object, "banScore"), `${path}.banScore`);
+  const revivedHeight = expectOptionalNumber(readOptionalField(object, "revivedHeight"), `${path}.revivedHeight`);
+  return {
+    ...(banHeight == null ? {} : { banHeight }),
+    ...(banScore == null ? {} : { banScore }),
+    ...(revivedHeight == null ? {} : { revivedHeight }),
+  };
+}
+
 function parseValidatorLive(value: unknown, path: string): ValidatorLive {
   const object = expectObject(value, path);
-  const enabledField = readOptionalField(object, "enabled");
-  const enabled = enabledField == null ? undefined : expectBoolean(enabledField, `${path}.enabled`);
-  const currentStatus = expectOptionalString(readOptionalField(object, "currentStatus"), `${path}.currentStatus`);
   const lastPaidAt = expectOptionalString(readOptionalField(object, "lastPaidAt"), `${path}.lastPaidAt`);
   const lastPaidHeight = expectOptionalNumber(readOptionalField(object, "lastPaidHeight"), `${path}.lastPaidHeight`);
   const consecutivePayments = expectOptionalNumber(
     readOptionalField(object, "consecutivePayments"),
     `${path}.consecutivePayments`
   );
-  const posePenalty = expectOptionalNumber(readOptionalField(object, "posePenalty"), `${path}.posePenalty`);
-  const poseRevivedHeight = expectOptionalNumber(
-    readOptionalField(object, "poseRevivedHeight"),
-    `${path}.poseRevivedHeight`
-  );
-  const poseBanHeight = expectOptionalNumber(readOptionalField(object, "poseBanHeight"), `${path}.poseBanHeight`);
+  const pose = readOptionalField(object, "pose");
   const revocationReason = expectOptionalNumber(
     readOptionalField(object, "revocationReason"),
     `${path}.revocationReason`
   );
+  const status = expectOptionalString(readOptionalField(object, "status"), `${path}.status`);
+  const type = expectOptionalString(readOptionalField(object, "type"), `${path}.type`);
+  const validField = readOptionalField(object, "valid");
+  const valid = validField == null ? undefined : expectBoolean(validField, `${path}.valid`);
   return {
-    ...(enabled == null ? {} : { enabled }),
-    ...(currentStatus == null ? {} : { currentStatus }),
     ...(lastPaidAt == null ? {} : { lastPaidAt }),
     ...(lastPaidHeight == null ? {} : { lastPaidHeight }),
     ...(consecutivePayments == null ? {} : { consecutivePayments }),
-    ...(posePenalty == null ? {} : { posePenalty }),
-    ...(poseRevivedHeight == null ? {} : { poseRevivedHeight }),
-    ...(poseBanHeight == null ? {} : { poseBanHeight }),
+    ...(pose == null ? {} : { pose: parseValidatorPose(pose, `${path}.pose`) }),
     ...(revocationReason == null ? {} : { revocationReason }),
+    ...(status == null ? {} : { status }),
+    ...(type == null ? {} : { type }),
+    ...(valid == null ? {} : { valid }),
   };
 }
 
@@ -230,7 +248,7 @@ function parseValidatorSummary(value: unknown, path: string): ValidatorSummary {
 function parseValidatorHistoryEntry(value: unknown, path: string): ValidatorHistoryEntry {
   const object = expectObject(value, path);
   return {
-    txid: expectString(readField(object, "txid", path), `${path}.txid`),
+    txid: expectString(readField(object, "txHash", path), `${path}.txHash`),
     txType: expectString(readField(object, "txType", path), `${path}.txType`),
     payload: readField(object, "payload", path),
     blockHeight: expectNumber(readField(object, "blockHeight", path), `${path}.blockHeight`),

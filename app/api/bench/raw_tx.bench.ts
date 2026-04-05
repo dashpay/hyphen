@@ -16,6 +16,6 @@ describe("raw tx", (): void => {
       throw new Error("benchmark discovery did not run");
     }
 
-    unwrapBenchResult("raw.getTx", await benchClient.raw.getTx(current.transaction.txid));
+    unwrapBenchResult("raw.getTx", await benchClient.raw.getTx(current.transaction.txHash));
   });
 });

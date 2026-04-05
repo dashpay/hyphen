@@ -272,12 +272,12 @@
             nextSuggestions.push(
               ...response.value.map(
                 (block): SearchSuggestion => ({
-                  href: buildHref("block", block.hash),
-                  id: block.hash,
+                  href: buildHref("block", block.blockHash),
+                  id: block.blockHash,
                   kind: "block",
-                  primary: block.hash,
-                  searchValues: [block.hash, String(block.height)],
-                  secondary: `#${String(block.height)}`,
+                  primary: block.blockHash,
+                  searchValues: [block.blockHash, String(block.blockHeight)],
+                  secondary: `#${String(block.blockHeight)}`,
                 })
               )
             );
@@ -291,11 +291,11 @@
             nextSuggestions.push(
               ...response.value.map(
                 (transaction): SearchSuggestion => ({
-                  href: buildHref("transaction", transaction.txid),
-                  id: transaction.txid,
+                  href: buildHref("transaction", transaction.txHash),
+                  id: transaction.txHash,
                   kind: "transaction",
-                  primary: transaction.txid,
-                  searchValues: [transaction.txid, String(transaction.blockHeight)],
+                  primary: transaction.txHash,
+                  searchValues: [transaction.txHash, String(transaction.blockHeight)],
                   secondary: `#${String(transaction.blockHeight)}`,
                 })
               )

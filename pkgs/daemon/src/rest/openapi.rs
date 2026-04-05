@@ -71,13 +71,19 @@ pub struct BlockLive {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockSummary {
+  #[serde(rename = "blockHeight")]
   pub height: i32,
+  #[serde(rename = "blockHash")]
   pub hash: String,
+  #[serde(rename = "prevBlockHash")]
   pub previousblockhash: String,
+  #[serde(rename = "blockTime")]
   pub time: String,
   pub bits: String,
   pub nonce: i64,
+  #[serde(rename = "blockVersion")]
   pub version: i32,
+  #[serde(rename = "blockSize")]
   pub size: i32,
   pub tx_count: i32,
   pub tags: BlockTags,
@@ -117,14 +123,21 @@ pub struct CbTxFields {
 #[serde(rename_all = "camelCase")]
 pub struct BlockDetail {
   pub as_of_height: i32,
+  #[serde(rename = "blockHeight")]
   pub height: i32,
+  #[serde(rename = "blockHash")]
   pub hash: String,
+  #[serde(rename = "prevBlockHash")]
   pub previousblockhash: String,
+  #[serde(rename = "merkle")]
   pub merkleroot: String,
+  #[serde(rename = "blockTime")]
   pub time: String,
   pub bits: String,
   pub nonce: i64,
+  #[serde(rename = "blockVersion")]
   pub version: i32,
+  #[serde(rename = "blockSize")]
   pub size: i32,
   pub tx_count: i32,
   pub status: String,
@@ -177,12 +190,15 @@ pub struct TxLive {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TxSummary {
+  #[serde(rename = "txHash")]
   pub txid: String,
   pub block_height: i32,
   pub block_pos: i32,
+  #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
   pub lock_time: i32,
+  #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
   pub input_count: i32,
@@ -224,6 +240,7 @@ pub struct TxInput {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub value: Option<i64>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  #[serde(rename = "txHash")]
   pub txid: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub vout: Option<i32>,
@@ -262,14 +279,17 @@ pub struct TxScriptPubKey {
 #[serde(rename_all = "camelCase")]
 pub struct TxDetail {
   pub as_of_height: Option<i32>,
+  #[serde(rename = "txHash")]
   pub txid: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub block_height: Option<i32>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub block_pos: Option<i32>,
+  #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
   pub lock_time: i32,
+  #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
   pub input_count: i32,
@@ -329,6 +349,7 @@ pub enum AddressTxDirection {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressTxSummary {
+  #[serde(rename = "txHash")]
   pub txid: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub block_height: Option<i32>,
@@ -336,8 +357,10 @@ pub struct AddressTxSummary {
   pub block_pos: Option<i32>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub block_time: Option<String>,
+  #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
+  #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
   pub net_value: i64,
@@ -362,6 +385,7 @@ pub struct AddressTxListResponse {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Utxo {
+  #[serde(rename = "txHash")]
   pub txid: String,
   pub vout: i32,
   pub value: i64,
@@ -458,7 +482,10 @@ pub struct MempoolResponse {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MempoolTxSummary {
+  #[serde(rename = "txHash")]
   pub txid: String,
+  pub tx_type: String,
+  #[serde(rename = "txSize")]
   pub size: usize,
   pub value_out: i64,
   pub first_seen_at: String,
@@ -529,11 +556,37 @@ pub struct PeerInfoResponse {
 /// Current network snapshot.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct NetworkValidatorClassSummary {
+  pub total: i64,
+  pub status: std::collections::HashMap<String, i64>,
+}
+
+/// Validator aggregates attached to the live network snapshot.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkValidatorSummary {
+  pub regular: NetworkValidatorClassSummary,
+  pub evonode: NetworkValidatorClassSummary,
+}
+
+/// Current network snapshot.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkResponse {
   pub network_info: NetworkInfoResponse,
   pub peer_info: Vec<PeerInfoResponse>,
   pub peer_count: i64,
+  pub validators: NetworkValidatorSummary,
   pub updated_at: String,
+}
+
+/// Governance proposal summary or detail.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalVoteSummary {
+  pub yes: i64,
+  pub no: i64,
+  pub abstain: i64,
 }
 
 /// Governance proposal summary or detail.
@@ -553,14 +606,9 @@ pub struct ProposalDetail {
   pub start_time: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub end_time: Option<String>,
-  pub yes_count: i64,
-  pub no_count: i64,
-  pub abstain_count: i64,
-  pub vote_count: i64,
-  pub total_nodes: i64,
-  pub enabled_nodes: i64,
-  pub participating_nodes: i64,
+  pub votes: ProposalVoteSummary,
   pub funding_threshold: i64,
+  pub meets_funding_threshold: bool,
   pub funded: bool,
   pub valid: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -602,7 +650,7 @@ pub struct ProposalVoteListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SearchBlockResult {
   /// Canonical display-order block hash for the matched block.
-  pub id: String,
+  pub block_hash: String,
   pub status: String,
   pub block_tags: BlockTags,
 }
@@ -612,7 +660,7 @@ pub struct SearchBlockResult {
 #[serde(rename_all = "camelCase")]
 pub struct SearchTxResult {
   /// Canonical display-order transaction id for the matched transaction.
-  pub id: String,
+  pub tx_hash: String,
   pub tx_tags: TxTags,
 }
 
@@ -620,7 +668,7 @@ pub struct SearchTxResult {
 #[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchAddressResult {
-  pub id: String,
+  pub address: String,
 }
 
 /// Search result variant for a validator identifier.
@@ -628,7 +676,7 @@ pub struct SearchAddressResult {
 #[serde(rename_all = "camelCase")]
 pub struct SearchValidatorResult {
   /// Canonical display-order ProTx hash for the matched validator.
-  pub id: String,
+  pub pro_tx_hash: String,
   pub status: String,
 }
 
@@ -636,7 +684,7 @@ pub struct SearchValidatorResult {
 #[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchProposalResult {
-  pub id: String,
+  pub hash: String,
 }
 
 /// One typed global search result.
@@ -685,13 +733,23 @@ pub struct ValidatorServices {
 /// Nullable live overlay for validator routes.
 #[derive(Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct ValidatorPose {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub ban_score: Option<i32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub revived_height: Option<i32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub ban_height: Option<i32>,
+}
+
+/// Nullable live overlay for validator routes.
+#[derive(Debug, Default, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatorLive {
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub current_type: Option<String>,
+  pub valid: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub enabled: Option<bool>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub current_status: Option<String>,
+  pub status: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub last_paid_height: Option<i32>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -699,11 +757,7 @@ pub struct ValidatorLive {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub consecutive_payments: Option<i32>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub pose_penalty: Option<i32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub pose_revived_height: Option<i32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub pose_ban_height: Option<i32>,
+  pub pose: Option<ValidatorPose>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub revocation_reason: Option<i32>,
 }
@@ -742,6 +796,7 @@ pub struct ValidatorListResponse {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidatorHistoryEntry {
+  #[serde(rename = "txHash")]
   pub txid: String,
   pub tx_type: String,
   pub payload: serde_json::Value,
@@ -858,7 +913,10 @@ pub struct StatusResponse {
     MempoolTxListResponse,
     NetworkInfoResponse,
     PeerInfoResponse,
+    NetworkValidatorClassSummary,
+    NetworkValidatorSummary,
     NetworkResponse,
+    ProposalVoteSummary,
     ProposalDetail,
     ProposalListResponse,
     ProposalVote,
@@ -875,6 +933,7 @@ pub struct StatusResponse {
     ValidatorListResponse,
     ValidatorDetail,
     ValidatorLive,
+    ValidatorPose,
     StageStatus,
     StatusResponse,
   )),
@@ -969,11 +1028,12 @@ mod tests {
     let properties = doc["components"]["schemas"]["ValidatorLive"]["properties"]
       .as_object()
       .expect("validator live properties should exist");
-    assert!(properties.contains_key("currentType"));
-    assert!(properties.contains_key("enabled"));
-    assert!(properties.contains_key("currentStatus"));
+    assert!(properties.contains_key("type"));
+    assert!(properties.contains_key("valid"));
+    assert!(properties.contains_key("status"));
     assert!(properties.contains_key("lastPaidHeight"));
     assert!(properties.contains_key("lastPaidAt"));
+    assert!(properties.contains_key("pose"));
   }
 
   #[test]

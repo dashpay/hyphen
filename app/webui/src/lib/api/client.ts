@@ -6,6 +6,9 @@ import {
   type ApAddressUtxo,
   type ApApiError,
   type ApBalancePage,
+  type ApBlockDetail,
+  type ApBlockSummary,
+  type ApMempoolTransactionSummary,
   type ApNetworkSnapshot,
   type ApProposalDetail,
   type ApProposalVote,
@@ -146,15 +149,15 @@ function mapAddressSummary(summary: ApAddressSummary): ApiAddressSummary {
 
 function mapAddressTransactionSummary(summary: ApAddressTransactionSummary): ApiAddressTxListResponse["value"][number] {
   return {
-    txid: summary.txid,
+    txHash: summary.txHash,
     blockTime: toNullableString(summary.blockTime),
     blockHeight: toNullableNumber(summary.blockHeight),
     blockPos: toNullableNumber(summary.blockPos),
     direction: summary.direction,
-    version: summary.version,
+    txVersion: summary.txVersion,
     netValue: summary.netValue,
     txType: summary.txType,
-    size: summary.size,
+    txSize: summary.txSize,
     valueOut: summary.valueOut,
     fee: toNullableNumber(summary.fee),
     tags: summary.tags,
@@ -163,7 +166,7 @@ function mapAddressTransactionSummary(summary: ApAddressTransactionSummary): Api
 
 function mapAddressUtxo(utxo: ApAddressUtxo): ApiUtxoListResponse["value"][number] {
   return {
-    txid: utxo.txid,
+    txHash: utxo.txid,
     vout: utxo.vout,
     value: utxo.value,
     height: utxo.height,
@@ -184,13 +187,13 @@ function mapBalancePage(page: ApBalancePage): ApiRichListResponse {
 
 function mapTransactionSummary(summary: ApTransactionSummary): ApiTxListResponse["value"][number] {
   return {
-    txid: summary.txid,
+    txHash: summary.txHash,
     blockHeight: summary.blockHeight,
     blockPos: summary.blockPos,
-    version: summary.version,
+    txVersion: summary.txVersion,
     txType: summary.txType,
     lockTime: summary.lockTime,
-    size: summary.size,
+    txSize: summary.txSize,
     valueOut: summary.valueOut,
     inputCount: summary.inputCount,
     outputCount: summary.outputCount,
@@ -200,13 +203,13 @@ function mapTransactionSummary(summary: ApTransactionSummary): ApiTxListResponse
 
 function mapTransactionDetail(detail: ApTransactionDetail): ApiTxDetail {
   return {
-    txid: detail.txid,
+    txHash: detail.txHash,
     blockHeight: toNullableNumber(detail.blockHeight),
     blockPos: toNullableNumber(detail.blockPos),
-    version: detail.version,
+    txVersion: detail.txVersion,
     txType: detail.txType,
     lockTime: detail.lockTime,
-    size: detail.size,
+    txSize: detail.txSize,
     valueOut: detail.valueOut,
     fee: toNullableNumber(detail.fee),
     inputCount: detail.inputCount,
@@ -242,19 +245,26 @@ function mapValidatorSummary(summary: ApValidatorSummary): ApiValidatorSummary {
     addresses: {
       collateral: toNullableString(summary.addresses.collateral),
       owner: toNullableString(summary.addresses.owner),
+      payee: toNullableString(summary.addresses.payee),
       payout: toNullableString(summary.addresses.payout),
       voting: toNullableString(summary.addresses.voting),
     },
     live: {
       consecutivePayments: toNullableNumber(summary.live.consecutivePayments),
-      currentStatus: toNullableString(summary.live.currentStatus),
-      enabled: summary.live.enabled ?? null,
       lastPaidAt: toNullableString(summary.live.lastPaidAt),
       lastPaidHeight: toNullableNumber(summary.live.lastPaidHeight),
-      poseBanHeight: toNullableNumber(summary.live.poseBanHeight),
-      posePenalty: toNullableNumber(summary.live.posePenalty),
-      poseRevivedHeight: toNullableNumber(summary.live.poseRevivedHeight),
+      pose:
+        summary.live.pose == null
+          ? null
+          : {
+              banHeight: toNullableNumber(summary.live.pose.banHeight),
+              banScore: toNullableNumber(summary.live.pose.banScore),
+              revivedHeight: toNullableNumber(summary.live.pose.revivedHeight),
+            },
       revocationReason: toNullableNumber(summary.live.revocationReason),
+      status: toNullableString(summary.live.status),
+      type: toNullableString(summary.live.type),
+      valid: summary.live.valid ?? null,
     },
     operatorPubKey: toNullableString(summary.operatorPubKey),
     operatorReward: summary.operatorReward,
@@ -268,7 +278,7 @@ function mapValidatorSummary(summary: ApValidatorSummary): ApiValidatorSummary {
 
 function mapValidatorHistoryEntry(entry: ApValidatorHistoryEntry): ApiValidatorHistoryEntry {
   return {
-    txid: entry.txid,
+    txHash: entry.txid,
     txType: entry.txType,
     payload: entry.payload,
     blockHeight: entry.blockHeight,
@@ -302,6 +312,7 @@ function mapNetworkResponse(snapshot: ApNetworkSnapshot): ApiNetworkResponse {
     networkInfo: snapshot.networkInfo as Readonly<Record<string, unknown>>,
     peerInfo: snapshot.peerInfo as readonly Readonly<Record<string, unknown>>[],
     peerCount: snapshot.peerCount,
+    validators: snapshot.validators,
     updatedAt: snapshot.updatedAt,
   };
 }
@@ -316,17 +327,61 @@ function mapProposalDetail(proposal: ApProposalDetail): ApiProposalDetail {
     paymentAmount: proposal.paymentAmount,
     startTime: toNullableString(proposal.startTime),
     endTime: toNullableString(proposal.endTime),
-    yesCount: proposal.yesCount,
-    noCount: proposal.noCount,
-    abstainCount: proposal.abstainCount,
-    voteCount: proposal.voteCount,
-    totalNodes: proposal.totalNodes,
-    enabledNodes: proposal.enabledNodes,
-    participatingNodes: proposal.participatingNodes,
+    votes: proposal.votes,
     fundingThreshold: proposal.fundingThreshold,
+    meetsFundingThreshold: proposal.meetsFundingThreshold,
     funded: proposal.funded,
     valid: proposal.valid,
     creationTime: toNullableString(proposal.creationTime),
+  };
+}
+
+function mapBlockSummary(summary: ApBlockSummary): ApiBlockSummary {
+  return {
+    blockHeight: summary.blockHeight,
+    blockHash: summary.blockHash,
+    prevBlockHash: summary.prevBlockHash,
+    blockTime: summary.blockTime,
+    bits: summary.bits,
+    nonce: summary.nonce,
+    blockVersion: summary.blockVersion,
+    blockSize: summary.blockSize,
+    txCount: summary.txCount,
+    tags: summary.tags,
+    live: summary.live,
+  };
+}
+
+function mapBlockDetail(detail: ApBlockDetail): ApiBlockDetail {
+  return {
+    ...mapBlockSummary(detail),
+    merkle: detail.merkle,
+    chainwork: toNullableString(detail.chainwork),
+    cbTx:
+      detail.cbTx == null
+        ? null
+        : {
+            height: detail.cbTx.height,
+            merkleRootMnList: toNullableString(detail.cbTx.merkleRootMnList),
+            merkleFlags: toNullableNumber(detail.cbTx.merkleFlags),
+            bestClHeight: toNullableNumber(detail.cbTx.bestClHeight),
+            bestClSignature: toNullableString(detail.cbTx.bestClSignature),
+            creditPoolBalance: toNullableNumber(detail.cbTx.creditPoolBalance),
+          },
+    status: detail.status,
+    orphanedAt: toNullableString(detail.orphanedAt),
+  };
+}
+
+function mapMempoolTransactionSummary(summary: ApMempoolTransactionSummary): ApiMempoolTxSummary {
+  return {
+    txHash: summary.txHash,
+    txSize: summary.txSize,
+    firstSeenAt: summary.firstSeenAt,
+    lastSeenAt: summary.lastSeenAt,
+    txType: summary.txType,
+    valueOut: summary.valueOut,
+    tags: summary.tags,
   };
 }
 
@@ -404,7 +459,7 @@ export async function getBlocks(limit?: number, cursor?: string): Promise<ApiBlo
   const page = await unwrapResult(getApiClient().blocks.list(createCursorParams(limit, cursor)));
   return {
     asOfHeight: page.asOfHeight,
-    value: page.value as readonly ApiBlockSummary[],
+    value: page.value.map(mapBlockSummary),
     nextCursor: page.nextCursor ?? null,
   };
 }
@@ -412,7 +467,7 @@ export async function getBlocks(limit?: number, cursor?: string): Promise<ApiBlo
 /** Loads one block by height or hash and returns null for HTTP 404. */
 export async function getBlock(hashOrHeight: string | number): Promise<ApiBlockDetail | null> {
   const detail = await unwrapOptionalResult(getApiClient().blocks.get(String(hashOrHeight)));
-  return detail as ApiBlockDetail | null;
+  return detail == null ? null : mapBlockDetail(detail);
 }
 
 /** Lists transactions that belong to one block. */
@@ -518,7 +573,7 @@ export async function getMempool(): Promise<ApiMempoolSummary> {
 export async function getMempoolTxs(limit?: number, cursor?: string): Promise<ApiMempoolTxListResponse> {
   const page = await unwrapResult(getApiClient().live.listMempoolTransactions(createCursorParams(limit, cursor)));
   return {
-    value: page.value as readonly ApiMempoolTxSummary[],
+    value: page.value.map(mapMempoolTransactionSummary),
     nextCursor: page.nextCursor ?? null,
   };
 }

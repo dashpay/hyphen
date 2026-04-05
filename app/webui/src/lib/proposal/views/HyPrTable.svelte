@@ -54,11 +54,11 @@
   ] as const;
 
   function absoluteYes(proposal: ApiProposalDetail): number {
-    return proposal.yesCount - proposal.noCount;
+    return proposal.votes.yes - proposal.votes.no;
   }
 
   function approvalRatio(proposal: ApiProposalDetail): number {
-    const totalVotes = Math.max(proposal.yesCount + proposal.noCount + proposal.abstainCount, 1);
+    const totalVotes = Math.max(proposal.votes.yes + proposal.votes.no + proposal.votes.abstain, 1);
     return Math.max(-1, Math.min(absoluteYes(proposal) / totalVotes, 1));
   }
 
@@ -137,9 +137,9 @@
             <HyAmountText value={HyUtilFormatSelectedAmount(proposal.paymentAmount, getWebUiConfig(), 2)} />
           </span>
           <span class="col col-votes">
-            <span class="yes">{HyUtilFormatNumber(proposal.yesCount)}</span>
+            <span class="yes">{HyUtilFormatNumber(proposal.votes.yes)}</span>
             <span class="sep">/</span>
-            <span class="no">{HyUtilFormatNumber(proposal.noCount)}</span>
+            <span class="no">{HyUtilFormatNumber(proposal.votes.no)}</span>
           </span>
           <span class="col col-bar">
             <span class="bar-track">
@@ -187,8 +187,8 @@
 
               <span class="detail-label">{tr("Net Votes")}</span>
               <span class="detail-value">
-                {HyUtilFormatNumber(HyPrGetNetVotes(proposal))} ({HyUtilFormatNumber(proposal.yesCount)} yes /
-                {HyUtilFormatNumber(proposal.noCount)} no / {HyUtilFormatNumber(proposal.abstainCount)} abstain)
+                {HyUtilFormatNumber(HyPrGetNetVotes(proposal))} ({HyUtilFormatNumber(proposal.votes.yes)} yes /
+                {HyUtilFormatNumber(proposal.votes.no)} no / {HyUtilFormatNumber(proposal.votes.abstain)} abstain)
               </span>
 
               {#if proposal.creationTime != null}

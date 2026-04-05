@@ -4,7 +4,7 @@
   import { tr } from "@repo/hyphen-i18n";
   import { VwPanel, VwText } from "@repo/hyphen-views";
 
-  import type { ApiProposalDetail } from "$lib";
+  import type { ApiNetworkResponse, ApiProposalDetail } from "$lib";
   import { HyUtilGetBreakpointWidth } from "$lib/HyUtil";
   import { HyPrFormatProposalCount, HyPrGetFundedProposals } from "$lib/proposal/HyPrUtil";
   import HyPrDetailsPanel from "./HyPrDetailsPanel.svelte";
@@ -12,6 +12,7 @@
 
   interface Props {
     readonly proposals: readonly ApiProposalDetail[];
+    readonly network: ApiNetworkResponse | null;
     readonly totalCount?: number | null;
     readonly blockHeight: number | null;
     readonly expandedHash?: string | null;
@@ -19,12 +20,11 @@
     readonly loadingMore?: boolean;
     readonly onloadmore?: (() => unknown) | undefined;
     readonly onProposalToggle?: (hash: string) => void;
-    readonly votedRegularCount?: number | null;
-    readonly votedEvoCount?: number | null;
   }
 
   const {
     proposals,
+    network,
     totalCount = null,
     blockHeight,
     expandedHash = null,
@@ -32,8 +32,6 @@
     loadingMore = false,
     onloadmore,
     onProposalToggle,
-    votedRegularCount = null,
-    votedEvoCount = null,
   }: Props = $props();
   let stackedForDock = $state(false);
 
@@ -65,7 +63,7 @@
 
 <div class:dock-mode={stackedForDock} class="proposals-page">
   <div class="proposals-summary">
-    <HyPrDetailsPanel {blockHeight} {focusProposal} {fundedProposals} {votedEvoCount} {votedRegularCount} />
+    <HyPrDetailsPanel {blockHeight} {focusProposal} {fundedProposals} {network} />
   </div>
 
   <div class="proposals-list">

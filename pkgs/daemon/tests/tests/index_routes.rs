@@ -192,7 +192,7 @@ async fn validator_search_reads_seeded_rows_when_pg_is_configured(
     .expect("validator search should resolve");
   match result {
     Some(hyphend::rest::openapi::SearchResponse::Validator(row)) => {
-      assert_eq!(row.id, "11".repeat(32));
+      assert_eq!(row.pro_tx_hash, "11".repeat(32));
       assert_eq!(row.status, "registered");
     }
     other => panic!("expected validator search result, got {other:?}"),

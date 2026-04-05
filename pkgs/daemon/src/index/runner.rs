@@ -2346,7 +2346,7 @@ async fn execute_height_inner(
     active_stages,
   );
 
-  if lane != Some(SchedulerLane::Forward) {
+  if lane != Some(SchedulerLane::Forward) && !skip_chain_lock {
     let stage_names: Vec<&str> = active_stages.iter().copied().map(Stage::name).collect();
     tracing::info!(
       height,

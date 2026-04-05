@@ -87,6 +87,13 @@ fn run() -> Result<(), DaemonError> {
   })?;
 
   match options.startup_mode {
+    StartupMode::DocsOnly => {
+      rt.block_on(run_docs_only(&options))?;
+      info!("docs-only request completed");
+      drop(rt);
+      lock.release()?;
+      return Ok(());
+    }
     StartupMode::ReindexAll => {
       rt.block_on(run_reindex(&cfg, Arc::clone(&db), &options, &dir))?;
       info!("reindex request completed");
@@ -140,6 +147,51 @@ fn run() -> Result<(), DaemonError> {
   Ok(())
 }
 
+async fn run_docs_only(options: &Options) -> Result<(), DaemonError> {
+  let bind = options
+    .api
+    .bind
+    .as_deref()
+    .unwrap_or(rest::DEFAULT_API_BIND)
+    .to_owned();
+  let cors_origin = options.api.cors_origin.clone();
+  let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+  let server = rest::serve_docs_only(&bind, shutdown_rx, cors_origin.as_deref());
+  tokio::pin!(server);
+
+  tokio::select! {
+    result = &mut server => result,
+    _ = tokio::signal::ctrl_c() => {
+      info!("received SIGINT, shutting down docs-only server");
+      let _ = shutdown_tx.send(true);
+      tokio::time::timeout(
+        Duration::from_secs(GRACEFUL_SHUTDOWN_TIMEOUT_SECS),
+        &mut server,
+      )
+      .await
+      .map_err(|_| DaemonError::Config("timed out shutting down docs-only server".to_owned()))?
+    }
+    _ = async {
+      let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| DaemonError::Io {
+          context: "sigterm handler",
+          source: e,
+        })?;
+      let _ = sigterm.recv().await;
+      Result::<(), DaemonError>::Ok(())
+    } => {
+      info!("received SIGTERM, shutting down docs-only server");
+      let _ = shutdown_tx.send(true);
+      tokio::time::timeout(
+        Duration::from_secs(GRACEFUL_SHUTDOWN_TIMEOUT_SECS),
+        &mut server,
+      )
+      .await
+      .map_err(|_| DaemonError::Config("timed out shutting down docs-only server".to_owned()))?
+    }
+  }
+}
+
 async fn run_reindex(
   cfg: &config::Config,
   db: Arc<rocksdb::DB>,
@@ -190,7 +242,7 @@ async fn run_reindex(
       .await?;
       info!(%message, "reindex complete");
     }
-    StartupMode::Serve => {}
+    StartupMode::Serve | StartupMode::DocsOnly => {}
     StartupMode::RebuildStore(_) | StartupMode::VerifyStore(_) => {}
   }
   Ok(())
@@ -212,7 +264,10 @@ fn run_store_maintenance(
       warn!(target = ?target, "running --verify-store");
       store::manager::verify_target(db, datadir, &cfg.chain, cfg.rocksdb.as_ref(), target)?;
     }
-    StartupMode::Serve | StartupMode::Reindex(_) | StartupMode::ReindexAll => {}
+    StartupMode::Serve
+    | StartupMode::DocsOnly
+    | StartupMode::Reindex(_)
+    | StartupMode::ReindexAll => {}
   }
   Ok(())
 }

@@ -11,7 +11,10 @@ use axum::Json;
 use serde_json::Value;
 
 use crate::rest::error::ApiError;
-use crate::rest::openapi::{ErrorResponse, NetworkInfoResponse, NetworkResponse, PeerInfoResponse};
+use crate::rest::openapi::{
+  ErrorResponse, NetworkInfoResponse, NetworkResponse, NetworkValidatorClassSummary,
+  NetworkValidatorSummary, PeerInfoResponse,
+};
 use crate::rest::{rfc3339_time, AppState, LiveFeature};
 
 /// Get the current network snapshot.
@@ -40,6 +43,9 @@ pub async fn snapshot(State(state): State<AppState>) -> Result<Json<NetworkRespo
     .await
     .map_err(|e| ApiError::from_daemon(e, "query network snapshot"))?
     .ok_or_else(|| ApiError::service_unavailable("network snapshot is not ready"))?;
+  let validator_aggregates = crate::sql::live::protx::aggregates(&state.pool)
+    .await
+    .map_err(|e| ApiError::from_daemon(e, "query validator snapshot aggregates"))?;
   let network_info = serde_json::from_value::<NetworkInfoResponse>(
     row
       .payload
@@ -65,6 +71,16 @@ pub async fn snapshot(State(state): State<AppState>) -> Result<Json<NetworkRespo
       .get("peerCount")
       .and_then(Value::as_i64)
       .unwrap_or(0),
+    validators: NetworkValidatorSummary {
+      regular: NetworkValidatorClassSummary {
+        total: validator_aggregates.regular_total,
+        status: validator_aggregates.regular_status_buckets,
+      },
+      evonode: NetworkValidatorClassSummary {
+        total: validator_aggregates.evonode_total,
+        status: validator_aggregates.evonode_status_buckets,
+      },
+    },
     updated_at: rfc3339_time(row.updated_at)?,
   }))
 }

@@ -8,7 +8,7 @@ export async function hydrateMempoolTransactions(
   return Promise.all(
     rows.map(async (row): Promise<ApiMempoolTxSummary> => {
       try {
-        const detail = await getTransaction(row.txid);
+        const detail = await getTransaction(row.txHash);
         if (detail == null) {
           return row;
         }

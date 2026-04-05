@@ -20,6 +20,6 @@ describe("blocks", (): void => {
       throw new Error("benchmark discovery did not run");
     }
 
-    unwrapBenchResult("blocks.get", await benchClient.blocks.get(current.block.hash));
+    unwrapBenchResult("blocks.get", await benchClient.blocks.get(current.block.blockHash));
   });
 });

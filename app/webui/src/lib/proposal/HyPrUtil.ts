@@ -13,7 +13,7 @@ export function HyPrFormatName(name: string): string {
 
 /** Returns the net yes-minus-no vote count for one proposal. */
 export function HyPrGetNetVotes(proposal: ApiProposalDetail): number {
-  return proposal.yesCount - proposal.noCount;
+  return proposal.votes.yes - proposal.votes.no;
 }
 
 /** Returns the funded proposals from one proposal list. */
@@ -24,7 +24,7 @@ export function HyPrGetFundedProposals(proposals: readonly ApiProposalDetail[]):
 /** Returns the summed yes/no/abstain votes across one proposal list. */
 export function HyPrGetTotalVotes(proposals: readonly ApiProposalDetail[]): number {
   return proposals.reduce((sum: number, proposal: ApiProposalDetail): number => {
-    return sum + proposal.yesCount + proposal.noCount + proposal.abstainCount;
+    return sum + proposal.votes.yes + proposal.votes.no + proposal.votes.abstain;
   }, 0);
 }
 

@@ -2,33 +2,19 @@
   import { onMount } from "svelte";
   import { tr } from "@repo/hyphen-i18n";
 
-  import type { ApiMetrics, ApiMempoolSummary, ApiNetworkResponse, ApiValidatorSummary } from "$lib";
-  import { getMetricsHistory, getMempool, getNetwork, getValidators, getWebUiConfig } from "$lib";
+  import type { ApiMetrics, ApiMempoolSummary, ApiNetworkResponse } from "$lib";
+  import { getMetricsHistory, getMempool, getNetwork, getWebUiConfig } from "$lib";
   import { HyUtilReadErrorMessage, HyUtilReadErrorStatus, HyUtilWebUiName } from "$lib/HyUtil";
   import { HyNtDashboard } from "$lib/network/views";
   import { HyPageFrame, HyPageState } from "$lib/views";
 
   let snapshot = $state<ApiNetworkResponse | null>(null);
   let mempool = $state<ApiMempoolSummary | null>(null);
-  let validators = $state<readonly ApiValidatorSummary[]>([]);
   let metricsHistory = $state<readonly ApiMetrics[]>([]);
   let errorMessage = $state<string | null>(null);
   let errorStatus = $state<number | null>(null);
   let loading = $state(true);
   const validatorsEnabled = $derived(getWebUiConfig().features.validators.enabled);
-
-  async function readAllValidators(): Promise<readonly ApiValidatorSummary[]> {
-    const allValidators: ApiValidatorSummary[] = [];
-    let cursor: string | null = null;
-
-    do {
-      const response = await getValidators(100, cursor ?? undefined);
-      allValidators.push(...response.value);
-      cursor = response.nextCursor ?? null;
-    } while (cursor != null);
-
-    return allValidators;
-  }
 
   async function loadNetworkSnapshot(): Promise<void> {
     try {
@@ -50,14 +36,6 @@
         metricsHistory = metricsResponse.value;
       }),
     ];
-
-    if (validatorsEnabled) {
-      tasks.push(
-        readAllValidators().then((nextValidators): void => {
-          validators = nextValidators;
-        })
-      );
-    }
 
     await Promise.allSettled(tasks);
   }
@@ -91,7 +69,7 @@
     {loading}
   >
     {#if snapshot != null}
-      <HyNtDashboard {mempool} {metricsHistory} {snapshot} {validators} {validatorsEnabled} />
+      <HyNtDashboard {mempool} {metricsHistory} {snapshot} {validatorsEnabled} />
     {/if}
   </HyPageState>
 </HyPageFrame>

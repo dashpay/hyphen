@@ -62,6 +62,13 @@ pub struct Args {
   #[arg(long = "logconsole")]
   pub logconsole: bool,
 
+  /// Serve only the Swagger UI and OpenAPI document, then exit on shutdown.
+  #[arg(
+    long = "docs-only",
+    conflicts_with_all = ["reindex", "reindex_all", "rebuild_store", "verify_store"]
+  )]
+  pub docs_only: bool,
+
   /// Reindex one PostgreSQL stage and any dependent downstream stages, then exit.
   #[arg(long = "reindex", conflicts_with = "reindex_all", value_enum)]
   pub reindex: Option<ReindexTarget>,

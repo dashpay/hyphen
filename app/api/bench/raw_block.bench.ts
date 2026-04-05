@@ -16,6 +16,6 @@ describe("raw block", (): void => {
       throw new Error("benchmark discovery did not run");
     }
 
-    unwrapBenchResult("raw.getBlock", await benchClient.raw.getBlock(current.block.hash));
+    unwrapBenchResult("raw.getBlock", await benchClient.raw.getBlock(current.block.blockHash));
   });
 });

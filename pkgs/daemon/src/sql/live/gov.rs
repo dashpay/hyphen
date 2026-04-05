@@ -6,13 +6,30 @@
 
 //! SQL helpers for live governance proposal and vote state.
 
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
 
+const PUBLIC_VALIDATOR_TYPE_FROM_VOTE_SQL: &str = "CASE
+         WHEN lower(regexp_replace(COALESCE(vps.validator_type, validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g'))
+           IN ('highperformance', 'evo', 'evonode')
+           THEN 'evonode'
+         WHEN lower(regexp_replace(COALESCE(vps.validator_type, validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g')) = 'regular'
+           THEN 'regular'
+         ELSE 'unknown'
+       END";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernanceSummaryRow {
   pub proposal_total: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GovernanceVoteTypeCountsRow {
+  pub voted_regular_count: i64,
+  pub voted_evo_count: i64,
 }
 
 /// Persisted governance object row.
@@ -253,6 +270,63 @@ pub async fn governance_summary(pool: &PgPool) -> Result<GovernanceSummaryRow, D
   .flatten()
   .unwrap_or(0);
   Ok(GovernanceSummaryRow { proposal_total })
+}
+
+/// Read unique voter type counts for the selected governance objects.
+///
+/// # Errors
+///
+/// Returns `DaemonError::Pg` when PostgreSQL rejects the query.
+pub async fn vote_type_counts(
+  pool: &PgPool,
+  object_hashes: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, GovernanceVoteTypeCountsRow>, DaemonError> {
+  use sqlx::Row;
+
+  if object_hashes.is_empty() {
+    return Ok(HashMap::new());
+  }
+
+  let query = format!(
+    "WITH vote_members AS (
+       SELECT DISTINCT
+              gv.object_hash,
+              lower(split_part(split_part(convert_from(gv.raw_vote, 'UTF8'), ':', 1), '-', 1)) AS pro_tx_hash_hex
+         FROM governance_votes AS gv
+        WHERE gv.object_hash = ANY($1::bytea[])
+     )
+     SELECT vm.object_hash,
+            COUNT(*) FILTER (WHERE {public_type} = 'regular')::bigint AS voted_regular_count,
+            COUNT(*) FILTER (WHERE {public_type} = 'evonode')::bigint AS voted_evo_count
+       FROM vote_members AS vm
+       LEFT JOIN validator_protx_snapshot AS vps
+              ON encode(vps.pro_tx_hash, 'hex') = vm.pro_tx_hash_hex
+       LEFT JOIN validators
+              ON encode(validators.pro_tx_hash, 'hex') = vm.pro_tx_hash_hex
+      GROUP BY vm.object_hash",
+    public_type = PUBLIC_VALIDATOR_TYPE_FROM_VOTE_SQL,
+  );
+
+  let rows = sqlx::query(query.as_str())
+    .bind(object_hashes)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DaemonError::Pg(format!("read governance vote type counts: {e}")))?;
+
+  Ok(
+    rows
+      .into_iter()
+      .map(|row| {
+        (
+          row.get("object_hash"),
+          GovernanceVoteTypeCountsRow {
+            voted_regular_count: row.get("voted_regular_count"),
+            voted_evo_count: row.get("voted_evo_count"),
+          },
+        )
+      })
+      .collect(),
+  )
 }
 
 async fn refresh_governance_summary(

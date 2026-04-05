@@ -11,7 +11,6 @@
     ApiMempoolSummary,
     ApiNetworkPeerInfo,
     ApiNetworkResponse,
-    ApiValidatorSummary,
   } from "$lib/api";
   import type { ChartPoint } from "$lib/data/chart";
   import { getTimeRangeSeconds, type TimeRange } from "$lib/data/hashrate";
@@ -40,12 +39,11 @@
   interface Props {
     readonly snapshot: ApiNetworkResponse;
     readonly mempool: ApiMempoolSummary | null;
-    readonly validators: readonly ApiValidatorSummary[];
     readonly validatorsEnabled?: boolean;
     readonly metricsHistory: readonly ApiMetrics[];
   }
 
-  const { snapshot, mempool, validators, validatorsEnabled = true, metricsHistory }: Props = $props();
+  const { snapshot, mempool, validatorsEnabled = true, metricsHistory }: Props = $props();
 
   const DONUT_COLORS = ["#4C7EFF", "#60F6D2", "#FF6B8A", "#FFB74D", "#AB7AFF", "#4DD0E1"] as const;
 
@@ -171,18 +169,21 @@
     }
 
     const counts = new Map<string, number>();
+    const summaries = [snapshot.validators.regular, snapshot.validators.evonode];
 
-    for (const validator of validators) {
-      const status = validator.status.toLowerCase();
-      const label =
-        status === "enabled"
-          ? tr("Active")
-          : status === "registered"
-            ? tr("Registered")
-            : status === "banned" || status === "revoked"
-              ? tr("Banned")
-              : validator.status;
-      counts.set(label, (counts.get(label) ?? 0) + 1);
+    for (const summary of summaries) {
+      for (const [status, value] of Object.entries(summary.status)) {
+        const normalized = status.toLowerCase();
+        const label =
+          normalized === "enabled"
+            ? tr("Active")
+            : normalized === "registered"
+              ? tr("Registered")
+              : normalized === "banned" || normalized === "revoked" || normalized === "pose_banned"
+                ? tr("Banned")
+                : status;
+        counts.set(label, (counts.get(label) ?? 0) + value);
+      }
     }
 
     return [...counts.entries()]

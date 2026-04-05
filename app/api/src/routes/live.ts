@@ -39,8 +39,9 @@ export interface MempoolSummary {
  * One live mempool transaction summary row.
  */
 export interface MempoolTransactionSummary {
-  readonly txid: string;
-  readonly size: number;
+  readonly txHash: string;
+  readonly txType: string;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
@@ -75,6 +76,22 @@ export interface PeerInfo {
   readonly connectionType?: string;
 }
 
+/**
+ * Validator status aggregates by validator class.
+ */
+export interface NetworkValidatorClassSummary {
+  readonly total: number;
+  readonly status: Readonly<Record<string, number>>;
+}
+
+/**
+ * Validator aggregates attached to the live network snapshot.
+ */
+export interface NetworkValidatorSummary {
+  readonly regular: NetworkValidatorClassSummary;
+  readonly evonode: NetworkValidatorClassSummary;
+}
+
 function readOptionalAliasField(object: Record<string, unknown>, names: readonly string[]): unknown {
   for (const name of names) {
     const value = readOptionalField(object, name);
@@ -92,6 +109,7 @@ export interface NetworkSnapshot {
   readonly networkInfo: NetworkInfo;
   readonly peerInfo: readonly PeerInfo[];
   readonly peerCount: number;
+  readonly validators: NetworkValidatorSummary;
   readonly updatedAt: string;
 }
 
@@ -177,12 +195,34 @@ function parseMempoolSummary(value: unknown, path: string): MempoolSummary {
 function parseMempoolTransactionSummary(value: unknown, path: string): MempoolTransactionSummary {
   const object = expectObject(value, path);
   return {
-    txid: expectString(readField(object, "txid", path), `${path}.txid`),
-    size: expectNumber(readField(object, "size", path), `${path}.size`),
+    txHash: expectString(readField(object, "txHash", path), `${path}.txHash`),
+    txType: expectString(readField(object, "txType", path), `${path}.txType`),
+    txSize: expectNumber(readField(object, "txSize", path), `${path}.txSize`),
     valueOut: expectNumber(readField(object, "valueOut", path), `${path}.valueOut`),
     firstSeenAt: expectString(readField(object, "firstSeenAt", path), `${path}.firstSeenAt`),
     lastSeenAt: expectString(readField(object, "lastSeenAt", path), `${path}.lastSeenAt`),
     tags: parseTransactionTags(readField(object, "tags", path), `${path}.tags`),
+  };
+}
+
+function parseNetworkValidatorClassSummary(value: unknown, path: string): NetworkValidatorClassSummary {
+  const object = expectObject(value, path);
+  const statusObject = expectObject(readField(object, "status", path), `${path}.status`);
+  const status: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(statusObject)) {
+    status[key] = expectNumber(raw, `${path}.status.${key}`);
+  }
+  return {
+    total: expectNumber(readField(object, "total", path), `${path}.total`),
+    status,
+  };
+}
+
+function parseNetworkValidatorSummary(value: unknown, path: string): NetworkValidatorSummary {
+  const object = expectObject(value, path);
+  return {
+    regular: parseNetworkValidatorClassSummary(readField(object, "regular", path), `${path}.regular`),
+    evonode: parseNetworkValidatorClassSummary(readField(object, "evonode", path), `${path}.evonode`),
   };
 }
 
@@ -251,6 +291,7 @@ function parseNetworkSnapshot(value: unknown, path: string): NetworkSnapshot {
     networkInfo: parseNetworkInfo(readField(object, "networkInfo", path), `${path}.networkInfo`),
     peerInfo: expectArray(readField(object, "peerInfo", path), `${path}.peerInfo`, parsePeerInfo),
     peerCount: expectNumber(readField(object, "peerCount", path), `${path}.peerCount`),
+    validators: parseNetworkValidatorSummary(readField(object, "validators", path), `${path}.validators`),
     updatedAt: expectString(readField(object, "updatedAt", path), `${path}.updatedAt`),
   };
 }

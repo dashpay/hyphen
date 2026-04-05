@@ -23,14 +23,14 @@ export interface ApiBlockLive {
 }
 
 export interface ApiBlockSummary {
-  readonly height: number;
-  readonly hash: string;
-  readonly previousblockhash: string;
-  readonly time: string;
+  readonly blockHeight: number;
+  readonly blockHash: string;
+  readonly prevBlockHash: string;
+  readonly blockTime: string;
   readonly bits: string;
   readonly nonce: number;
-  readonly version: number;
-  readonly size: number;
+  readonly blockVersion: number;
+  readonly blockSize: number;
   readonly txCount: number;
   readonly tags: ApiBlockTags;
   readonly live: ApiBlockLive;
@@ -52,7 +52,7 @@ export interface ApiCbTxFields {
 }
 
 export interface ApiBlockDetail extends ApiBlockSummary {
-  readonly merkleroot: string;
+  readonly merkle: string;
   readonly chainwork: string | null;
   readonly cbTx: ApiCbTxFields | null;
   readonly status: string;
@@ -79,13 +79,13 @@ export interface ApiTxLive {
 }
 
 export interface ApiTxSummary {
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockHeight: number;
   readonly blockPos: number;
-  readonly version: number;
+  readonly txVersion: number;
   readonly txType: string;
   readonly lockTime: number;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly inputCount: number;
   readonly outputCount: number;
@@ -129,13 +129,13 @@ export interface ApiTxOutput {
 }
 
 export interface ApiTxDetail {
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockHeight: number | null;
   readonly blockPos: number | null;
-  readonly version: number;
+  readonly txVersion: number;
   readonly txType: string;
   readonly lockTime: number;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly fee: number | null;
   readonly inputCount: number;
@@ -172,15 +172,15 @@ export interface ApiAddressSummary {
 }
 
 export interface ApiAddressTxSummary {
-  readonly txid: string;
+  readonly txHash: string;
   readonly blockTime: string | null;
   readonly blockHeight: number | null;
   readonly blockPos: number | null;
   readonly direction: "in" | "out";
-  readonly version: number;
+  readonly txVersion: number;
   readonly netValue: number;
   readonly txType: string;
-  readonly size: number;
+  readonly txSize: number;
   readonly valueOut: number;
   readonly fee: number | null;
   readonly tags: ApiTxTags;
@@ -194,7 +194,7 @@ export interface ApiAddressTxListResponse {
 }
 
 export interface ApiUtxo {
-  readonly txid: string;
+  readonly txHash: string;
   readonly vout: number;
   readonly value: number;
   readonly height: number;
@@ -256,8 +256,8 @@ export interface ApiMempoolSummary {
 }
 
 export interface ApiMempoolTxSummary {
-  readonly txid: string;
-  readonly size: number;
+  readonly txHash: string;
+  readonly txSize: number;
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
   readonly txType?: string | null;
@@ -272,10 +272,21 @@ export interface ApiMempoolTxListResponse {
 
 export type ApiNetworkPeerInfo = Readonly<Record<string, unknown>>;
 
+export interface ApiNetworkValidatorClassSummary {
+  readonly total: number;
+  readonly status: Readonly<Record<string, number>>;
+}
+
+export interface ApiNetworkValidatorSummary {
+  readonly regular: ApiNetworkValidatorClassSummary;
+  readonly evonode: ApiNetworkValidatorClassSummary;
+}
+
 export interface ApiNetworkResponse {
   readonly networkInfo: Readonly<Record<string, unknown>>;
   readonly peerInfo: readonly ApiNetworkPeerInfo[];
   readonly peerCount: number;
+  readonly validators: ApiNetworkValidatorSummary;
   readonly updatedAt: string;
 }
 
@@ -296,14 +307,13 @@ export interface ApiProposalDetail {
   readonly paymentAmount: number;
   readonly startTime: string | null;
   readonly endTime: string | null;
-  readonly yesCount: number;
-  readonly noCount: number;
-  readonly abstainCount: number;
-  readonly voteCount: number;
-  readonly totalNodes: number;
-  readonly enabledNodes: number;
-  readonly participatingNodes: number;
+  readonly votes: {
+    readonly yes: number;
+    readonly no: number;
+    readonly abstain: number;
+  };
   readonly fundingThreshold: number;
+  readonly meetsFundingThreshold: boolean;
   readonly funded: boolean;
   readonly valid: boolean;
   readonly creationTime: string | null;
@@ -350,7 +360,7 @@ export interface ApiValidatorListResponse {
 }
 
 export interface ApiValidatorHistoryEntry {
-  readonly txid: string;
+  readonly txHash: string;
   readonly txType: string;
   readonly payload: unknown;
   readonly blockHeight: number;
@@ -359,6 +369,7 @@ export interface ApiValidatorHistoryEntry {
 export interface ApiValidatorAddresses {
   readonly collateral?: string | null;
   readonly owner?: string | null;
+  readonly payee?: string | null;
   readonly payout?: string | null;
   readonly voting?: string | null;
 }
@@ -371,14 +382,17 @@ export interface ApiValidatorServices {
 
 export interface ApiValidatorLive {
   readonly consecutivePayments?: number | null;
-  readonly currentStatus?: string | null;
-  readonly enabled?: boolean | null;
   readonly lastPaidAt?: string | null;
   readonly lastPaidHeight?: number | null;
-  readonly poseBanHeight?: number | null;
-  readonly posePenalty?: number | null;
-  readonly poseRevivedHeight?: number | null;
+  readonly pose?: {
+    readonly banHeight?: number | null;
+    readonly banScore?: number | null;
+    readonly revivedHeight?: number | null;
+  } | null;
   readonly revocationReason?: number | null;
+  readonly type?: string | null;
+  readonly valid?: boolean | null;
+  readonly status?: string | null;
 }
 
 export interface ApiValidatorDetail extends ApiValidatorSummary {

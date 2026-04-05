@@ -22,7 +22,7 @@
   let dockMode = $state(false);
 
   const latestHeight = $derived.by((): number => {
-    return explorer.blocks[0]?.height ?? explorer.blockHeight;
+    return explorer.blocks[0]?.blockHeight ?? explorer.blockHeight;
   });
 
   async function readBlocks(): Promise<void> {

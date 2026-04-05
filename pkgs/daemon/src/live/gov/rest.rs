@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::rest::error::ApiError;
 use crate::rest::openapi::{
   ErrorResponse, ProposalDetail, ProposalListResponse, ProposalVote, ProposalVoteListResponse,
-  SearchProposalResult, SearchResponse,
+  ProposalVoteSummary, SearchProposalResult, SearchResponse,
 };
 use crate::rest::{
   decode_cursor, encode_cursor, rfc3339_time, AppState, CursorPage, CursorParams, LiveFeature,
@@ -41,6 +41,12 @@ struct ProposalVoteCursor {
 struct GovernanceNetworkStats {
   total_nodes: i64,
   enabled_nodes: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GovernanceVoteTypeCounts {
+  voted_regular_count: i64,
+  voted_evo_count: i64,
 }
 
 /// Get current governance proposals.
@@ -87,9 +93,19 @@ pub async fn list_proposals(
     .map_err(|e| ApiError::from_daemon(e, "query proposals"))?;
   let has_more = rows.len() as i64 > limit;
   rows.truncate(limit as usize);
+  let vote_type_counts = proposal_vote_type_counts(&state, &rows).await?;
   let value = rows
     .iter()
-    .map(|row| proposal_row(row, network))
+    .map(|row| {
+      proposal_row(
+        row,
+        network,
+        vote_type_counts
+          .get(row.object_hash.as_slice())
+          .copied()
+          .unwrap_or_default(),
+      )
+    })
     .collect::<Result<Vec<_>, _>>()?;
   let total_count = crate::sql::live::gov::governance_summary(&state.pool)
     .await
@@ -146,7 +162,18 @@ pub async fn get_proposal(
     .await
     .map_err(|e| ApiError::from_daemon(e, "query proposal"))?
     .ok_or_else(|| ApiError::not_found("proposal not found"))?;
-  Ok(Json(proposal_row(&row, network)?))
+  let vote_type_counts =
+    crate::sql::live::gov::vote_type_counts(&state.pool, std::slice::from_ref(&row.object_hash))
+      .await
+      .map_err(|e| ApiError::from_daemon(e, "query proposal vote type counts"))?;
+  let vote_type_counts = vote_type_counts
+    .get(row.object_hash.as_slice())
+    .map(|counts| GovernanceVoteTypeCounts {
+      voted_regular_count: counts.voted_regular_count,
+      voted_evo_count: counts.voted_evo_count,
+    })
+    .unwrap_or_default();
+  Ok(Json(proposal_row(&row, network, vote_type_counts)?))
 }
 
 /// Get current votes for one governance proposal.
@@ -204,8 +231,24 @@ pub async fn get_votes(
     .map_err(|e| ApiError::from_daemon(e, "query proposal"))?
   {
     Some(row) => {
-      let proposal = proposal_row(&row, governance_network_stats(&state).await?)?;
-      proposal.yes_count + proposal.no_count + proposal.abstain_count
+      let vote_type_counts = crate::sql::live::gov::vote_type_counts(
+        &state.pool,
+        std::slice::from_ref(&row.object_hash),
+      )
+      .await
+      .map_err(|e| ApiError::from_daemon(e, "query proposal vote type counts"))?;
+      let proposal = proposal_row(
+        &row,
+        governance_network_stats(&state).await?,
+        vote_type_counts
+          .get(row.object_hash.as_slice())
+          .map(|counts| GovernanceVoteTypeCounts {
+            voted_regular_count: counts.voted_regular_count,
+            voted_evo_count: counts.voted_evo_count,
+          })
+          .unwrap_or_default(),
+      )?;
+      proposal.votes.yes + proposal.votes.no + proposal.votes.abstain
     }
     None => 0,
   };
@@ -260,6 +303,7 @@ fn decode_hash(hash: &str) -> Result<Vec<u8>, ApiError> {
 fn proposal_row(
   row: &crate::sql::live::gov::GovernanceObjectRow,
   network: GovernanceNetworkStats,
+  _vote_type_counts: GovernanceVoteTypeCounts,
 ) -> Result<ProposalDetail, ApiError> {
   let raw: Value = if let Some(value) = row.data_json.clone() {
     value
@@ -271,7 +315,8 @@ fn proposal_row(
   let yes_count = raw.get("YesCount").and_then(Value::as_i64).unwrap_or(0);
   let no_count = raw.get("NoCount").and_then(Value::as_i64).unwrap_or(0);
   let abstain_count = raw.get("AbstainCount").and_then(Value::as_i64).unwrap_or(0);
-  let vote_count = yes_count + no_count + abstain_count;
+  let funding_threshold = funding_threshold(network.enabled_nodes);
+  let absolute_yes_count = yes_count - no_count;
   Ok(ProposalDetail {
     hash: hex::encode(&row.object_hash),
     collateral_hash: raw
@@ -293,14 +338,13 @@ fn proposal_row(
       .and_then(Value::as_i64)
       .map(rfc3339_time)
       .transpose()?,
-    yes_count,
-    no_count,
-    abstain_count,
-    vote_count,
-    total_nodes: network.total_nodes,
-    enabled_nodes: network.enabled_nodes,
-    participating_nodes: vote_count,
-    funding_threshold: funding_threshold(network.enabled_nodes),
+    votes: ProposalVoteSummary {
+      yes: yes_count,
+      no: no_count,
+      abstain: abstain_count,
+    },
+    funding_threshold,
+    meets_funding_threshold: absolute_yes_count >= funding_threshold,
     funded: raw
       .get("fCachedFunding")
       .and_then(Value::as_bool)
@@ -325,6 +369,33 @@ async fn governance_network_stats(state: &AppState) -> Result<GovernanceNetworkS
     total_nodes: summary.total_nodes,
     enabled_nodes: summary.enabled_nodes,
   })
+}
+
+async fn proposal_vote_type_counts(
+  state: &AppState,
+  rows: &[crate::sql::live::gov::GovernanceObjectRow],
+) -> Result<std::collections::HashMap<Vec<u8>, GovernanceVoteTypeCounts>, ApiError> {
+  let object_hashes = rows
+    .iter()
+    .map(|row| row.object_hash.clone())
+    .collect::<Vec<_>>();
+  let counts = crate::sql::live::gov::vote_type_counts(&state.pool, &object_hashes)
+    .await
+    .map_err(|e| ApiError::from_daemon(e, "query proposal vote type counts"))?;
+  Ok(
+    counts
+      .into_iter()
+      .map(|(object_hash, counts)| {
+        (
+          object_hash,
+          GovernanceVoteTypeCounts {
+            voted_regular_count: counts.voted_regular_count,
+            voted_evo_count: counts.voted_evo_count,
+          },
+        )
+      })
+      .collect(),
+  )
 }
 
 fn funding_threshold(enabled_nodes: i64) -> i64 {
@@ -462,7 +533,7 @@ pub(crate) async fn search_by_hash(
       .map_err(|e| ApiError::from_daemon(e, "search proposal"))?
       .map(|row| {
         SearchResponse::Proposal(SearchProposalResult {
-          id: hex::encode(row.object_hash),
+          hash: hex::encode(row.object_hash),
         })
       }),
   )
@@ -484,7 +555,7 @@ pub(crate) async fn search_by_query(
       .into_iter()
       .map(|row| {
         SearchResponse::Proposal(SearchProposalResult {
-          id: hex::encode(row.object_hash),
+          hash: hex::encode(row.object_hash),
         })
       })
       .collect(),
@@ -640,12 +711,11 @@ mod tests {
     assert!(list.next_cursor.is_none());
     assert_eq!(list.value[0].hash, hex::encode(&object_hash));
     assert_eq!(list.value[0].name, "prop");
-    assert_eq!(list.value[0].yes_count, 5);
-    assert_eq!(list.value[0].vote_count, 8);
-    assert_eq!(list.value[0].total_nodes, 2);
-    assert_eq!(list.value[0].enabled_nodes, 1);
-    assert_eq!(list.value[0].participating_nodes, 8);
+    assert_eq!(list.value[0].votes.yes, 5);
+    assert_eq!(list.value[0].votes.no, 2);
+    assert_eq!(list.value[0].votes.abstain, 1);
     assert_eq!(list.value[0].funding_threshold, 1);
+    assert!(list.value[0].meets_funding_threshold);
     assert_eq!(list.value[0].payment_amount, 1_250_000_000);
     assert_eq!(
       list.value[0].start_time.as_deref(),
@@ -662,7 +732,10 @@ mod tests {
       .0;
     assert_eq!(detail.payment_address.as_deref(), Some("Xpay"));
     assert!(detail.funded);
-    assert_eq!(detail.vote_count, 8);
+    assert_eq!(detail.votes.yes, 5);
+    assert_eq!(detail.votes.no, 2);
+    assert_eq!(detail.votes.abstain, 1);
+    assert!(detail.meets_funding_threshold);
     assert_eq!(
       detail.creation_time.as_deref(),
       Some("1970-01-01T00:02:03Z")
@@ -730,6 +803,7 @@ mod tests {
         total_nodes: 12,
         enabled_nodes: 10,
       },
+      super::GovernanceVoteTypeCounts::default(),
     )
     .expect("proposal row should decode");
     assert_eq!(detail.name, "prop");
@@ -737,11 +811,11 @@ mod tests {
     assert_eq!(detail.payment_amount, 1_250_000_000);
     assert_eq!(detail.start_time.as_deref(), Some("1970-01-01T00:00:10Z"));
     assert_eq!(detail.end_time.as_deref(), Some("1970-01-01T00:00:20Z"));
-    assert_eq!(detail.vote_count, 8);
-    assert_eq!(detail.total_nodes, 12);
-    assert_eq!(detail.enabled_nodes, 10);
-    assert_eq!(detail.participating_nodes, 8);
+    assert_eq!(detail.votes.yes, 5);
+    assert_eq!(detail.votes.no, 1);
+    assert_eq!(detail.votes.abstain, 2);
     assert_eq!(detail.funding_threshold, 1);
+    assert!(detail.meets_funding_threshold);
   }
 
   fn test_state_with_pool(pool: crate::sql::SqlPool, live_governance: bool) -> AppState {

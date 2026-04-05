@@ -20,6 +20,6 @@ describe("transactions", (): void => {
       throw new Error("benchmark discovery did not run");
     }
 
-    unwrapBenchResult("transactions.get", await benchClient.transactions.get(current.transaction.txid));
+    unwrapBenchResult("transactions.get", await benchClient.transactions.get(current.transaction.txHash));
   });
 });

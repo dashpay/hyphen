@@ -16,14 +16,18 @@ describe("validator routes", (): void => {
             addresses: {
               collateral: "Xcollateral",
               owner: "Xowner",
+              payee: "Xpayee",
               voting: "Xvoting",
               payout: "Xpayout",
             },
             live: {
-              enabled: false,
-              currentStatus: "POSE_BANNED",
-              posePenalty: 11,
-              poseBanHeight: 2441840,
+              status: "pose_banned",
+              type: "evonode",
+              valid: false,
+              pose: {
+                banScore: 11,
+                banHeight: 2441840,
+              },
             },
             operatorPubKey: "operator-key",
             operatorReward: 5,
@@ -48,18 +52,22 @@ describe("validator routes", (): void => {
         addresses: {
           collateral: "Xcollateral",
           owner: "Xowner",
+          payee: "Xpayee",
           voting: "Xvoting",
           payout: "Xpayout",
         },
         live: {
-          enabled: false,
-          currentStatus: "POSE_BANNED",
+          status: "pose_banned",
+          type: "evonode",
+          valid: false,
           lastPaidAt: "2026-03-20T00:00:00Z",
           lastPaidHeight: 2441800,
           consecutivePayments: 3,
-          posePenalty: 11,
-          poseRevivedHeight: 2441830,
-          poseBanHeight: 2441840,
+          pose: {
+            banScore: 11,
+            revivedHeight: 2441830,
+            banHeight: 2441840,
+          },
           revocationReason: 2,
         },
         operatorPubKey: "operator-key",
@@ -75,7 +83,7 @@ describe("validator routes", (): void => {
         lastUpdatedHeight: 2441848,
         history: [
           {
-            txid: "proregtx-1",
+            txHash: "proregtx-1",
             txType: "provider_register",
             payload: {
               ownerAddress: "Xowner",
@@ -83,7 +91,7 @@ describe("validator routes", (): void => {
             blockHeight: 2400000,
           },
           {
-            txid: "proupservtx-1",
+            txHash: "proupservtx-1",
             txType: "provider_update_service",
             payload: {
               service: "127.0.0.1:9999",
@@ -107,10 +115,11 @@ describe("validator routes", (): void => {
     expect(page.nextCursor).toBe("validator-next");
     expect(page.totalCount).toBe(4200);
     expect(page.value[0]?.services.platformHttps[0]).toBe("https://example.test");
-    expect(page.value[0]?.live.enabled).toBe(false);
-    expect(page.value[0]?.live.currentStatus).toBe("POSE_BANNED");
+    expect(page.value[0]?.addresses.payee).toBe("Xpayee");
+    expect(page.value[0]?.live.status).toBe("pose_banned");
+    expect(page.value[0]?.live.pose?.banScore).toBe(11);
     expect(detail.live.lastPaidAt).toBe("2026-03-20T00:00:00Z");
-    expect(detail.live.poseBanHeight).toBe(2441840);
+    expect(detail.live.pose?.banHeight).toBe(2441840);
     expect(detail.live.revocationReason).toBe(2);
     expect(detail.history[1]?.txType).toBe("provider_update_service");
   });
@@ -129,8 +138,11 @@ describe("validator routes", (): void => {
               payout: "Xpayout",
             },
             live: {
-              enabled: true,
-              posePenalty: 0,
+              status: "enabled",
+              valid: true,
+              pose: {
+                banScore: 0,
+              },
             },
             operatorPubKey: "operator-key",
             operatorReward: 0,
@@ -173,12 +185,12 @@ describe("validator routes", (): void => {
     const page = expectOk(await client.validators.list({ limit: 1 }));
     const detail = expectOk(await client.validators.get("protx-plain"));
 
-    expect(page.value[0]?.live.currentStatus).toBeUndefined();
-    expect(page.value[0]?.live.enabled).toBe(true);
+    expect(page.value[0]?.live.status).toBe("enabled");
+    expect(page.value[0]?.live.valid).toBe(true);
     expect(page.totalCount).toBe(1);
     expect(page.value[0]?.services.platformP2p).toEqual([]);
     expect(page.value[0]?.addresses.owner).toBeUndefined();
-    expect(detail.live.currentStatus).toBeUndefined();
+    expect(detail.live.status).toBeUndefined();
     expect(detail.history).toEqual([]);
   });
 

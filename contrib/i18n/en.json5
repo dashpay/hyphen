@@ -5,7 +5,6 @@
   strings: {
     '{} ({} enabled)': '{} ({} enabled)',
     '{} | {}': '{} | {}',
-    '{} Regular / {} Evo': '{} Regular / {} Evo',
     '{} used': '{} used',
     '{count, plural, one {# address} other {# addresses}}': '{count, plural, one {# address} other {# addresses}}',
     '{count, plural, one {# block} other {# blocks}}': '{count, plural, one {# block} other {# blocks}}',

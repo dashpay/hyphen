@@ -21,7 +21,7 @@
     readonly scrollMode?: "page" | "self";
     readonly totalCount: number;
     readonly transactions: readonly AddressTransactionRow[];
-    readonly ontxclick?: (txid: string) => void;
+    readonly ontxclick?: (txHash: string) => void;
   }
 
   const {
@@ -77,9 +77,9 @@
         label: transaction.label,
         metaLabel: formatMetaLabel(transaction),
         metaValue: transaction.blockHeight != null ? "#" + HyUtilFormatNumber(transaction.blockHeight) : "Mempool",
-        size: transaction.size,
+        size: transaction.txSize,
         tone: transaction.tone,
-        txid: transaction.txid,
+        txid: transaction.txHash,
         valueOut: Math.abs(transaction.netValue),
       };
     });

@@ -369,7 +369,7 @@ pub async fn search_by_height(
     return Ok(None);
   };
   Ok(Some(SearchResponse::Block(SearchBlockResult {
-    id: utils::view_hex(&hash, HashEndian::Ser),
+    block_hash: utils::view_hex(&hash, HashEndian::Ser),
     status: "canonical".to_string(),
     block_tags: block_tags(false),
   })))
@@ -385,7 +385,7 @@ pub async fn search_by_hash(
     .is_some()
   {
     return Ok(Some(SearchResponse::Block(SearchBlockResult {
-      id: utils::view_hex(hash_bytes, HashEndian::Ser),
+      block_hash: utils::view_hex(hash_bytes, HashEndian::Ser),
       status: "canonical".to_string(),
       block_tags: block_tags(false),
     })));
@@ -396,7 +396,7 @@ pub async fn search_by_hash(
     .is_some()
   {
     return Ok(Some(SearchResponse::Block(SearchBlockResult {
-      id: utils::view_hex(hash_bytes, HashEndian::Ser),
+      block_hash: utils::view_hex(hash_bytes, HashEndian::Ser),
       status: "orphan".to_string(),
       block_tags: block_tags(true),
     })));
@@ -417,7 +417,7 @@ pub(crate) async fn search_by_hash_prefix(
       .into_iter()
       .map(|row| {
         SearchResponse::Block(SearchBlockResult {
-          id: utils::view_hex(&row.hash, HashEndian::Ser),
+          block_hash: utils::view_hex(&row.hash, HashEndian::Ser),
           status: "canonical".to_owned(),
           block_tags: block_tags(false),
         })

@@ -22,7 +22,7 @@ describe("live smoke", (): void => {
     expect(blocksResult.error()).toBeUndefined();
     expect(blocksPage?.value.length).toBeGreaterThan(0);
 
-    const blockHash = blocksPage?.value[0]?.hash;
+    const blockHash = blocksPage?.value[0]?.blockHash;
     expect(blockHash).toBeDefined();
     if (blockHash == null) {
       throw new Error("expected one discovered block hash");
@@ -36,7 +36,7 @@ describe("live smoke", (): void => {
     expect(transactionsResult.error()).toBeUndefined();
     expect(transactionsPage?.value.length).toBeGreaterThan(0);
 
-    const txid = transactionsPage?.value[0]?.txid;
+    const txid = transactionsPage?.value[0]?.txHash;
     expect(txid).toBeDefined();
     if (txid == null) {
       throw new Error("expected one discovered transaction id");
