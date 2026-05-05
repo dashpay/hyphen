@@ -43,16 +43,16 @@ impl fmt::Display for TxTypeDb {
   }
 }
 
-impl From<dash_primitives::types::tx::TxType> for TxTypeDb {
-  fn from(t: dash_primitives::types::tx::TxType) -> Self {
-    use dash_primitives::types::tx::TxType;
+impl From<dash_primitives::TxType> for TxTypeDb {
+  fn from(t: dash_primitives::TxType) -> Self {
+    use dash_primitives::TxType;
     match t {
-      TxType::Normal | TxType::Unknown(_) => Self::Normal,
+      TxType::Spend | TxType::Unknown(_) => Self::Normal,
       TxType::ProviderRegister => Self::ProviderRegister,
       TxType::ProviderUpdateService => Self::ProviderUpdateService,
       TxType::ProviderUpdateRegistrar => Self::ProviderUpdateRegistrar,
       TxType::ProviderUpdateRevoke => Self::ProviderUpdateRevoke,
-      TxType::Coinbase => Self::Coinbase,
+      TxType::CoinbaseCommitment => Self::Coinbase,
       TxType::QuorumCommitment => Self::QuorumCommitment,
       TxType::AssetLock => Self::AssetLock,
       TxType::AssetUnlock => Self::AssetUnlock,

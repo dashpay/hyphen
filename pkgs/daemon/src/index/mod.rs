@@ -68,8 +68,7 @@ mod tests {
   use std::sync::Arc;
   use std::time::{SystemTime, UNIX_EPOCH};
 
-  use dash_primitives::block::full::Block;
-  use dash_primitives::hash;
+  use dash_primitives::Block;
   use rocksdb::IteratorMode;
   use rocksdb::DB;
 
@@ -203,19 +202,20 @@ mod tests {
   fn block_context_matches_legacy_tx_derivation() -> Result<(), Box<dyn std::error::Error>> {
     let raw = minimal_block_bytes(41);
     let ctx = super::BlockCtx::from_raw(0, raw.clone())?;
-    let block = Block::from_bytes(&raw)?;
-    let ranges = hash::tx_byte_ranges(&raw)?;
+    let block = bitcoin_consensus_encoding::decode_from_slice::<Block>(&raw)
+      .map_err(|e| format!("{e:?}"))?;
+    let ranges = dash_primitives::block::tx_byte_ranges(&raw)?;
 
     assert_eq!(ctx.height(), 0);
     assert_eq!(ctx.block().transactions.len(), block.transactions.len());
     assert_eq!(ctx.raw(), raw.as_slice());
-    assert_eq!(ctx.block_hash(), hash::block_hash(&raw)?.0);
+    assert_eq!(ctx.block_hash(), crate::consensus::block_hash(&raw)?.to_bytes());
 
     for (index, (start, end)) in ranges.into_iter().enumerate() {
       assert_eq!(ctx.tx_byte_range(index), Some((start, end)));
       assert_eq!(
         ctx.txid(index).copied(),
-        Some(hash::tx_hash(&raw[start..end]).0)
+        Some(dash_primitives::hash::tx_hash(&raw[start..end]).to_bytes())
       );
     }
 
@@ -420,7 +420,7 @@ mod tests {
       .count();
     assert_eq!(history_rows, 1);
 
-    let address = dash_primitives::script::derive_address(
+    let address = dash_script::derive_address(
       &[
         0x76, 0xA9, 0x14, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
         0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x88, 0xAC,
@@ -524,7 +524,7 @@ mod tests {
 
     harness.connect_raw_block(0, p2pkh_block_bytes(7)).await?;
 
-    let address = dash_primitives::script::derive_address(
+    let address = dash_script::derive_address(
       &[
         0x76, 0xA9, 0x14, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
         0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x88, 0xAC,

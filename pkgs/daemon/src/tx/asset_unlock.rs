@@ -4,10 +4,10 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-use dash_primitives::tx::asset_unlock::CAssetUnlockPayload;
+use dash_primitives::payload::AssetUnlock;
 use serde_json::{json, Value};
 
-pub fn to_json(p: &CAssetUnlockPayload) -> Value {
+pub fn to_json(p: &AssetUnlock) -> Value {
   json!({
     "version": p.version,
     "index": p.index,

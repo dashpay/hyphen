@@ -27,6 +27,8 @@ pub mod bench;
 #[cfg(feature = "daemon")]
 mod cache;
 #[cfg(feature = "daemon")]
+pub(crate) mod consensus;
+#[cfg(feature = "daemon")]
 mod config;
 #[cfg(feature = "daemon")]
 mod datadir;

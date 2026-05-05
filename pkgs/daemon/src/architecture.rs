@@ -15,7 +15,7 @@ mod tests {
     "sha2::",
     "ripemd::",
     "bs58::",
-    "dash_primitives::cursor::Cursor",
+    "bitcoin_io::Cursor",
     "consensus_decode_tx(",
     "consensus_decode_block(",
     "read_compact_size(",

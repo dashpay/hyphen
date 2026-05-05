@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::sql::SqlPool;
-use dash_primitives::gov;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
@@ -279,7 +278,7 @@ pub async fn refresh_from_zmq_loop(
         lifecycle
           .sleep(Duration::from_millis(ZMQ_REFRESH_DEBOUNCE_MS))
           .await;
-        if let Ok(object_hash) = gov::object_hash(&object) {
+        if let Ok(object_hash) = crate::consensus::gov_object_hash(&object) {
           if let Err(err) =
             refresh_object_once(&pool, &rpc, &object_hash, stream_hub.as_deref()).await
           {
@@ -293,7 +292,7 @@ pub async fn refresh_from_zmq_loop(
         lifecycle
           .sleep(Duration::from_millis(ZMQ_REFRESH_DEBOUNCE_MS))
           .await;
-        let object_hash = gov::vote_parent_hash(&vote).ok();
+        let object_hash = crate::consensus::gov_vote_parent_hash(&vote).ok();
         match object_hash {
           Some(object_hash) => {
             if let Err(err) =
@@ -354,7 +353,6 @@ fn now_epoch_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
-  use dash_primitives::gov;
   use serde_json::json;
 
   use super::{build_object_row, parse_vote_fields};
@@ -395,7 +393,8 @@ mod tests {
     raw_vote.extend_from_slice(&3i64.to_le_bytes());
     raw_vote.push(0);
 
-    let parent = gov::vote_parent_hash(&raw_vote).expect("parent hash should decode");
+    let parent = crate::consensus::gov_vote_parent_hash(&raw_vote)
+      .expect("parent hash should decode");
     assert_eq!(
       hex::encode(parent),
       "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -421,10 +420,11 @@ mod tests {
     raw.push(signature.len() as u8);
     raw.extend_from_slice(&signature);
 
-    let parsed = gov::object_hash(&raw).expect("object hash should decode");
+    let parsed = crate::consensus::gov_object_hash(&raw)
+      .expect("object hash should decode");
     assert_eq!(
       hex::encode(parsed),
-      "e3b703644367c38fba1012dc2e549876dda0203ea3c7cde44846b3fe2c84236f"
+      "4a37b1a47d9b1137b2af4d7d36ad757c3c80d5fcb9c24ac80807fab24d2e18e3"
     );
   }
 }

@@ -8,8 +8,6 @@
 
 use std::collections::HashMap;
 
-use dash_primitives::script;
-
 use crate::error::DaemonError;
 use crate::index::BlockCtx;
 use crate::store::{self, RecoveryState};
@@ -292,12 +290,12 @@ pub fn connect_block(
       let prev_key = key(txid, vout as i32);
       let value = PrevoutValue {
         output_height: block_height,
-        address: script::derive_address(
+        address: dash_script::derive_address(
           output.script_pubkey.as_bytes(),
           p2pkh_version,
           p2sh_version,
         ),
-        value: output.value,
+        value: output.value.to_sat() as i64,
         spent_txid: None,
         spent_vin: None,
         spent_height: None,
@@ -310,7 +308,7 @@ pub fn connect_block(
   let mut missing_prev_keys = Vec::new();
   for transaction in &block.block().transactions {
     for input in &transaction.inputs {
-      if input.prevout.hash.0 == [0u8; 32] {
+      if input.prevout.hash.is_null() {
         continue;
       }
       let prev_key = key(input.prevout.hash.as_bytes(), input.prevout.index as i32);
@@ -334,7 +332,7 @@ pub fn connect_block(
       .txid(pos)
       .ok_or_else(|| DaemonError::Index(format!("tx {pos} missing txid at {}", block.height())))?;
     for (vin, input) in transaction.inputs.iter().enumerate() {
-      if input.prevout.hash.0 == [0u8; 32] {
+      if input.prevout.hash.is_null() {
         continue;
       }
       let prev_key = key(input.prevout.hash.as_bytes(), input.prevout.index as i32);
@@ -378,7 +376,7 @@ pub fn disconnect_block(
   let mut prev_keys = Vec::new();
   for transaction in block.block().transactions.iter().rev() {
     for input in transaction.inputs.iter().rev() {
-      if input.prevout.hash.0 == [0u8; 32] {
+      if input.prevout.hash.is_null() {
         continue;
       }
       prev_keys.push(key(
@@ -401,14 +399,14 @@ pub fn disconnect_block(
       batch.delete_cf(data_cf, key(txid, vout as i32));
     }
     for input in transaction.inputs.iter().rev() {
-      if input.prevout.hash.0 == [0u8; 32] {
+      if input.prevout.hash.is_null() {
         continue;
       }
       let prev_key = key(input.prevout.hash.as_bytes(), input.prevout.index as i32);
       let mut value = rows_by_key.remove(&prev_key).ok_or_else(|| {
         DaemonError::Index(format!(
           "missing prevout store row for {}:{} during disconnect at {}",
-          hex::encode(input.prevout.hash.0),
+          hex::encode(input.prevout.hash.as_bytes()),
           input.prevout.index,
           block.height()
         ))
@@ -473,7 +471,7 @@ mod tests {
 
   fn same_block_spend_bytes() -> Vec<u8> {
     let first = coinbase_tx(&p2pkh_script(0x11), 0x2A, 50_0000_0000);
-    let first_txid = hash::tx_hash(&first).0;
+    let first_txid = hash::tx_hash(&first).to_bytes();
     let second = spend_tx(first_txid, 0, &p2pkh_script(0x22), 49_9999_0000);
 
     let mut raw = Vec::new();

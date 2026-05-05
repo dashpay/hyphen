@@ -15,8 +15,7 @@ pub(crate) mod util;
 
 use std::sync::Mutex;
 
-use dash_primitives::hash::bits_to_difficulty;
-use dash_primitives::script::{self, ScriptKind};
+use dash_script::ScriptKind;
 
 use crate::error::DaemonError;
 pub(crate) use crate::sql::index::metrics as sql;
@@ -138,7 +137,7 @@ pub(crate) struct MetricsBlockPlan {
 
 impl MetricsBlockPlan {
   fn build(
-    block: &dash_primitives::block::full::Block,
+    block: &dash_primitives::Block,
     raw: &[u8],
     height: u32,
     previous_metrics: PreviousMetrics,
@@ -151,17 +150,21 @@ impl MetricsBlockPlan {
 
     for (index, transaction) in block.transactions.iter().enumerate() {
       for output in &transaction.outputs {
-        match script::classify_script(output.script_pubkey.0.as_slice()) {
+        match dash_script::classify(output.script_pubkey.as_bytes()) {
           ScriptKind::P2pkh | ScriptKind::P2sh | ScriptKind::P2pk => spendable_created += 1,
           ScriptKind::OpReturn | ScriptKind::Unknown => unspendable_created += 1,
         }
       }
 
       if index == 0 && util::is_coinbase_tx(transaction) {
-        coinbase_value = transaction.outputs.iter().map(|output| output.value).sum();
+        coinbase_value = transaction
+          .outputs
+          .iter()
+          .map(|output| output.value.to_sat() as i64)
+          .sum();
       } else {
         for input in &transaction.inputs {
-          if input.prevout.hash.0 != [0u8; 32] {
+          if !input.prevout.hash.is_null() {
             inputs_spent += 1;
           }
         }
@@ -177,7 +180,7 @@ impl MetricsBlockPlan {
     let blockchain_size = prev_chain_size + raw.len() as i64;
     let circulating_supply = prev_supply + coinbase_value;
     let credit_pool = util::extract_credit_pool(block);
-    let difficulty = bits_to_difficulty(block.header.bits);
+    let difficulty = crate::consensus::bits_to_difficulty(block.header.bits);
     let hashrate = util::hashrate_from_difficulty(difficulty, block_time_secs);
 
     Self {
@@ -224,11 +227,9 @@ impl MetricsBlockPlan {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use dash_primitives::block::full::Block;
-  use dash_primitives::block::header::BlockHeader;
-  use dash_primitives::tx::transaction::Transaction;
-  use dash_primitives::types::common::{BlockHash, MerkleRoot, Script, TxHash};
-  use dash_primitives::types::tx::{OutPoint, TxIn, TxOut, TxType};
+  use dash_primitives::{
+    Block, BlockHash, BlockHeader, MerkleRoot, OutPoint, Script, Transaction, TxHash, TxIn, TxOut, TxType,
+  };
 
   fn test_block(
     first_tx_type: TxType,
@@ -238,8 +239,8 @@ mod tests {
     Block {
       header: BlockHeader {
         version: 4,
-        prev_hash: BlockHash([0u8; 32]),
-        merkle_root: MerkleRoot([1u8; 32]),
+        prev_hash: BlockHash::from_bytes([0u8; 32]),
+        merkle_root: MerkleRoot::from_bytes([1u8; 32]),
         time: 1,
         bits: 0x1d00ffff,
         nonce: 0,
@@ -249,14 +250,14 @@ mod tests {
         tx_type: first_tx_type,
         inputs: vec![TxIn {
           prevout: OutPoint {
-            hash: TxHash(first_input_hash),
+            hash: TxHash::from_bytes(first_input_hash),
             index: first_input_index,
           },
           script_sig: Script(Vec::new()),
           sequence: u32::MAX,
         }],
         outputs: vec![TxOut {
-          value: 500_000_000,
+          value: bitcoin_units::Amount::from_sat_u32(500_000_000),
           script_pubkey: Script(vec![0x51]),
         }],
         lock_time: 0,
@@ -267,14 +268,14 @@ mod tests {
 
   #[test]
   fn circulating_supply_uses_structural_coinbase_before_special_tx_activation() {
-    let block = test_block(TxType::Normal, [0u8; 32], u32::MAX);
+    let block = test_block(TxType::Spend, [0u8; 32], u32::MAX);
     let plan = MetricsBlockPlan::build(&block, &[0u8; 80], 1, (0, 0, 0, 0, 0), 150.0);
     assert_eq!(plan.circulating_supply, 500_000_000);
   }
 
   #[test]
   fn circulating_supply_ignores_non_coinbase_first_transaction() {
-    let block = test_block(TxType::Coinbase, [2u8; 32], 0);
+    let block = test_block(TxType::CoinbaseCommitment, [2u8; 32], 0);
     let plan = MetricsBlockPlan::build(&block, &[0u8; 80], 1, (0, 0, 0, 0, 0), 150.0);
     assert_eq!(plan.circulating_supply, 0);
   }

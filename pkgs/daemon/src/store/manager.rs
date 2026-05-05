@@ -418,7 +418,7 @@ fn verify_recent_prevouts(
             height
           ))
         })?;
-        if value.prev_value != output.value {
+        if value.prev_value != output.value.to_sat() as i64 {
           return Err(DaemonError::Index(format!(
             "startup verify prevout value mismatch for {}:{} at {}",
             hex::encode(txid),
@@ -461,7 +461,7 @@ fn verify_recent_address_history(
       })?;
       let mut touched = std::collections::BTreeSet::new();
       for output in &transaction.outputs {
-        if let Some(addr) = dash_primitives::script::derive_address(
+        if let Some(addr) = dash_script::derive_address(
           output.script_pubkey.as_bytes(),
           chain.p2pkh_version,
           chain.p2sh_version,
@@ -472,13 +472,13 @@ fn verify_recent_address_history(
       let prev_txids: Vec<Vec<u8>> = transaction
         .inputs
         .iter()
-        .filter(|input| input.prevout.hash.0 != [0u8; 32])
+        .filter(|input| !input.prevout.hash.is_null())
         .map(|input| input.prevout.hash.as_bytes().to_vec())
         .collect();
       let prev_vouts: Vec<i32> = transaction
         .inputs
         .iter()
-        .filter(|input| input.prevout.hash.0 != [0u8; 32])
+        .filter(|input| !input.prevout.hash.is_null())
         .map(|input| input.prevout.index as i32)
         .collect();
       for row in crate::store::prevout::load_rows(prevout_db, &prev_txids, &prev_vouts)? {
@@ -528,7 +528,7 @@ mod tests {
       .cf_handle(crate::db::CF_HEIGHTS)
       .ok_or("heights CF missing")?;
     let meta_cf = db.cf_handle(crate::db::CF_META).ok_or("meta CF missing")?;
-    let hash = dash_primitives::hash::block_hash(raw)?.0;
+    let hash = crate::consensus::block_hash(raw)?.to_bytes();
     let mut batch = rocksdb::WriteBatch::default();
     batch.put_cf(blocks_cf, hash, raw);
     batch.put_cf(heights_cf, height.to_be_bytes(), hash);

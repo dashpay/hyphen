@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 
-use dash_primitives::script;
 use rocksdb::{Direction, IteratorMode};
 
 use crate::error::DaemonError;
@@ -189,7 +188,7 @@ pub fn connect_block_from_raw(
 
     for output in &transaction.outputs {
       if let Some(addr) =
-        script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version)
+        dash_script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version)
       {
         touched.insert(addr);
       }
@@ -198,13 +197,13 @@ pub fn connect_block_from_raw(
     let prev_txids: Vec<Vec<u8>> = transaction
       .inputs
       .iter()
-      .filter(|input| input.prevout.hash.0 != [0u8; 32])
+      .filter(|input| !input.prevout.hash.is_null())
       .map(|input| input.prevout.hash.as_bytes().to_vec())
       .collect();
     let prev_vouts: Vec<i32> = transaction
       .inputs
       .iter()
-      .filter(|input| input.prevout.hash.0 != [0u8; 32])
+      .filter(|input| !input.prevout.hash.is_null())
       .map(|input| input.prevout.index as i32)
       .collect();
     for row in prevout::load_rows(prevout_db, &prev_txids, &prev_vouts)? {
@@ -262,7 +261,7 @@ pub fn disconnect_block(
 
     for output in &transaction.outputs {
       if let Some(addr) =
-        script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version)
+        dash_script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version)
       {
         touched.insert(addr);
       }
@@ -270,13 +269,13 @@ pub fn disconnect_block(
     let prev_txids: Vec<Vec<u8>> = transaction
       .inputs
       .iter()
-      .filter(|input| input.prevout.hash.0 != [0u8; 32])
+      .filter(|input| !input.prevout.hash.is_null())
       .map(|input| input.prevout.hash.as_bytes().to_vec())
       .collect();
     let prev_vouts: Vec<i32> = transaction
       .inputs
       .iter()
-      .filter(|input| input.prevout.hash.0 != [0u8; 32])
+      .filter(|input| !input.prevout.hash.is_null())
       .map(|input| input.prevout.index as i32)
       .collect();
     for row in prevout::load_rows(prevout_db, &prev_txids, &prev_vouts)? {

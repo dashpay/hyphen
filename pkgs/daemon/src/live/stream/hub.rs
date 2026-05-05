@@ -56,7 +56,7 @@ pub async fn fanout_loop(
     } {
       Some(Ok(event)) => match event {
         ZmqEvent::RawTx { tx, sequence } => {
-          let txid = dash_primitives::hash::tx_hash(&tx).0;
+          let txid = dash_primitives::hash::tx_hash(&tx).to_bytes();
           if pending_adds.remove(&txid) {
             hub.publish(LiveEvent::mempool_tx(tx, sequence));
           } else {
@@ -209,7 +209,7 @@ mod tests {
 
     tx.send(ZmqEvent::Sequence {
       event: SequenceEvent::TxAdded {
-        txid: dash_primitives::hash::tx_hash(&[1u8, 2, 3]).0,
+        txid: dash_primitives::hash::tx_hash(&[1u8, 2, 3]).to_bytes(),
         mempool_sequence: 9,
       },
       sequence: 8,

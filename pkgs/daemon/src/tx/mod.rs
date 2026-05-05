@@ -21,8 +21,8 @@ pub mod provider_update_revoke;
 pub mod provider_update_service;
 pub mod quorum;
 
-use dash_primitives::script::{classify_script, ScriptKind};
-use dash_primitives::tx::SpecialPayload;
+use dash_primitives::payload::SpecialPayload;
+use dash_script::{classify, ScriptKind};
 use serde_json::Value;
 
 /// Side-effect a provider-tx has on the `validators` table.
@@ -74,7 +74,7 @@ pub struct ValidatorInsert {
 /// `txid` is the txid of the transaction (used as pro_tx_hash for ProRegTx).
 pub fn payload_for_storage(payload: &SpecialPayload, txid: &[u8]) -> (Option<Vec<u8>>, Value) {
   match payload {
-    SpecialPayload::Coinbase(p) => (None, coinbase::to_json(p)),
+    SpecialPayload::CoinbaseCommitment(p) => (None, coinbase::to_json(p)),
     SpecialPayload::ProviderRegister(p) => (Some(txid.to_vec()), provider_register::to_json(p)),
     SpecialPayload::ProviderUpdateService(p) => {
       let pth = p.pro_tx_hash.as_bytes().to_vec();
@@ -142,15 +142,15 @@ pub fn enrich_api(tx_type: &str, stored: &Value) -> Value {
 }
 
 /// Convert a `TxType` to the string stored in the `tx_type` PG enum column.
-pub fn tx_type_str(t: dash_primitives::types::tx::TxType) -> &'static str {
-  use dash_primitives::types::tx::TxType;
+pub fn tx_type_str(t: dash_primitives::TxType) -> &'static str {
+  use dash_primitives::TxType;
   match t {
-    TxType::Normal => "normal",
+    TxType::Spend => "normal",
     TxType::ProviderRegister => "provider_register",
     TxType::ProviderUpdateService => "provider_update_service",
     TxType::ProviderUpdateRegistrar => "provider_update_registrar",
     TxType::ProviderUpdateRevoke => "provider_update_revoke",
-    TxType::Coinbase => "coinbase",
+    TxType::CoinbaseCommitment => "coinbase",
     TxType::QuorumCommitment => "quorum_commitment",
     TxType::AssetLock => "asset_lock",
     TxType::AssetUnlock => "asset_unlock",
@@ -168,7 +168,7 @@ where
   if stored_tx_type == "normal"
     && output_scripts
       .into_iter()
-      .any(|script| matches!(classify_script(script.as_ref()), ScriptKind::OpReturn))
+      .any(|script| matches!(classify(script.as_ref()), ScriptKind::OpReturn))
   {
     "data"
   } else {
@@ -179,9 +179,10 @@ where
 // ── Address helpers (shared by provider tx modules) ──────────────────────────
 
 pub(crate) fn net_info_to_addrs(
-  net_info: &dash_primitives::types::sptx::NetInfo,
+  net_info: &dash_primitives::payload::NetInfo,
 ) -> (Vec<String>, Vec<String>, Vec<String>) {
-  use dash_primitives::types::sptx::{NetInfo, NetInfoEntry, NetInfoPurpose};
+  use dash_primitives::payload::NetInfo;
+  use dash_primitives::{NetInfoEntry, NetInfoPurpose};
   match net_info {
     NetInfo::Legacy(svc) => (vec![format_service(svc)], vec![], vec![]),
     NetInfo::Extended(ext) => {
@@ -190,8 +191,8 @@ pub(crate) fn net_info_to_addrs(
       let mut plat_https = vec![];
       for (purpose, entries) in &ext.entries {
         let target = match purpose {
-          NetInfoPurpose::CoreP2P => &mut core,
-          NetInfoPurpose::PlatformP2P => &mut plat_p2p,
+          NetInfoPurpose::CoreP2p => &mut core,
+          NetInfoPurpose::PlatformP2p => &mut plat_p2p,
           NetInfoPurpose::PlatformHttps => &mut plat_https,
           NetInfoPurpose::Unknown(_) => continue,
         };
@@ -212,7 +213,7 @@ pub(crate) fn net_info_to_addrs(
   }
 }
 
-fn format_service(svc: &dash_primitives::types::sptx::CService) -> String {
+fn format_service(svc: &dash_primitives::CService) -> String {
   format!("{}:{}", format_addr(&svc.addr), svc.port)
 }
 
@@ -220,6 +221,10 @@ fn format_addr(addr: &[u8]) -> String {
   match addr.len() {
     4 => format!("{}.{}.{}.{}", addr[0], addr[1], addr[2], addr[3]),
     16 => {
+      // IPv4-mapped IPv6: ::ffff:a.b.c.d — display as plain IPv4.
+      if addr[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
+        return format!("{}.{}.{}.{}", addr[12], addr[13], addr[14], addr[15]);
+      }
       let mut parts = Vec::new();
       for chunk in addr.chunks(2) {
         parts.push(format!("{:02x}{:02x}", chunk[0], chunk[1]));
@@ -254,5 +259,31 @@ mod tests {
   fn public_tx_type_keeps_special_transaction_types() {
     let tx_type = super::public_tx_type("asset_lock", [vec![0x6a, 0x01, 0x01]]);
     assert_eq!(tx_type, "asset_lock");
+  }
+
+  #[test]
+  fn format_addr_ipv4() {
+    assert_eq!(super::format_addr(&[1, 2, 3, 4]), "1.2.3.4");
+  }
+
+  #[test]
+  fn format_addr_ipv4_mapped_ipv6() {
+    let mut addr = [0u8; 16];
+    addr[10] = 0xff;
+    addr[11] = 0xff;
+    addr[12] = 192;
+    addr[13] = 168;
+    addr[14] = 1;
+    addr[15] = 100;
+    assert_eq!(super::format_addr(&addr), "192.168.1.100");
+  }
+
+  #[test]
+  fn format_addr_real_ipv6() {
+    let addr: [u8; 16] = [
+      0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    ];
+    assert_eq!(super::format_addr(&addr), "2001:0db8:0000:0000:0000:0000:0000:0001");
   }
 }

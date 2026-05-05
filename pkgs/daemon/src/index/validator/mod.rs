@@ -13,8 +13,8 @@ pub mod rest;
 #[cfg(not(feature = "tests"))]
 pub(crate) mod rest;
 
-use dash_primitives::tx::SpecialPayload;
-use dash_primitives::types::tx::TxType;
+use dash_primitives::payload::SpecialPayload;
+use dash_primitives::TxType;
 
 use crate::error::DaemonError;
 pub(crate) use crate::sql::index::validator as sql;
@@ -117,7 +117,7 @@ impl ValidatorBlockPlan {
     let mut effects = Vec::new();
 
     for (pos, transaction) in block.block().transactions.iter().enumerate() {
-      if matches!(transaction.tx_type, TxType::Normal | TxType::Unknown(_)) {
+      if matches!(transaction.tx_type, TxType::Spend | TxType::Unknown(_)) {
         continue;
       }
 
@@ -145,7 +145,7 @@ impl ValidatorBlockPlan {
 
     for transaction in &block.block().transactions {
       for input in &transaction.inputs {
-        if input.prevout.hash.0 == [0u8; 32] {
+        if input.prevout.hash.is_null() {
           continue;
         }
         effects.push(ValidatorEffect::ReapSpentCollateral {

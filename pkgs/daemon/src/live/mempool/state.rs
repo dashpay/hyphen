@@ -100,7 +100,7 @@ async fn handle_raw_tx(
   pending_raw: &mut PendingRawTxs,
   pending_adds: &mut PendingTxAdds,
 ) -> Result<(), DaemonError> {
-  let txid = hash::tx_hash(&raw_tx).0;
+  let txid = hash::tx_hash(&raw_tx).to_bytes();
   if pending_adds.remove(&txid) {
     let inserted = upsert_recent_tx(
       ctx.pool,
@@ -153,7 +153,7 @@ async fn upsert_recent_tx(
   p2sh_version: u8,
 ) -> Result<(), DaemonError> {
   let now = now_epoch_secs();
-  let txid = hash::tx_hash(&raw_tx).0.to_vec();
+  let txid = hash::tx_hash(&raw_tx).to_bytes().to_vec();
   let row = sql::live::mempool::MempoolRecentTxRow {
     txid: txid.clone(),
     raw_tx,

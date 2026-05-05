@@ -21,9 +21,14 @@ daemon = [
   "wire",
   "dep:async-trait",
   "dep:axum",
+  "dep:bitcoin-consensus-encoding",
+  "dep:bitcoin-units",
   "dep:bytes",
   "dep:clap",
+  "dep:dash-num",
+  "dep:dash-pow",
   "dep:dash-primitives",
+  "dep:dash-script",
   "dep:futures",
   "dep:fs2",
   "dep:hex",
@@ -55,7 +60,12 @@ async-trait        = { version = "0.1", optional = true }
 axum               = { version = "0.8", optional = true }
 bytes              = { version = "1", optional = true }
 clap               = { version = "4", features = ["derive"], optional = true }
-dash-primitives    = { path = "../primitives", optional = true }
+bitcoin-consensus-encoding = { version = "0.2", default-features = false, features = ["alloc"], optional = true }
+bitcoin-units      = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+dash-num           = { git = "https://github.com/dashpay/base-sdk", tag = "2026-05-05", optional = true }
+dash-pow           = { git = "https://github.com/dashpay/base-sdk", tag = "2026-05-05", optional = true }
+dash-primitives    = { git = "https://github.com/dashpay/base-sdk", tag = "2026-05-05", features = ["std"], optional = true }
+dash-script        = { git = "https://github.com/dashpay/base-sdk", tag = "2026-05-05", optional = true }
 directories        = "6"
 num-bigint         = { version = "0.4", optional = true }
 futures            = { version = "0.3", optional = true }

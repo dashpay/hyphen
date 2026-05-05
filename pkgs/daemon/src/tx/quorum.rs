@@ -4,13 +4,13 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-use dash_primitives::tx::quorum::CFinalCommitmentTxPayload;
+use dash_primitives::payload::FinalCommitment;
 use serde_json::{json, Value};
 
-pub fn to_json(p: &CFinalCommitmentTxPayload) -> Value {
+pub fn to_json(p: &FinalCommitment) -> Value {
   json!({
     "version": p.version,
-    "height": p.height,
+    "height": p.height.to_u32(),
     "commitmentVersion": p.commitment.version,
     "llmqType": format!("{:?}", p.commitment.llmq_type),
     "quorumHash": hex::encode(p.commitment.quorum_hash.as_bytes()),

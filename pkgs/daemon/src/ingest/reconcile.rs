@@ -9,7 +9,7 @@
 use rocksdb::{WriteBatch, DB};
 use std::time::Instant;
 
-use dash_primitives::hash;
+use crate::consensus;
 
 use crate::db::{self, CF_META};
 use crate::error::DaemonError;
@@ -53,9 +53,9 @@ fn repair_tip_metadata_gap(db: &DB, current_tip: u32) -> Result<u32, DaemonError
 async fn canonical_hash_at_height(ctx: &IngestCtx, height: u32) -> Result<[u8; 32], DaemonError> {
   let requested_hash = ctx.source.block_hash(height).await?;
   let raw = ctx.source.raw_block(&requested_hash).await?;
-  let computed_hash = hash::block_hash(&raw)
+  let computed_hash = consensus::block_hash(&raw)
     .map_err(|error| DaemonError::RestSource(format!("hash raw block {height}: {error}")))?
-    .0;
+    .to_bytes();
   let computed_hex = utils::view_hex(&computed_hash, HashEndian::Ser);
   if computed_hex != requested_hash {
     return Err(DaemonError::RestSource(format!(
@@ -238,7 +238,7 @@ mod tests {
   async fn canonical_hash_at_height_accepts_display_endian_source_hash(
   ) -> Result<(), Box<dyn std::error::Error>> {
     let raw = crate::tests::minimal_block_bytes(7);
-    let computed = dash_primitives::hash::block_hash(&raw)?.0;
+    let computed = crate::consensus::block_hash(&raw)?.to_bytes();
     let db = Arc::new(crate::tests::open_temp_db()?);
     let runtime = Arc::new(IngestRuntime::default());
     let lifecycle = Lifecycle::start();
@@ -323,7 +323,7 @@ mod tests {
       Arc::clone(&db),
       Arc::new(MismatchSource {
         hash: utils::view_hex(
-          &dash_primitives::hash::block_hash(&crate::tests::minimal_block_bytes(1))?.0,
+          &crate::consensus::block_hash(&crate::tests::minimal_block_bytes(1))?.to_bytes(),
           HashEndian::Ser,
         ),
         raw: crate::tests::minimal_block_bytes(1),
@@ -340,7 +340,7 @@ mod tests {
   async fn reconcile_start_rejects_malformed_height_mapping(
   ) -> Result<(), Box<dyn std::error::Error>> {
     let raw = crate::tests::minimal_block_bytes(1);
-    let computed = dash_primitives::hash::block_hash(&raw)?.0;
+    let computed = crate::consensus::block_hash(&raw)?.to_bytes();
     let db = Arc::new(crate::tests::open_temp_db()?);
     let meta_cf = db
       .cf_handle(crate::db::CF_META)
@@ -371,7 +371,7 @@ mod tests {
   async fn reconcile_start_clamps_stale_resume_height_to_local_tip(
   ) -> Result<(), Box<dyn std::error::Error>> {
     let raw = crate::tests::minimal_block_bytes(7);
-    let computed = dash_primitives::hash::block_hash(&raw)?.0;
+    let computed = crate::consensus::block_hash(&raw)?.to_bytes();
     let db = Arc::new(crate::tests::open_temp_db()?);
     let meta_cf = db
       .cf_handle(crate::db::CF_META)

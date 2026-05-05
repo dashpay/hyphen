@@ -210,10 +210,10 @@ impl FakeRestSource {
       .iter()
       .map(|(&height, raw)| {
         let hash =
-          dash_primitives::hash::block_hash(raw).expect("benchmark raw blocks should hash");
+          crate::consensus::block_hash(raw).expect("benchmark raw blocks should hash");
         (
           height,
-          crate::utils::view_hex(&hash.0, crate::utils::HashEndian::Ser),
+          crate::utils::view_hex(&hash.to_bytes(), crate::utils::HashEndian::Ser),
         )
       })
       .collect();
@@ -289,7 +289,7 @@ mod tests {
     let source = FakeRestSource::new(1);
     let hash = source.block_hash(1).await?;
     let raw = source.raw_block(&hash).await?;
-    let computed = dash_primitives::hash::block_hash(&raw)?.0;
+    let computed = crate::consensus::block_hash(&raw)?.to_bytes();
     let expected = crate::utils::view_hex(&computed, crate::utils::HashEndian::Ser);
     assert_eq!(hash, expected);
     Ok(())

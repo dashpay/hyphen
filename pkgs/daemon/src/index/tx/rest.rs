@@ -228,7 +228,7 @@ pub async fn get_rawtx(
       .map_err(|e| ApiError::internal(format!("rocksdb: {e}")))?
       .ok_or_else(|| ApiError::not_found("raw block not in store"))?;
 
-    let ranges = dash_primitives::hash::tx_byte_ranges(&raw_block)
+    let ranges = dash_primitives::block::tx_byte_ranges(&raw_block)
       .map_err(|e| ApiError::internal(format!("tx ranges: {e}")))?;
     let (start, end) = ranges
       .get(row.block_pos as usize)

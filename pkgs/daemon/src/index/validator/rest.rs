@@ -597,7 +597,7 @@ mod tests {
       .cf_handle(crate::db::CF_HEIGHTS)
       .ok_or("heights CF missing")?;
     let meta_cf = db.cf_handle(crate::db::CF_META).ok_or("meta CF missing")?;
-    let hash = dash_primitives::hash::block_hash(raw)?.0;
+    let hash = crate::consensus::block_hash(raw)?.to_bytes();
     let mut batch = rocksdb::WriteBatch::default();
     batch.put_cf(blocks_cf, hash, raw);
     batch.put_cf(heights_cf, height.to_be_bytes(), hash);

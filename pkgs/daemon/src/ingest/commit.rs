@@ -8,7 +8,7 @@
 
 use rocksdb::WriteBatch;
 
-use dash_primitives::hash;
+use crate::consensus;
 
 use crate::db::{self, CF_BLOCKS, CF_HEIGHTS, CF_META};
 use crate::error::DaemonError;
@@ -45,9 +45,9 @@ pub fn commit_batch(
   let mut last_hash_arr = [0u8; 32];
   for (offset, block) in blocks.iter().enumerate() {
     let height = batch.start_height.saturating_add(offset as u32);
-    let hash_arr = hash::block_hash(&block.raw)
+    let hash_arr = consensus::block_hash(&block.raw)
       .map_err(|error| DaemonError::Index(format!("hash fetched block {height}: {error}")))?
-      .0;
+      .to_bytes();
     write_batch.put_cf(blocks_cf, hash_arr, &block.raw);
     write_batch.put_cf(heights_cf, height.to_be_bytes(), hash_arr);
     last_hash_arr = hash_arr;
