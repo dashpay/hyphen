@@ -64,6 +64,22 @@ CREATE TABLE IF NOT EXISTS chain_progress (
   updated_at              BIGINT  NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS search_sync_events (
+  seq         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  height      INTEGER NOT NULL,
+  index_name  TEXT    NOT NULL,
+  doc_id      TEXT    NOT NULL,
+  op          TEXT    NOT NULL CHECK (op IN ('upsert', 'delete')),
+  payload     JSONB,
+  created_at  BIGINT  NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_sync_events_height_seq
+  ON search_sync_events (height, seq);
+
+CREATE INDEX IF NOT EXISTS idx_search_sync_events_index_doc
+  ON search_sync_events (index_name, doc_id);
+
 -- Blocks
 
 CREATE TABLE IF NOT EXISTS blocks (
@@ -106,7 +122,22 @@ CREATE TABLE IF NOT EXISTS transactions (
 ) PARTITION BY RANGE (block_height);
 
 DO $$ BEGIN
-  ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_pkey;
+  -- Only drop the PK if it does not already cover block_height, i.e. we are
+  -- migrating from an old schema where the PK was just (txid). Skipping the
+  -- drop on an up-to-date database preserves dependent FK constraints.
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint AS c
+      JOIN pg_class AS t ON t.oid = c.conrelid
+      JOIN pg_namespace AS n ON n.oid = t.relnamespace
+      JOIN pg_attribute AS a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+     WHERE n.nspname = 'public'
+       AND t.relname = 'transactions'
+       AND c.contype = 'p'
+       AND a.attname = 'block_height'
+  ) THEN
+    ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_pkey;
+  END IF;
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
 

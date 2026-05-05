@@ -57,6 +57,7 @@ export interface WebUiBlockTagRule {
 }
 
 export interface WebUiConfig {
+  readonly theme: "blue" | "yellow";
   readonly balances: WebUiBalancesConfig;
   readonly currency: WebUiCurrencyConfig;
   readonly features: WebUiFeaturesConfig;
@@ -92,6 +93,7 @@ export const DEFAULT_DENOMINATIONS: readonly WebUiDenomination[] = [
 ] as const;
 
 export const DEFAULT_WEBUI_CONFIG: WebUiConfig = {
+  theme: "blue",
   balances: {
     enableConcentration: true,
   },
@@ -168,6 +170,7 @@ interface PartialWebUiFeaturesConfig {
 }
 
 interface PartialWebUiConfig {
+  readonly theme?: unknown;
   readonly balances?: unknown;
   readonly currency?: unknown;
   readonly features?: unknown;
@@ -293,6 +296,7 @@ export function normalizeWebUiConfig(value: unknown): WebUiConfig {
   }
 
   const record = value as PartialWebUiConfig;
+  const theme = record.theme === "yellow" ? "yellow" : "blue";
   const balancesRecord = isRecord(record.balances) ? (record.balances as PartialWebUiBalancesConfig) : {};
   const currencyRecord = isRecord(record.currency) ? (record.currency as PartialWebUiCurrencyConfig) : {};
   const featuresRecord = isRecord(record.features) ? (record.features as PartialWebUiFeaturesConfig) : {};
@@ -317,6 +321,7 @@ export function normalizeWebUiConfig(value: unknown): WebUiConfig {
     : fallbackDenomination;
 
   return {
+    theme,
     balances: {
       enableConcentration:
         typeof balancesRecord.enable_concentration === "boolean"

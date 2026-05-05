@@ -1,0 +1,28 @@
+{
+  yellow: {
+    "accent-blue": "#de6f1e",
+    "accent-blue-15": "rgba(222, 111, 30, 0.15)",
+    "switch-track": "rgba(222, 111, 30, 0.15)",
+    "switch-knob": "#de6f1e",
+    "surface-accent-subtle": "rgba(222, 111, 30, 0.08)",
+    "surface-accent-strong": "rgba(222, 111, 30, 0.12)",
+    "border-accent-subtle": "rgba(222, 111, 30, 0.15)",
+    "color-bg": "#1a1208",
+    "surface-base": "#2a1e10",
+    "sidebar-bg": "linear-gradient(180deg, #1a1208 0%, #7a3d0e 100%)",
+    "header-bg": "rgba(26, 18, 8, 0.75)",
+  },
+  yellowLight: {
+    "accent-blue": "#c05e10",
+    "accent-blue-15": "rgba(192, 94, 16, 0.1)",
+    "switch-track": "rgba(192, 94, 16, 0.18)",
+    "switch-knob": "#ffffff",
+    "surface-accent-subtle": "rgba(192, 94, 16, 0.08)",
+    "surface-accent-strong": "rgba(192, 94, 16, 0.12)",
+    "border-accent-subtle": "rgba(192, 94, 16, 0.18)",
+    "color-bg": "#fdf6ef",
+    "surface-base": "#ffffff",
+    "sidebar-bg": "linear-gradient(180deg, #ffffff 0%, #fff3e6 100%)",
+    "header-bg": "rgba(253, 246, 239, 0.85)",
+  },
+}

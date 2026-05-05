@@ -290,8 +290,13 @@
           return;
         }
 
+        const config = getWebUiConfig();
+        if (config.theme !== "blue") {
+          globalThis.document.documentElement.classList.add("theme-" + config.theme);
+        }
+
         HyUtilRefreshLocaleDictionaries();
-        HyUtilHydrateSelectedDenominationKey(getWebUiConfig());
+        HyUtilHydrateSelectedDenominationKey(config);
         explorer.init();
       })
       .catch((): void => {

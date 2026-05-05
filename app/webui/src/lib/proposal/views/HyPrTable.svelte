@@ -241,12 +241,12 @@
   }
 
   .proposal-table :global(.scroll-body::-webkit-scrollbar-thumb) {
-    background: rgba(76, 126, 255, 0.3);
+    background: color-mix(in srgb, var(--accent-blue) 30%, transparent);
     border-radius: 10px;
   }
 
   .proposal-table :global(.scroll-body::-webkit-scrollbar-thumb:hover) {
-    background: rgba(76, 126, 255, 0.5);
+    background: color-mix(in srgb, var(--accent-blue) 50%, transparent);
   }
 
   .p-row {
@@ -275,12 +275,12 @@
   }
 
   .p-row-expanded {
-    background: var(--hy-proposal-row-expanded, rgba(76, 126, 255, 0.06));
+    background: var(--hy-proposal-row-expanded, color-mix(in srgb, var(--accent-blue) 6%, transparent));
     border-bottom-color: transparent;
   }
 
   .p-detail {
-    background: var(--hy-proposal-row-expanded, rgba(76, 126, 255, 0.06));
+    background: var(--hy-proposal-row-expanded, color-mix(in srgb, var(--accent-blue) 6%, transparent));
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     grid-column: 1 / -1;
     padding: 6px 20px 16px 36px;
