@@ -93,7 +93,7 @@ impl LiveEvent {
       ts: now_epoch_secs(),
       payload: MempoolTxEvent {
         sequence,
-        txid: utils::view_hex(&dash_primitives::hash::tx_hash(&raw_tx).0, HashEndian::Ser),
+        txid: utils::view_hex(&dash_primitives::hash::tx_hash(&raw_tx).to_bytes(), HashEndian::Ser),
         rawtx: hex::encode(raw_tx),
       },
     }

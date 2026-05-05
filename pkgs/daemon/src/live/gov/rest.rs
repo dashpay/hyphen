@@ -406,17 +406,18 @@ fn funding_threshold(enabled_nodes: i64) -> i64 {
 }
 
 fn parse_proposal_payload(raw: &Value) -> Result<Value, ApiError> {
-  if let Some(value) = raw.get("DataString").and_then(Value::as_str) {
-    return serde_json::from_str(value)
-      .map_err(|e| ApiError::internal(format!("decode proposal payload: {e}")));
-  }
-  if let Some(value) = raw.get("DataHex").and_then(Value::as_str) {
+  let parsed = if let Some(value) = raw.get("DataString").and_then(Value::as_str) {
+    serde_json::from_str(value)
+      .map_err(|e| ApiError::internal(format!("decode proposal payload: {e}")))?
+  } else if let Some(value) = raw.get("DataHex").and_then(Value::as_str) {
     let decoded = hex::decode(value)
       .map_err(|e| ApiError::internal(format!("decode proposal payload hex: {e}")))?;
-    return serde_json::from_slice(&decoded)
-      .map_err(|e| ApiError::internal(format!("decode proposal payload from hex: {e}")));
-  }
-  Err(ApiError::internal("stored proposal missing DataString"))
+    serde_json::from_slice(&decoded)
+      .map_err(|e| ApiError::internal(format!("decode proposal payload from hex: {e}")))?
+  } else {
+    return Err(ApiError::internal("stored proposal missing DataString"));
+  };
+  Ok(parsed)
 }
 
 fn proposal_value<'a>(proposal: &'a Value, keys: &[&str]) -> Option<&'a Value> {

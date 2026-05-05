@@ -18,6 +18,7 @@ mod api_metrics;
 #[cfg(test)]
 mod architecture;
 mod cache;
+mod consensus;
 mod config;
 mod datadir;
 mod db;

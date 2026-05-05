@@ -8,9 +8,8 @@
 
 use std::sync::Mutex;
 
-use dash_primitives::script;
-use dash_primitives::tx::transaction::Transaction;
-use dash_primitives::types::tx::TxType;
+use dash_primitives::Transaction;
+use dash_primitives::TxType;
 
 use crate::error::DaemonError;
 use crate::index::batch::BatchSizer;
@@ -279,7 +278,11 @@ impl TransactionRows {
     byte_len: usize,
     height: u32,
   ) -> Result<(), DaemonError> {
-    let value_out = transaction.outputs.iter().map(|output| output.value).sum();
+    let value_out: i64 = transaction
+      .outputs
+      .iter()
+      .map(|output| output.value.to_sat() as i64)
+      .sum();
     self.txids.push(txid);
     self.heights.push(block_height);
     self.positions.push(position);
@@ -361,7 +364,7 @@ impl InputRows {
     for (vin, input) in transaction.inputs.iter().enumerate() {
       self.txids.push(txid.to_vec());
       self.vins.push(vin as i32);
-      if input.prevout.hash.0 == [0u8; 32] {
+      if input.prevout.hash.is_null() {
         self.prev_txids.push(None);
         self.prev_vouts.push(None);
       } else {
@@ -443,19 +446,19 @@ impl OutputRows {
       self.txids.push(txid.to_vec());
       self.vouts.push(vout as i32);
       self.heights.push(height);
-      self.values.push(output.value);
+      self.values.push(output.value.to_sat() as i64);
       self.scripts.push(script_bytes.to_vec());
-      self.addrs.push(script::derive_address(
+      self.addrs.push(dash_script::derive_address(
         script_bytes,
         p2pkh_version,
         p2sh_version,
       ));
       self
         .addr_types
-        .push(match script::classify_script(script_bytes) {
-          script::ScriptKind::P2pkh => Some("p2pkh".to_owned()),
-          script::ScriptKind::P2sh => Some("p2sh".to_owned()),
-          script::ScriptKind::P2pk => Some("p2pk".to_owned()),
+        .push(match dash_script::classify(script_bytes) {
+          dash_script::ScriptKind::P2pkh => Some("p2pkh".to_owned()),
+          dash_script::ScriptKind::P2sh => Some("p2sh".to_owned()),
+          dash_script::ScriptKind::P2pk => Some("p2pk".to_owned()),
           _ => None,
         });
     }
@@ -554,11 +557,11 @@ impl SpecialTxRow {
     height: u32,
     position: usize,
   ) -> Option<Self> {
-    if matches!(transaction.tx_type, TxType::Normal | TxType::Unknown(_)) {
+    if matches!(transaction.tx_type, TxType::Spend | TxType::Unknown(_)) {
       return None;
     }
 
-    match dash_primitives::tx::SpecialPayload::decode(
+    match dash_primitives::payload::SpecialPayload::decode(
       transaction.tx_type,
       &transaction.extra_payload,
     ) {
@@ -589,25 +592,23 @@ mod tests {
   use super::{OutputRows, TransactionBatchPlan};
   use crate::store::{self, StoreId};
   use dash_primitives::hash;
-  use dash_primitives::tx::transaction::Transaction;
-  use dash_primitives::types::common::{Script, TxHash};
-  use dash_primitives::types::tx::{OutPoint, TxIn, TxOut, TxType};
+  use dash_primitives::{OutPoint, Script, Transaction, TxHash, TxIn, TxOut, TxType};
   use std::sync::Mutex;
 
   fn sample_tx(script_pubkey: Vec<u8>) -> Transaction {
     Transaction {
       version: 3,
-      tx_type: TxType::Normal,
+      tx_type: TxType::Spend,
       inputs: vec![TxIn {
         prevout: OutPoint {
-          hash: TxHash([0u8; 32]),
+          hash: TxHash::from_bytes([0u8; 32]),
           index: u32::MAX,
         },
         script_sig: Script(Vec::new()),
         sequence: u32::MAX,
       }],
       outputs: vec![TxOut {
-        value: 42,
+        value: bitcoin_units::Amount::from_sat_u32(42),
         script_pubkey: Script(script_pubkey),
       }],
       lock_time: 0,
@@ -657,7 +658,7 @@ mod tests {
 
   fn same_block_spend_bytes() -> Vec<u8> {
     let first = coinbase_tx(&p2pkh_script(0x11), 0x2A, 50_0000_0000);
-    let first_txid = hash::tx_hash(&first).0;
+    let first_txid = hash::tx_hash(&first).to_bytes();
     let second = spend_tx(first_txid, 0, &p2pkh_script(0x22), 49_9999_0000);
 
     let mut raw = Vec::new();

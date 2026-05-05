@@ -4,10 +4,10 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-use dash_primitives::tx::mnhf::MNHFTxPayload;
+use dash_primitives::payload::MnHardFork;
 use serde_json::{json, Value};
 
-pub fn to_json(p: &MNHFTxPayload) -> Value {
+pub fn to_json(p: &MnHardFork) -> Value {
   json!({
     "version": p.version,
     "versionBit": p.version_bit,

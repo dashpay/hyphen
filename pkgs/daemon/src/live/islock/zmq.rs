@@ -57,7 +57,7 @@ async fn upsert_current(pool: &SqlPool, raw_islock: Vec<u8>) -> Result<(), Daemo
   // Dash `rawtxlock` publishes the locked transaction bytes, so hashing the
   // payload yields the same txid used by `sequence` removals and `getislocks`.
   let row = sql::live::islock::IslockCurrentRow {
-    txid: utils::ser_endian(&hash::tx_hash(&raw_islock).0, HashEndian::Ser),
+    txid: utils::ser_endian(&hash::tx_hash(&raw_islock).to_bytes(), HashEndian::Ser),
     raw_islock,
     seen_at: now_epoch_secs(),
   };

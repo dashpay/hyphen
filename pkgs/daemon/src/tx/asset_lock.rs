@@ -4,16 +4,16 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-use dash_primitives::tx::asset_lock::CAssetLockPayload;
+use dash_primitives::payload::AssetLock;
 use serde_json::{json, Value};
 
-pub fn to_json(p: &CAssetLockPayload) -> Value {
+pub fn to_json(p: &AssetLock) -> Value {
   let outputs: Vec<Value> = p
     .credit_outputs
     .iter()
     .map(|o| {
       json!({
-        "value": o.value,
+        "value": o.value.to_sat(),
         "scriptPubKey": hex::encode(o.script_pubkey.as_bytes()),
       })
     })

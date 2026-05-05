@@ -144,8 +144,8 @@ impl BlockInsertPlan {
     Ok(Self {
       height,
       block_hash: block.block_hash(),
-      prev_hash: header.prev_hash.0,
-      merkle_root: header.merkle_root.0,
+      prev_hash: header.prev_hash.to_bytes(),
+      merkle_root: header.merkle_root.to_bytes(),
       time,
       bits,
       nonce,

@@ -8,8 +8,8 @@
 
 use num_bigint::BigUint;
 
-use dash_primitives::block::full::Block;
-use dash_primitives::tx::coinbase::CCbTx;
+use dash_primitives::payload::SpecialPayload;
+use dash_primitives::Block;
 
 /// Coinbase transaction fields extracted from the block.
 #[derive(Debug, Default)]
@@ -29,21 +29,21 @@ pub fn extract_cbtx_fields(block: &Block, _height: u32) -> CbTxFields {
     None => return CbTxFields::default(),
   };
 
-  match tx.payload::<CCbTx>() {
-    Ok(cbtx) => CbTxFields {
-      height: Some(cbtx.height as i32),
+  match tx.decode_payload() {
+    Some(Ok(SpecialPayload::CoinbaseCommitment(cbtx))) => CbTxFields {
+      height: Some(cbtx.height.to_u32() as i32),
       merkle_root: Some(cbtx.merkle_root_mn_list.as_bytes().to_vec()),
       merkle_flags: Some(cbtx.version as i32),
       best_cl_height: cbtx
         .best_cl_height_diff
-        .map(|diff| (cbtx.height as i64 - diff as i64) as i32),
+        .map(|diff| (cbtx.height.to_u32() as i64 - diff as i64) as i32),
       best_cl_sig: cbtx
         .best_cl_signature
         .as_ref()
-        .map(|s| s.as_bytes().to_vec()),
+        .map(|s| s.0.to_vec()),
       credit_pool: cbtx.credit_pool_balance,
     },
-    Err(_) => CbTxFields::default(),
+    _ => CbTxFields::default(),
   }
 }
 

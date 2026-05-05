@@ -10,8 +10,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use crate::sql::SqlPool;
-use dash_primitives::script;
-use dash_primitives::tx::transaction::Transaction as DecodedTransaction;
+use dash_primitives::Transaction as DecodedTransaction;
 use serde_json::Value;
 
 use crate::error::DaemonError;
@@ -72,13 +71,13 @@ pub async fn normalize_tx(
 ) -> Result<NormalizedMempoolTx, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(pool, &tx).await?;
-  let value_out = tx.outputs.iter().map(|output| output.value).sum::<i64>();
+  let value_out = tx.outputs.iter().map(|output| output.value.to_sat() as i64).sum::<i64>();
   let tx_type = crate::tx::tx_type_str(tx.tx_type).to_owned();
   let payload = decode_payload(&tx, txid_bytes);
   let fee = tx
     .inputs
     .iter()
-    .filter(|input| input.prevout.hash.0 != [0u8; 32])
+    .filter(|input| !input.prevout.hash.is_null())
     .try_fold(0i64, |sum, input| {
       let key = (
         input.prevout.hash.as_bytes().to_vec(),
@@ -98,7 +97,7 @@ pub async fn normalize_tx(
   let mut address_rows = Vec::new();
 
   for (index, input) in tx.inputs.iter().enumerate() {
-    let is_coinbase = input.prevout.hash.0 == [0u8; 32];
+    let is_coinbase = input.prevout.hash.is_null();
     let key = (
       input.prevout.hash.as_bytes().to_vec(),
       input.prevout.index as i32,
@@ -126,7 +125,7 @@ pub async fn normalize_tx(
 
   for (index, output) in tx.outputs.iter().enumerate() {
     let address =
-      script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version);
+      dash_script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version);
     if let Some(address) = address.clone() {
       address_rows.push(crate::sql::live::mempool::MempoolAddressTxRow {
         address,
@@ -137,7 +136,7 @@ pub async fn normalize_tx(
     outputs.push(crate::sql::live::mempool::MempoolTxOutputRow {
       txid: txid_bytes.to_vec(),
       vout_index: index as i32,
-      value: output.value,
+      value: output.value.to_sat() as i64,
       script_pubkey: output.script_pubkey.0.clone(),
       address,
     });
@@ -185,7 +184,7 @@ pub async fn build_tx_value(
 ) -> Result<TxDetail, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(pool, &tx).await?;
-  let value_out = tx.outputs.iter().map(|output| output.value).sum::<i64>();
+  let value_out = tx.outputs.iter().map(|output| output.value.to_sat() as i64).sum::<i64>();
   let stored_tx_type = crate::tx::tx_type_str(tx.tx_type);
   let public_tx_type = crate::tx::public_tx_type(
     stored_tx_type,
@@ -228,11 +227,11 @@ pub async fn build_tx_value(
     .enumerate()
     .map(|(index, output)| TxOutput {
       n: index as i32,
-      value: output.value,
+      value: output.value.to_sat() as i64,
       script_pub_key: TxScriptPubKey {
         hex: hex::encode(&output.script_pubkey.0),
       },
-      address: script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version),
+      address: dash_script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version),
       spent: false,
     })
     .collect::<Vec<TxOutput>>();
@@ -387,7 +386,7 @@ pub async fn address_matches(
     let tx = decode_tx(&row.raw_tx)?;
     let prevout_map = load_prevouts(pool, &tx).await?;
     let output_match = tx.outputs.iter().any(|output| {
-      script::derive_address(
+      dash_script::derive_address(
         output.script_pubkey.as_bytes(),
         query.p2pkh_version,
         query.p2sh_version,
@@ -420,7 +419,7 @@ pub async fn address_matches(
       version: i32::from(tx.version),
       tx_type: crate::tx::tx_type_str(tx.tx_type).to_owned(),
       size: row.raw_tx.len(),
-      value_out: tx.outputs.iter().map(|output| output.value).sum::<i64>(),
+      value_out: tx.outputs.iter().map(|output| output.value.to_sat() as i64).sum::<i64>(),
       fee: None,
       last_seen_at: row.last_seen_at,
       islock,
@@ -455,19 +454,19 @@ struct PrevOutput {
 }
 
 fn decode_tx(raw_tx: &[u8]) -> Result<DecodedTransaction, DaemonError> {
-  DecodedTransaction::from_bytes(raw_tx)
+  bitcoin_consensus_encoding::decode_from_slice::<DecodedTransaction>(raw_tx)
     .map_err(|e| DaemonError::RestSource(format!("decode mempool tx: {e}")))
 }
 
 fn decode_payload(tx: &DecodedTransaction, txid_bytes: &[u8]) -> Value {
   if matches!(
     tx.tx_type,
-    dash_primitives::types::tx::TxType::Normal | dash_primitives::types::tx::TxType::Unknown(_)
+    dash_primitives::TxType::Spend | dash_primitives::TxType::Unknown(_)
   ) {
     return Value::Null;
   }
 
-  match dash_primitives::tx::SpecialPayload::decode(tx.tx_type, &tx.extra_payload) {
+  match dash_primitives::payload::SpecialPayload::decode(tx.tx_type, &tx.extra_payload) {
     Ok(payload) => {
       let (_, payload_json) = crate::tx::payload_for_storage(&payload, txid_bytes);
       crate::tx::enrich_api(crate::tx::tx_type_str(tx.tx_type), &payload_json)
@@ -483,13 +482,13 @@ async fn load_prevouts(
   let prev_txids = tx
     .inputs
     .iter()
-    .filter(|input| input.prevout.hash.0 != [0u8; 32])
+    .filter(|input| !input.prevout.hash.is_null())
     .map(|input| input.prevout.hash.as_bytes().to_vec())
     .collect::<Vec<_>>();
   let prev_vouts = tx
     .inputs
     .iter()
-    .filter(|input| input.prevout.hash.0 != [0u8; 32])
+    .filter(|input| !input.prevout.hash.is_null())
     .map(|input| input.prevout.index as i32)
     .collect::<Vec<_>>();
   if prev_txids.is_empty() {
@@ -522,8 +521,6 @@ async fn load_prevouts(
 
 #[cfg(test)]
 mod tests {
-  use dash_primitives::script;
-
   use crate::rest::openapi::TxLive;
 
   use super::{build_tx_value, normalize_tx};
@@ -601,7 +598,7 @@ mod tests {
   async fn build_tx_value_derives_output_addresses() {
     let pool = crate::sql::SqlPool::connect_lazy("postgres://localhost/unused")
       .expect("lazy postgres pool should build");
-    let expected = script::derive_address(
+    let expected = dash_script::derive_address(
       &[
         0x76, 0xa9, 0x14, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
         0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x88, 0xac,

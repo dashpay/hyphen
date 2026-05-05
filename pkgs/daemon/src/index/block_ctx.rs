@@ -6,8 +6,9 @@
 
 //! Immutable per-block derived state shared across stage planning.
 
-use dash_primitives::block::full::Block;
+use dash_primitives::block::tx_byte_ranges;
 use dash_primitives::hash;
+use dash_primitives::Block;
 
 use crate::error::DaemonError;
 
@@ -39,31 +40,31 @@ impl BlockCtx {
   /// Returns `DaemonError` if the block cannot be decoded or any
   /// transaction byte range cannot be derived.
   pub fn from_raw(height: u32, raw: Vec<u8>) -> Result<Self, DaemonError> {
-    let block = Block::from_bytes(&raw)
+    let block = bitcoin_consensus_encoding::decode_from_slice::<Block>(&raw)
       .map_err(|e| DaemonError::Index(format!("parse block {height}: {e}")))?;
-    let tx_byte_ranges = hash::tx_byte_ranges(&raw)
+    let ranges = tx_byte_ranges(&raw)
       .map_err(|e| DaemonError::Index(format!("scan txs {height}: {e}")))?;
-    if tx_byte_ranges.len() != block.transactions.len() {
+    if ranges.len() != block.transactions.len() {
       return Err(DaemonError::Index(format!(
         "block {height} tx range count {} does not match decoded tx count {}",
-        tx_byte_ranges.len(),
+        ranges.len(),
         block.transactions.len()
       )));
     }
 
-    let mut txids = Vec::with_capacity(tx_byte_ranges.len());
-    for (start, end) in &tx_byte_ranges {
-      txids.push(hash::tx_hash(&raw[*start..*end]).0);
+    let mut txids = Vec::with_capacity(ranges.len());
+    for (start, end) in &ranges {
+      txids.push(hash::tx_hash(&raw[*start..*end]).to_bytes());
     }
 
     Ok(Self {
-      block_hash: hash::block_hash(&raw)
+      block_hash: crate::consensus::block_hash(&raw)
         .map_err(|e| DaemonError::Index(format!("hash block {height}: {e}")))?
-        .0,
+        .to_bytes(),
       block,
       raw,
       height,
-      tx_byte_ranges,
+      tx_byte_ranges: ranges,
       txids,
     })
   }

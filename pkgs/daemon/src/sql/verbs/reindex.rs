@@ -217,7 +217,7 @@ mod tests {
   use std::sync::Arc;
   use std::time::{SystemTime, UNIX_EPOCH};
 
-  use dash_primitives::hash;
+  use crate::consensus;
 
   use crate::index::Stage;
   use crate::sql;
@@ -399,9 +399,9 @@ mod tests {
     height: u32,
     raw: &[u8],
   ) -> Result<(), crate::error::DaemonError> {
-    let hash = hash::block_hash(raw)
+    let hash = consensus::block_hash(raw)
       .map_err(|e| crate::error::DaemonError::Index(format!("hash raw reindex test block: {e}")))?
-      .0;
+      .to_bytes();
     let blocks_cf = db
       .cf_handle(crate::db::CF_BLOCKS)
       .ok_or_else(|| crate::error::DaemonError::Db("blocks CF missing".to_owned()))?;
@@ -563,7 +563,7 @@ mod tests {
     sql::bootstrap::reset(&pool).await?;
 
     let raw = crate::tests::minimal_block_bytes(7);
-    let block_hash = hash::block_hash(&raw)?.0.to_vec();
+    let block_hash = consensus::block_hash(&raw)?.to_bytes().to_vec();
     seed_block(&pool, 0, block_hash, vec![0_u8; 32], vec![0xBB_u8; 32]).await?;
     seed_sync_height(&pool, "block", 0).await?;
     seed_sync_height(&pool, "metrics", 0).await?;

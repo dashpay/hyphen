@@ -10,8 +10,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use dash_primitives::script;
-
 use crate::error::DaemonError;
 use crate::index::batch::{BatchSizer, DEFAULT_MIN_BATCH_SIZE};
 use crate::index::runner::{ApplyStagePlanSubstage, PlanConnectSubstage, Substage};
@@ -697,17 +695,17 @@ fn collect_spent_inputs(
 
       for output in &transaction.outputs {
         if let Some(addr) =
-          script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version)
+          dash_script::derive_address(output.script_pubkey.as_bytes(), p2pkh_version, p2sh_version)
         {
           let acc = addr_deltas.entry(addr).or_default();
-          acc.received += output.value;
+          acc.received += output.value.to_sat() as i64;
           acc.utxo_count += 1;
           acc.txids.insert((txid, block_height, block_pos));
         }
       }
 
       for (vin, input) in transaction.inputs.iter().enumerate() {
-        if input.prevout.hash.0 == [0u8; 32] {
+        if input.prevout.hash.is_null() {
           continue;
         }
         input_refs.push(InputRef {
@@ -723,7 +721,7 @@ fn collect_spent_inputs(
       if pos > 0 {
         tx_value_out.push((
           txid,
-          transaction.outputs.iter().map(|output| output.value).sum(),
+          transaction.outputs.iter().map(|output| output.value.to_sat() as i64).sum(),
         ));
       }
     }
