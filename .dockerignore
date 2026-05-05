@@ -1,5 +1,0 @@
-**
-!.python-version
-!contrib/docker/ci.Dockerfile
-!contrib/docker/dev.Dockerfile
-!pyproject.toml

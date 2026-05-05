@@ -40,6 +40,7 @@ pub async fn reset(pool: &sqlx::PgPool) -> Result<(), DaemonError> {
      DROP TABLE IF EXISTS governance_summary CASCADE;
      DROP TABLE IF EXISTS governance_votes CASCADE;
      DROP TABLE IF EXISTS governance_objects CASCADE;
+     DROP TABLE IF EXISTS search_sync_events CASCADE;
      DROP TABLE IF EXISTS network_snapshot CASCADE;
      DROP TABLE IF EXISTS validator_protx_snapshot CASCADE;
      DROP TABLE IF EXISTS chainlock_snapshot CASCADE;

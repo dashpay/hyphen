@@ -7,11 +7,15 @@ import JSON5 from "json5";
 interface WebUiTokenSlice {
   readonly base: Readonly<Record<string, string>>;
   readonly light?: Readonly<Record<string, string>>;
+  readonly yellow?: Readonly<Record<string, string>>;
+  readonly yellowLight?: Readonly<Record<string, string>>;
 }
 
 interface WebUiTokenBundle {
   readonly base: Readonly<Record<string, string>>;
   readonly light: Readonly<Record<string, string>>;
+  readonly yellow: Readonly<Record<string, string>>;
+  readonly yellowLight: Readonly<Record<string, string>>;
 }
 
 const TOKEN_DIR = path.resolve("src/tokens");
@@ -31,7 +35,7 @@ function renderCssVariables(entries: Readonly<Record<string, string>>): string {
 }
 
 function renderThemeCss(bundle: WebUiTokenBundle): string {
-  return [
+  const parts = [
     ":root {",
     renderCssVariables(bundle.base),
     "}",
@@ -40,7 +44,27 @@ function renderThemeCss(bundle: WebUiTokenBundle): string {
     renderCssVariables(bundle.light),
     "}",
     "",
-  ].join("\n");
+  ];
+
+  if (Object.keys(bundle.yellow).length > 0) {
+    parts.push(
+      ":root.theme-yellow {",
+      renderCssVariables(bundle.yellow),
+      "}",
+      "",
+    );
+  }
+
+  if (Object.keys(bundle.yellowLight).length > 0) {
+    parts.push(
+      ":root.theme-yellow.theme-light {",
+      renderCssVariables(bundle.yellowLight),
+      "}",
+      "",
+    );
+  }
+
+  return parts.join("\n");
 }
 
 function renderTokensTs(bundle: WebUiTokenBundle): string {
@@ -77,10 +101,20 @@ async function loadBundle(): Promise<WebUiTokenBundle> {
         ...bundle.light,
         ...(slice.light ?? {}),
       },
+      yellow: {
+        ...bundle.yellow,
+        ...(slice.yellow ?? {}),
+      },
+      yellowLight: {
+        ...bundle.yellowLight,
+        ...(slice.yellowLight ?? {}),
+      },
     }),
     {
       base: {},
       light: {},
+      yellow: {},
+      yellowLight: {},
     }
   );
 }

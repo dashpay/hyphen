@@ -28,6 +28,18 @@
         }
       })();
     </script>
+    <script>
+      (() => {
+        try {
+          const xhr = new XMLHttpRequest();
+          xhr.open("GET", "/webui.conf", false);
+          xhr.send();
+          if (xhr.status !== 200) return;
+          const m = xhr.responseText.match(/^\s*theme\s*=\s*"([a-z]+)"/m);
+          if (m && m[1] !== "blue") document.documentElement.classList.add("theme-" + m[1]);
+        } catch {}
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
