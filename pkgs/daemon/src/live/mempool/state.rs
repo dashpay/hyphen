@@ -173,7 +173,7 @@ async fn upsert_recent_tx(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin mempool recent tx insert: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin mempool recent tx insert: {e}"), code: None })?;
   sql::live::mempool::upsert_recent_tx(&mut tx, &row).await?;
   sql::live::mempool::upsert_tx_detail(
     &mut tx,
@@ -186,7 +186,7 @@ async fn upsert_recent_tx(
   sql::live::mempool::prune_recent_txs(&mut tx, keep as i64).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit mempool recent tx insert: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit mempool recent tx insert: {e}"), code: None })?;
   Ok(())
 }
 
@@ -194,12 +194,12 @@ async fn delete_recent_tx(pool: &SqlPool, txid: [u8; 32]) -> Result<(), DaemonEr
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin mempool recent tx delete: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin mempool recent tx delete: {e}"), code: None })?;
   sql::live::mempool::delete_recent_tx(&mut tx, &txid).await?;
   sql::live::mempool::delete_tx_detail(&mut tx, &txid).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit mempool recent tx delete: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit mempool recent tx delete: {e}"), code: None })?;
   Ok(())
 }
 

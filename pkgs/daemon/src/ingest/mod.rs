@@ -235,7 +235,7 @@ impl RestSource for FakeRestSource {
 
   async fn block_hash(&self, height: u32) -> Result<String, crate::error::DaemonError> {
     self.hashes.get(&height).cloned().ok_or_else(|| {
-      crate::error::DaemonError::RestSource(format!("missing benchmark hash for height {height}"))
+      crate::error::DaemonError::RestSource { message: format!("missing benchmark hash for height {height}"), kind: crate::error::RestErrorKind::Other }
     })
   }
 
@@ -251,7 +251,7 @@ impl RestSource for FakeRestSource {
         }
       })
       .ok_or_else(|| {
-        crate::error::DaemonError::RestSource(format!("missing benchmark block for hash {hash}"))
+        crate::error::DaemonError::RestSource { message: format!("missing benchmark block for hash {hash}"), kind: crate::error::RestErrorKind::Other }
       })
   }
 
@@ -263,14 +263,16 @@ impl RestSource for FakeRestSource {
       .iter()
       .map(|height| {
         let hash = self.hashes.get(height).cloned().ok_or_else(|| {
-          crate::error::DaemonError::RestSource(format!(
-            "missing benchmark hash for height {height}"
-          ))
+          crate::error::DaemonError::RestSource {
+            message: format!("missing benchmark hash for height {height}"),
+            kind: crate::error::RestErrorKind::Other,
+          }
         })?;
         let raw = self.blocks.get(height).cloned().ok_or_else(|| {
-          crate::error::DaemonError::RestSource(format!(
-            "missing benchmark block for height {height}"
-          ))
+          crate::error::DaemonError::RestSource {
+            message: format!("missing benchmark block for height {height}"),
+            kind: crate::error::RestErrorKind::Other,
+          }
         })?;
         Ok((hash, raw))
       })

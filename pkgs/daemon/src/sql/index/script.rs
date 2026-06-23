@@ -7,6 +7,7 @@
 //! Script index SQL operations.
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 pub async fn ensure_output_history_partition(
   tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -15,7 +16,7 @@ pub async fn ensure_output_history_partition(
   sqlx::query(&crate::sql::partition::ensure_script_output_history_partition_sql(height))
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("ensure script history partition: {e}")))?;
+    .map_err(|e| pg_err("ensure script history partition", e))?;
   Ok(())
 }
 
@@ -35,12 +36,12 @@ pub async fn restore_output_addresses(
   .bind(height as i32)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("restore output addr at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("restore output addr at {height}"), e))?;
 
   sqlx::query("DELETE FROM script_output_history WHERE height = $1")
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete script history at {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete script history at {height}"), e))?;
   Ok(())
 }

@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 /// Apply or refresh the consolidated schema.
 ///
@@ -25,7 +26,7 @@ pub async fn bootstrap(pool: &PgPool) -> Result<(), DaemonError> {
   )
   .fetch_one(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("check schema: {e}")))?;
+  .map_err(|e| pg_err("check schema", e))?;
 
   if !schema_present {
     let public_table_count: i64 = sqlx::query_scalar(
@@ -36,13 +37,14 @@ pub async fn bootstrap(pool: &PgPool) -> Result<(), DaemonError> {
     )
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("check blank schema: {e}")))?;
+    .map_err(|e| pg_err("check blank schema", e))?;
 
     if public_table_count != 0 {
-      return Err(DaemonError::Pg(
-        "refusing to apply schema to non-blank database without sync_state; recreate the database"
+      return Err(DaemonError::Pg {
+        message: "refusing to apply schema to non-blank database without sync_state; recreate the database"
           .to_owned(),
-      ));
+        code: None,
+      });
     }
   }
 
@@ -55,7 +57,7 @@ pub async fn bootstrap(pool: &PgPool) -> Result<(), DaemonError> {
   sqlx::raw_sql(super::SCHEMA)
     .execute(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("apply schema: {e}")))?;
+    .map_err(|e| pg_err("apply schema", e))?;
   crate::sql::partition::ensure_core_history_partitions(pool).await?;
   crate::sql::partition::ensure_core_canonical_partitions(pool).await?;
   crate::sql::progress::ensure_chain_progress(pool).await?;

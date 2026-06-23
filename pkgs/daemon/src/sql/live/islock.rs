@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 /// One currently known InstantSend tx-lock row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +45,7 @@ pub async fn upsert_current(
   .bind(row.seen_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert islock current: {e}")))?;
+  .map_err(|e| pg_err("upsert islock current", e))?;
   Ok(())
 }
 
@@ -61,7 +62,7 @@ pub async fn delete_current(
     .bind(txid)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete islock current: {e}")))?;
+    .map_err(|e| pg_err("delete islock current", e))?;
   Ok(())
 }
 
@@ -84,7 +85,7 @@ pub async fn current_by_txid(
   .bind(txid)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read islock current: {e}")))?;
+  .map_err(|e| pg_err("read islock current", e))?;
 
   Ok(row.map(|row| IslockCurrentRow {
     txid: row.get("txid"),

@@ -12,6 +12,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 use crate::tx::ValidatorInsert;
 
 const PUBLIC_VALIDATOR_TYPE_SQL: &str = "CASE
@@ -113,7 +114,7 @@ pub async fn block_times_by_height(
   .bind(heights)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read validator block times: {e}")))?;
+  .map_err(|e| pg_err("read validator block times", e))?;
   Ok(rows.into_iter().collect())
 }
 
@@ -296,7 +297,7 @@ pub async fn list_validators(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("list validators: {e}")))?;
+  .map_err(|e| pg_err("list validators", e))?;
 
   Ok(rows.into_iter().map(validator_row).collect())
 }
@@ -321,7 +322,7 @@ pub async fn validator(
     .bind(pro_tx_hash)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read validator: {e}")))?
+    .map_err(|e| pg_err("read validator", e))?
     .map(validator_row),
   )
 }
@@ -350,7 +351,7 @@ pub async fn historical_validator(
   .bind(pro_tx_hash)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read historical validator: {e}")))?;
+  .map_err(|e| pg_err("read historical validator", e))?;
 
   let Some(row) = row else {
     return Ok(None);
@@ -424,7 +425,7 @@ pub async fn validator_history(
   .bind(pro_tx_hash)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read validator history: {e}")))?;
+  .map_err(|e| pg_err("read validator history", e))?;
 
   Ok(
     rows
@@ -461,7 +462,7 @@ pub async fn validator_collateral_spend(
   .bind(collateral_index)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read validator collateral spend: {e}")))?;
+  .map_err(|e| pg_err("read validator collateral spend", e))?;
 
   Ok(row.map(|row| ValidatorCollateralSpendRow {
     spent_txid: row.get("spent_txid"),
@@ -491,7 +492,7 @@ pub async fn search_validators_by_prefix(
   .bind(limit)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("search validator prefix: {e}")))?;
+  .map_err(|e| pg_err("search validator prefix", e))?;
 
   Ok(
     rows
@@ -539,7 +540,7 @@ async fn snapshot(
   .bind(pro_tx_hash)
   .fetch_optional(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("snapshot validator: {e}")))?;
+  .map_err(|e| pg_err("snapshot validator", e))?;
 
   let snapshot = row.as_ref().map(|row| ValidatorSnapshot {
     collateral_hash: row.get("collateral_hash"),
@@ -605,7 +606,7 @@ async fn snapshot(
   .bind(snapshot.as_ref().and_then(|s| s.last_updated_height))
   .execute(conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert validator history: {e}")))?;
+  .map_err(|e| pg_err("insert validator history", e))?;
 
   Ok(())
 }
@@ -677,7 +678,7 @@ pub async fn insert_validator(
   .bind(&v.operator_payout_addr)
   .execute(conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert validator: {e}")))?;
+  .map_err(|e| pg_err("insert validator", e))?;
   Ok(())
 }
 
@@ -699,7 +700,7 @@ async fn resolve_collateral_address(
   .bind(collateral_index)
   .fetch_optional(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("resolve collateral address: {e}")))?;
+  .map_err(|e| pg_err("resolve collateral address", e))?;
 
   let Some(row) = row else {
     tracing::debug!(
@@ -744,7 +745,7 @@ pub async fn update_service(
   .bind(pro_tx_hash)
   .execute(conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("update validator service: {e}")))?;
+  .map_err(|e| pg_err("update validator service", e))?;
   Ok(())
 }
 
@@ -777,7 +778,7 @@ pub async fn update_registrar(
   .bind(pro_tx_hash)
   .execute(conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("update validator registrar: {e}")))?;
+  .map_err(|e| pg_err("update validator registrar", e))?;
   Ok(())
 }
 
@@ -803,7 +804,7 @@ pub async fn revoke(
   .bind(pro_tx_hash)
   .execute(conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("revoke validator: {e}")))?;
+  .map_err(|e| pg_err("revoke validator", e))?;
   Ok(())
 }
 
@@ -830,7 +831,7 @@ pub async fn reap_spent_collateral(
   .bind(collateral_index)
   .fetch_all(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("find validator by spent collateral: {e}")))?;
+  .map_err(|e| pg_err("find validator by spent collateral", e))?;
 
   if pro_tx_hashes.is_empty() {
     return Ok(());
@@ -849,7 +850,7 @@ pub async fn reap_spent_collateral(
   .bind(collateral_index)
   .execute(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("reap validator by spent collateral: {e}")))?;
+  .map_err(|e| pg_err("reap validator by spent collateral", e))?;
   Ok(())
 }
 
@@ -876,7 +877,7 @@ pub async fn restore_history(
   .bind(height as i32)
   .fetch_all(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read validator history: {e}")))?;
+  .map_err(|e| pg_err("read validator history", e))?;
 
   let mut existing = std::collections::BTreeMap::new();
   let mut deleted = std::collections::BTreeSet::new();
@@ -964,21 +965,21 @@ pub async fn restore_history(
       .build()
       .execute(&mut **tx)
       .await
-      .map_err(|e| DaemonError::Pg(format!("restore validator rows: {e}")))?;
+      .map_err(|e| pg_err("restore validator rows", e))?;
   }
   if !deleted.is_empty() {
     sqlx::query("DELETE FROM validators WHERE pro_tx_hash = ANY($1::bytea[])")
       .bind(deleted.into_iter().collect::<Vec<_>>())
       .execute(&mut **tx)
       .await
-      .map_err(|e| DaemonError::Pg(format!("delete validator rows: {e}")))?;
+      .map_err(|e| pg_err("delete validator rows", e))?;
   }
 
   sqlx::query("DELETE FROM validator_history WHERE height = $1")
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete validator history: {e}")))?;
+    .map_err(|e| pg_err("delete validator history", e))?;
   Ok(())
 }
 
@@ -991,7 +992,7 @@ pub async fn refresh_validator_counts(conn: &mut sqlx::PgConnection) -> Result<(
   sqlx::query("DELETE FROM validator_counts")
     .execute(&mut *conn)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear validator counts: {e}")))?;
+    .map_err(|e| pg_err("clear validator counts", e))?;
 
   sqlx::query(
     "INSERT INTO validator_counts (status, validator_type, total)
@@ -1008,7 +1009,7 @@ pub async fn refresh_validator_counts(conn: &mut sqlx::PgConnection) -> Result<(
   )
   .execute(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh validator counts: {e}")))?;
+  .map_err(|e| pg_err("refresh validator counts", e))?;
   Ok(())
 }
 
@@ -1023,7 +1024,7 @@ pub async fn refresh_validator_counts_tx(
   sqlx::query("DELETE FROM validator_counts")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear validator counts: {e}")))?;
+    .map_err(|e| pg_err("clear validator counts", e))?;
 
   sqlx::query(
     "INSERT INTO validator_counts (status, validator_type, total)
@@ -1040,7 +1041,7 @@ pub async fn refresh_validator_counts_tx(
   )
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh validator counts: {e}")))?;
+  .map_err(|e| pg_err("refresh validator counts", e))?;
   Ok(())
 }
 
@@ -1065,7 +1066,7 @@ pub async fn validator_count(
   .bind(validator_type)
   .fetch_one(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read validator count: {e}")))?;
+  .map_err(|e| pg_err("read validator count", e))?;
   Ok(ValidatorCountRow { total })
 }
 

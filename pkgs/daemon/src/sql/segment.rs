@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use super::pg_err;
 
 pub const PARTITION_BLOCK_SPAN: i32 = 100_000;
 pub const HISTORY_PARTITION_BLOCK_SPAN: i32 = PARTITION_BLOCK_SPAN;
@@ -72,7 +73,7 @@ async fn execute_partition_sqls(
     sqlx::query(sql)
       .execute(pool)
       .await
-      .map_err(|e| DaemonError::Pg(format!("{context}: {e}")))?;
+      .map_err(|e| pg_err(&format!("{context}"), e))?;
   }
   Ok(())
 }

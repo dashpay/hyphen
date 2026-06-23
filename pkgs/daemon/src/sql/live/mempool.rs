@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 /// Current mempool summary snapshot stored in PostgreSQL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +106,7 @@ pub async fn upsert_summary(
   .bind(summary.updated_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert mempool summary: {e}")))?;
+  .map_err(|e| pg_err("upsert mempool summary", e))?;
   Ok(())
 }
 
@@ -132,7 +133,7 @@ pub async fn upsert_recent_tx(
   .bind(row.last_seen_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert recent mempool tx: {e}")))?;
+  .map_err(|e| pg_err("upsert recent mempool tx", e))?;
   Ok(())
 }
 
@@ -149,7 +150,7 @@ pub async fn delete_recent_tx(
     .bind(txid)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete recent mempool tx: {e}")))?;
+    .map_err(|e| pg_err("delete recent mempool tx", e))?;
   Ok(())
 }
 
@@ -196,23 +197,23 @@ pub async fn upsert_tx_detail(
   .bind(detail.last_seen_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert mempool tx detail: {e}")))?;
+  .map_err(|e| pg_err("upsert mempool tx detail", e))?;
 
   sqlx::query("DELETE FROM mempool_tx_inputs WHERE txid = $1")
     .bind(&detail.txid)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool tx inputs: {e}")))?;
+    .map_err(|e| pg_err("clear mempool tx inputs", e))?;
   sqlx::query("DELETE FROM mempool_tx_outputs WHERE txid = $1")
     .bind(&detail.txid)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool tx outputs: {e}")))?;
+    .map_err(|e| pg_err("clear mempool tx outputs", e))?;
   sqlx::query("DELETE FROM mempool_address_txs WHERE txid = $1")
     .bind(&detail.txid)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool address txs: {e}")))?;
+    .map_err(|e| pg_err("clear mempool address txs", e))?;
 
   if !inputs.is_empty() {
     sqlx::query(
@@ -234,7 +235,7 @@ pub async fn upsert_tx_detail(
     .bind(inputs.iter().map(|row| row.prev_value).collect::<Vec<_>>())
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert mempool tx inputs: {e}")))?;
+    .map_err(|e| pg_err("insert mempool tx inputs", e))?;
   }
 
   if !outputs.is_empty() {
@@ -267,7 +268,7 @@ pub async fn upsert_tx_detail(
     )
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert mempool tx outputs: {e}")))?;
+    .map_err(|e| pg_err("insert mempool tx outputs", e))?;
   }
 
   if !address_rows.is_empty() {
@@ -295,7 +296,7 @@ pub async fn upsert_tx_detail(
     )
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert mempool address txs: {e}")))?;
+    .map_err(|e| pg_err("insert mempool address txs", e))?;
   }
 
   Ok(())
@@ -314,7 +315,7 @@ pub async fn delete_tx_detail(
     .bind(txid)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete mempool tx detail: {e}")))?;
+    .map_err(|e| pg_err("delete mempool tx detail", e))?;
   Ok(())
 }
 
@@ -329,23 +330,23 @@ pub async fn clear_recent_snapshot(
   sqlx::query("DELETE FROM mempool_address_txs")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool address txs: {e}")))?;
+    .map_err(|e| pg_err("clear mempool address txs", e))?;
   sqlx::query("DELETE FROM mempool_tx_outputs")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool tx outputs: {e}")))?;
+    .map_err(|e| pg_err("clear mempool tx outputs", e))?;
   sqlx::query("DELETE FROM mempool_tx_inputs")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool tx inputs: {e}")))?;
+    .map_err(|e| pg_err("clear mempool tx inputs", e))?;
   sqlx::query("DELETE FROM mempool_tx_details")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear mempool tx details: {e}")))?;
+    .map_err(|e| pg_err("clear mempool tx details", e))?;
   sqlx::query("DELETE FROM mempool_recent_txs")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear recent mempool txs: {e}")))?;
+    .map_err(|e| pg_err("clear recent mempool txs", e))?;
   Ok(())
 }
 
@@ -370,7 +371,7 @@ pub async fn prune_recent_txs(
   .bind(keep)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("prune recent mempool txs: {e}")))?;
+  .map_err(|e| pg_err("prune recent mempool txs", e))?;
   Ok(())
 }
 
@@ -389,7 +390,7 @@ pub async fn summary(pool: &PgPool) -> Result<Option<MempoolSummaryRow>, DaemonE
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read mempool summary: {e}")))?;
+  .map_err(|e| pg_err("read mempool summary", e))?;
 
   Ok(row.map(|row| MempoolSummaryRow {
     tx_count: row.get("tx_count"),
@@ -417,7 +418,7 @@ pub async fn recent_txs(pool: &PgPool, limit: i64) -> Result<Vec<MempoolRecentTx
   .bind(limit)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read recent mempool txs: {e}")))?;
+  .map_err(|e| pg_err("read recent mempool txs", e))?;
 
   Ok(
     rows
@@ -451,7 +452,7 @@ pub async fn recent_tx_by_txid(
   .bind(txid)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read recent mempool tx: {e}")))?;
+  .map_err(|e| pg_err("read recent mempool tx", e))?;
 
   Ok(row.map(|row| MempoolRecentTxRow {
     txid: row.get("txid"),
@@ -480,7 +481,7 @@ pub async fn tx_detail(
   .bind(txid)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read mempool tx detail: {e}")))?;
+  .map_err(|e| pg_err("read mempool tx detail", e))?;
 
   Ok(row.map(|row| MempoolTxDetailRow {
     txid: row.get("txid"),
@@ -538,7 +539,7 @@ pub async fn recent_tx_details(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read recent mempool tx details: {e}")))?;
+  .map_err(|e| pg_err("read recent mempool tx details", e))?;
 
   Ok(
     rows
@@ -578,7 +579,7 @@ pub async fn tx_inputs(pool: &PgPool, txid: &[u8]) -> Result<Vec<MempoolTxInputR
   .bind(txid)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read mempool tx inputs: {e}")))?;
+  .map_err(|e| pg_err("read mempool tx inputs", e))?;
 
   Ok(
     rows
@@ -618,7 +619,7 @@ pub async fn tx_outputs(
   .bind(txid)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read mempool tx outputs: {e}")))?;
+  .map_err(|e| pg_err("read mempool tx outputs", e))?;
 
   Ok(
     rows
@@ -662,7 +663,7 @@ pub async fn address_txs_page(
   .bind(offset)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read mempool address txs: {e}")))?;
+  .map_err(|e| pg_err("read mempool address txs", e))?;
 
   Ok(
     rows
@@ -696,7 +697,7 @@ pub async fn address_tx_count(pool: &PgPool, address: &str) -> Result<i64, Daemo
     .bind(address)
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("count mempool address txs: {e}")))
+    .map_err(|e| pg_err("count mempool address txs", e))
 }
 
 #[cfg(test)]

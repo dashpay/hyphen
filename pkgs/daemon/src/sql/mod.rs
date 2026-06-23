@@ -30,6 +30,19 @@ use sqlx::PgPool;
 use crate::config::PostgresConfig;
 use crate::error::DaemonError;
 
+/// Build a [`DaemonError::Pg`] from an [`sqlx::Error`], preserving the SQLSTATE
+/// code when the underlying driver exposes one.
+pub fn pg_err(context: &str, error: sqlx::Error) -> DaemonError {
+  let code = error
+    .as_database_error()
+    .and_then(|db| db.code())
+    .map(|c| c.to_string());
+  DaemonError::Pg {
+    message: format!("{context}: {error}"),
+    code,
+  }
+}
+
 pub const DEFAULT_SLOW_QUERY_MS: u64 = 500;
 
 pub const DEFAULT_WRITE_POOL_SIZE: usize = 20;
@@ -180,7 +193,7 @@ async fn create_named_pool(
     .acquire_timeout(std::time::Duration::from_secs(acquire_timeout_secs))
     .connect_with(opts)
     .await
-    .map_err(|e| DaemonError::Pg(format!("failed to connect {pool_name} pool: {e}")))?;
+    .map_err(|e| pg_err(&format!("failed to connect {pool_name} pool"), e))?;
   tracing::info!(pool = pool_name, "postgres pool created");
   Ok(pool)
 }
@@ -204,7 +217,7 @@ pub async fn cancel_daemon_backends(admin_pool: &PgPool) -> Result<u64, DaemonEr
   .bind(format!("{DAEMON_PG_APP_PREFIX}%"))
   .fetch_one(admin_pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("cancel daemon postgres backends: {e}")))?;
+  .map_err(|e| pg_err("cancel daemon postgres backends", e))?;
   Ok(cancelled.max(0) as u64)
 }
 

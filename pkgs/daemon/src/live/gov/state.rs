@@ -13,7 +13,7 @@ use crate::sql::SqlPool;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
 use crate::live::stream::{LiveEvent, StreamHub};
 use crate::live::warn;
@@ -36,12 +36,12 @@ pub async fn refresh_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin governance snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin governance snapshot tx: {e}"), code: None })?;
   sql::live::gov::replace_objects(&mut tx, &object_rows).await?;
   sql::live::gov::replace_votes(&mut tx, &vote_rows).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit governance snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit governance snapshot tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     publish_snapshot_events(stream_hub, &object_rows, &vote_rows);
   }
@@ -82,11 +82,11 @@ async fn refresh_votes_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin governance vote refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin governance vote refresh tx: {e}"), code: None })?;
   sql::live::gov::replace_votes(&mut tx, &vote_rows).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit governance vote refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit governance vote refresh tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     publish_snapshot_events(stream_hub, object_rows, &vote_rows);
   }
@@ -107,12 +107,12 @@ async fn refresh_votes_for_object_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin governance targeted vote refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin governance targeted vote refresh tx: {e}"), code: None })?;
   sql::live::gov::upsert_object(&mut tx, &object_row).await?;
   sql::live::gov::replace_votes_for_object(&mut tx, object_hash, &vote_rows).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit governance targeted vote refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit governance targeted vote refresh tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     for vote in &vote_rows {
       stream_hub.publish(LiveEvent::governance_vote(
@@ -143,12 +143,12 @@ async fn refresh_object_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin governance object refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin governance object refresh tx: {e}"), code: None })?;
   sql::live::gov::upsert_object(&mut tx, &object_row).await?;
   sql::live::gov::replace_votes_for_object(&mut tx, object_hash, &vote_rows).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit governance object refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit governance object refresh tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     publish_snapshot_events(stream_hub, &[object_row], &vote_rows);
   }
@@ -193,7 +193,7 @@ fn build_object_row(
   updated_at: i64,
 ) -> Result<sql::live::gov::GovernanceObjectRow, DaemonError> {
   let object_hash = hex::decode(hash_hex)
-    .map_err(|e| DaemonError::RestSource(format!("decode governance hash {hash_hex}: {e}")))?;
+    .map_err(|e| DaemonError::RestSource { message: format!("decode governance hash {hash_hex}: {e}"), kind: RestErrorKind::Other })?;
   Ok(sql::live::gov::GovernanceObjectRow {
     object_hash,
     parent_hash: None,
@@ -205,7 +205,7 @@ fn build_object_row(
       .unwrap_or_default() as i32,
     data_json: Some(value.clone()),
     raw_object: serde_json::to_vec(value)
-      .map_err(|e| DaemonError::RestSource(format!("encode governance object: {e}")))?,
+      .map_err(|e| DaemonError::RestSource { message: format!("encode governance object: {e}"), kind: RestErrorKind::Other })?,
     updated_at,
   })
 }
@@ -220,7 +220,7 @@ async fn fetch_vote_rows(
   let mut rows = Vec::with_capacity(votes.len());
   for (vote_hash_hex, vote_text) in votes {
     let vote_hash = hex::decode(&vote_hash_hex).map_err(|e| {
-      DaemonError::RestSource(format!("decode governance vote hash {vote_hash_hex}: {e}"))
+      DaemonError::RestSource { message: format!("decode governance vote hash {vote_hash_hex}: {e}"), kind: RestErrorKind::Other }
     })?;
     let (signal, outcome, vote_time) = parse_vote_fields(&vote_text);
     rows.push(sql::live::gov::GovernanceVoteRow {

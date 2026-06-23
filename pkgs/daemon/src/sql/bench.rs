@@ -56,15 +56,15 @@ pub async fn prime_database(database_url: &str, dataset: BenchDataset) -> Result
   let schema_name = schema_name(dataset);
   let mut admin = sqlx::PgConnection::connect(database_url)
     .await
-    .map_err(|error| DaemonError::Pg(format!("connect benchmark admin: {error}")))?;
+    .map_err(|error| pg_err("connect benchmark admin", error))?;
   admin
     .execute(format!("DROP SCHEMA IF EXISTS {schema_name} CASCADE").as_str())
     .await
-    .map_err(|error| DaemonError::Pg(format!("drop benchmark schema {schema_name}: {error}")))?;
+    .map_err(|error| pg_err(&format!("drop benchmark schema {schema_name}"), error))?;
   admin
     .execute(format!("CREATE SCHEMA {schema_name}").as_str())
     .await
-    .map_err(|error| DaemonError::Pg(format!("create benchmark schema {schema_name}: {error}")))?;
+    .map_err(|error| pg_err(&format!("create benchmark schema {schema_name}"), error))?;
   install_config_store(&mut admin).await?;
   drop(admin);
 
@@ -72,7 +72,7 @@ pub async fn prime_database(database_url: &str, dataset: BenchDataset) -> Result
   sqlx::raw_sql(SCHEMA_SQL)
     .execute(&pool)
     .await
-    .map_err(|error| DaemonError::Pg(format!("apply benchmark schema: {error}")))?;
+    .map_err(|error| pg_err("apply benchmark schema", error))?;
   crate::sql::segment::ensure_core_history_partitions(&pool).await?;
   install_manifest(&pool, dataset).await?;
   spent::seed(&pool, dataset).await?;
@@ -82,10 +82,10 @@ pub async fn prime_database(database_url: &str, dataset: BenchDataset) -> Result
   sqlx::query("ANALYZE")
     .execute(&pool)
     .await
-    .map_err(|error| DaemonError::Pg(format!("analyze benchmark schema: {error}")))?;
+    .map_err(|error| pg_err("analyze benchmark schema", error))?;
   let mut admin = sqlx::PgConnection::connect(database_url)
     .await
-    .map_err(|error| DaemonError::Pg(format!("reconnect benchmark admin: {error}")))?;
+    .map_err(|error| pg_err("reconnect benchmark admin", error))?;
   write_dataset_config(&mut admin, dataset).await?;
   Ok(())
 }
@@ -154,7 +154,7 @@ async fn connect_pool(
     })
     .connect_with(options)
     .await
-    .map_err(|error| DaemonError::Pg(format!("connect benchmark pool: {error}")))
+    .map_err(|error| pg_err("connect benchmark pool", error))
 }
 
 async fn install_manifest(
@@ -171,7 +171,7 @@ async fn install_manifest(
   )
   .execute(pool)
   .await
-  .map_err(|error| DaemonError::Pg(format!("create benchmark manifest: {error}")))?;
+  .map_err(|error| pg_err("create benchmark manifest", error))?;
 
   sqlx::query(
     "INSERT INTO bench_manifest (singleton_key, schema_version, dataset, seeded_at)
@@ -186,7 +186,7 @@ async fn install_manifest(
   .bind(setup_epoch())
   .execute(pool)
   .await
-  .map_err(|error| DaemonError::Pg(format!("write benchmark manifest: {error}")))?;
+  .map_err(|error| pg_err("write benchmark manifest", error))?;
   Ok(())
 }
 
@@ -200,7 +200,7 @@ async fn install_config_store(connection: &mut sqlx::PgConnection) -> Result<(),
   )
   .execute(connection)
   .await
-  .map_err(|error| DaemonError::Pg(format!("create benchmark config store: {error}")))?;
+  .map_err(|error| pg_err("create benchmark config store", error))?;
   Ok(())
 }
 
@@ -220,7 +220,7 @@ async fn write_dataset_config(
   .bind(setup_epoch())
   .execute(connection)
   .await
-  .map_err(|error| DaemonError::Pg(format!("write benchmark dataset config: {error}")))?;
+  .map_err(|error| pg_err("write benchmark dataset config", error))?;
   Ok(())
 }
 
@@ -262,6 +262,7 @@ async fn verify_manifest(
 #[cfg(test)]
 mod tests {
   use hyphend::bench::BenchDataset;
+use super::pg_err;
 
   #[test]
   fn schema_name_is_stable_per_dataset() {

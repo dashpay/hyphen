@@ -19,8 +19,24 @@ use serde_json::Value;
 
 use super::RestSource;
 use crate::config::CoreConfig;
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::policy::api::{API_REQUEST_TIMEOUT_SECS, API_TCP_KEEPALIVE_SECS};
+
+/// Build a [`DaemonError::RestSource`] from a [`reqwest::Error`], classifying
+/// the transport failure into a [`RestErrorKind`].
+pub(crate) fn rest_err(context: &str, error: reqwest::Error) -> DaemonError {
+  let kind = if error.is_connect() {
+    RestErrorKind::Connect
+  } else if error.is_timeout() {
+    RestErrorKind::Timeout
+  } else {
+    RestErrorKind::Other
+  };
+  DaemonError::RestSource {
+    message: format!("{context}: {error}"),
+    kind,
+  }
+}
 
 const MAX_RETRIES: u32 = 3;
 const INITIAL_RETRY_DELAY_MS: u64 = 250;
@@ -106,7 +122,7 @@ impl CoreRestClient {
       .tcp_keepalive(Duration::from_secs(API_TCP_KEEPALIVE_SECS))
       .pool_max_idle_per_host(concurrency)
       .build()
-      .map_err(|e| DaemonError::RestSource(e.to_string()))?;
+      .map_err(|e| rest_err("build REST client", e))?;
     Ok(Self {
       http,
       rest_base,
@@ -125,6 +141,7 @@ impl CoreRestClient {
     let url = format!("{}{}", self.rest_base, path);
     let mut delay = Duration::from_millis(INITIAL_RETRY_DELAY_MS);
     let start = Instant::now();
+    let mut last_kind = RestErrorKind::Other;
 
     for attempt in 0..MAX_RETRIES {
       let result = self.http.get(&url).send().await;
@@ -133,6 +150,11 @@ impl CoreRestClient {
         Ok(r) => r,
         Err(e) if e.is_connect() || e.is_timeout() => {
           let category = if e.is_timeout() { "timeout" } else { "connect" };
+          last_kind = if e.is_timeout() {
+            RestErrorKind::Timeout
+          } else {
+            RestErrorKind::Connect
+          };
           self.metrics.record_error(category);
           tracing::debug!(attempt, %url, %e, "REST request failed, retrying");
           tokio::time::sleep(jitter(delay)).await;
@@ -141,19 +163,21 @@ impl CoreRestClient {
         }
         Err(e) => {
           self.metrics.record_error("other");
-          return Err(DaemonError::RestSource(e.to_string()));
+          return Err(rest_err("REST request", e));
         }
       };
 
       if resp.status() == reqwest::StatusCode::NOT_FOUND {
         self.metrics.record_error("404");
-        return Err(DaemonError::RestSource(format!(
-          "REST 404 for {url} -- is `-rest=1` set in dash.conf?"
-        )));
+        return Err(DaemonError::RestSource {
+          message: format!("REST 404 for {url} -- is `-rest=1` set in dash.conf?"),
+          kind: RestErrorKind::Http(404),
+        });
       }
       if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
         || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
       {
+        last_kind = RestErrorKind::Http(resp.status().as_u16());
         self
           .metrics
           .record_error(&resp.status().as_u16().to_string());
@@ -169,10 +193,10 @@ impl CoreRestClient {
         self
           .metrics
           .record_error(&resp.status().as_u16().to_string());
-        return Err(DaemonError::RestSource(format!(
-          "REST HTTP {}",
-          resp.status()
-        )));
+        return Err(DaemonError::RestSource {
+          message: format!("REST HTTP {}", resp.status()),
+          kind: RestErrorKind::Http(resp.status().as_u16()),
+        });
       }
       self
         .metrics
@@ -181,9 +205,10 @@ impl CoreRestClient {
     }
 
     self.metrics.record_error("max_retries");
-    Err(DaemonError::RestSource(format!(
-      "REST request failed after {MAX_RETRIES} attempts: {url}"
-    )))
+    Err(DaemonError::RestSource {
+      message: format!("REST request failed after {MAX_RETRIES} attempts: {url}"),
+      kind: last_kind,
+    })
   }
 
   /// Fetch and decode one REST JSON payload.
@@ -197,7 +222,7 @@ impl CoreRestClient {
     resp
       .json()
       .await
-      .map_err(|e| DaemonError::RestSource(format!("REST JSON parse: {e}")))
+      .map_err(|e| rest_err("REST JSON parse", e))
   }
 
   /// Fetch one REST payload as raw bytes.
@@ -212,7 +237,7 @@ impl CoreRestClient {
       .bytes()
       .await
       .map(|b| b.to_vec())
-      .map_err(|e| DaemonError::RestSource(format!("REST bytes: {e}")))
+      .map_err(|e| rest_err("REST bytes", e))
   }
 
   /// Fetch one REST payload as trimmed text.
@@ -226,7 +251,7 @@ impl CoreRestClient {
     let text = resp
       .text()
       .await
-      .map_err(|e| DaemonError::RestSource(format!("REST text: {e}")))?;
+      .map_err(|e| rest_err("REST text", e))?;
     Ok(text.trim().to_owned())
   }
 }
@@ -238,7 +263,10 @@ impl RestSource for CoreRestClient {
     v.get("blocks")
       .and_then(|n| n.as_u64())
       .map(|n| n as u32)
-      .ok_or_else(|| DaemonError::RestSource("chaininfo: missing blocks field".to_owned()))
+      .ok_or_else(|| DaemonError::RestSource {
+        message: "chaininfo: missing blocks field".to_owned(),
+        kind: RestErrorKind::Other,
+      })
   }
 
   async fn block_hash(&self, height: u32) -> Result<String, DaemonError> {

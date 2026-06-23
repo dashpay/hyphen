@@ -104,7 +104,7 @@ impl ApiError {
   /// Map one daemon query error into a public REST error response.
   pub fn from_daemon(err: DaemonError, context: &str) -> Self {
     match err {
-      DaemonError::Pg(message) if pg_pool_timeout(&message) => {
+      DaemonError::Pg { message, .. } if pg_pool_timeout(&message) => {
         tracing::warn!(context, detail = %message, "postgres query pool exhausted");
         Self::service_unavailable("query capacity is temporarily exhausted")
       }

@@ -167,36 +167,28 @@ impl ServeRuntime {
       cfg.rocksdb.as_ref(),
     )?);
 
-    recovery::verify_rocks_covers_pg(&pg_pools.write, &db).await?;
-    recovery::verify_pg_undo_coverage_or_empty(&pg_pools.write).await?;
-    recovery::clamp_sync_state(
-      &pg_pools.write,
-      index::IndexStageFlags {
+    let rocks_tip = crate::db::get_tip_height(&db)
+      .map(|height| height as i32)
+      .unwrap_or(-1);
+    let secondary_stores = recovery::RecoveryCoordinator {
+      db: &db,
+      pool: &pg_pools.write,
+      stores: secondary_stores,
+      datadir,
+      chain: &cfg.chain,
+      rocksdb_cfg: cfg.rocksdb.as_ref(),
+      index_flags: index::IndexStageFlags {
         address: options.indices.address,
         metrics: options.indices.metrics,
         validator: options.indices.validator,
       },
-    )
+      p2pkh_version: cfg.chain.p2pkh_version,
+      p2sh_version: cfg.chain.p2sh_version,
+      block_time_secs: cfg.chain.block_time_secs,
+    }
+    .run()
     .await?;
-    let rocks_tip = crate::db::get_tip_height(&db)
-      .map(|height| height as i32)
-      .unwrap_or(-1);
     let chain_progress = crate::sql::progress::chain_progress(&pg_pools.write).await?;
-    crate::store::manager::catch_up_recent(
-      &db,
-      &secondary_stores,
-      (chain_progress.canonical_tip_height >= 0)
-        .then_some(chain_progress.canonical_tip_height as u32),
-      &cfg.chain,
-    )?;
-    crate::store::manager::verify_recent(
-      &db,
-      &secondary_stores,
-      (chain_progress.canonical_tip_height >= 0)
-        .then_some(chain_progress.canonical_tip_height as u32),
-      &cfg.chain,
-      500,
-    )?;
     if chain_progress.canonical_tip_height < 0 && rocks_tip >= 0 {
       info!(
         rocks_tip,

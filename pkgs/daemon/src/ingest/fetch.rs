@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 
 use super::state::{FetchedBlock, InFlightBatch};
 use super::IngestCtx;
@@ -39,10 +39,13 @@ pub async fn fetch_batch(
   )
   .await
   .map_err(|_| {
-    DaemonError::RestSource(format!(
-      "ingest batch fetch timed out for heights {}..={} after {}s",
-      batch.start_height, batch.end_height, FETCH_BATCH_TIMEOUT_SECS
-    ))
+    DaemonError::RestSource {
+      message: format!(
+        "ingest batch fetch timed out for heights {}..={} after {}s",
+        batch.start_height, batch.end_height, FETCH_BATCH_TIMEOUT_SECS
+      ),
+      kind: RestErrorKind::Timeout,
+    }
   })??;
   tracing::debug!(
     attempt = batch.attempt,

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ValidatorProTxSummaryRow {
@@ -53,7 +54,7 @@ pub async fn replace_snapshot(
   sqlx::query("DELETE FROM validator_protx_snapshot")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear validator protx snapshot: {e}")))?;
+    .map_err(|e| pg_err("clear validator protx snapshot", e))?;
 
   if rows.is_empty() {
     return Ok(());
@@ -113,7 +114,7 @@ pub async fn replace_snapshot(
   .bind(updated_ats)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert validator protx snapshot: {e}")))?;
+  .map_err(|e| pg_err("insert validator protx snapshot", e))?;
   Ok(())
 }
 
@@ -137,9 +138,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<Vec<ValidatorProTxSnapshotRow>, D
     Ok(rows) => rows,
     Err(e) if is_missing_relation(&e) => return Ok(Vec::new()),
     Err(e) => {
-      return Err(DaemonError::Pg(format!(
-        "read validator protx snapshot: {e}"
-      )));
+      return Err(pg_err("read validator protx snapshot", e));
     }
   };
 
@@ -185,9 +184,7 @@ pub async fn summary(pool: &PgPool) -> Result<ValidatorProTxSummaryRow, DaemonEr
       })
     }
     Err(e) => {
-      return Err(DaemonError::Pg(format!(
-        "read validator protx summary: {e}"
-      )));
+      return Err(pg_err("read validator protx summary", e));
     }
   };
 
@@ -221,11 +218,7 @@ pub async fn aggregates(pool: &PgPool) -> Result<ValidatorProTxAggregateRow, Dae
     .bind(&pro_tx_hashes)
     .fetch_all(pool)
     .await
-    .map_err(|e| {
-      DaemonError::Pg(format!(
-        "read indexed validator types for protx aggregate: {e}"
-      ))
-    })?
+    .map_err(|e| pg_err("read indexed validator types for protx aggregate", e))?
     .into_iter()
     .map(|row| {
       (

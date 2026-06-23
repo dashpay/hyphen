@@ -101,6 +101,74 @@ impl SecondaryStoreSet {
   }
 }
 
+/// Compact one or all secondary RocksDB stores.
+///
+/// Column families not present in a given store are silently skipped.
+///
+/// # Errors
+///
+/// Returns `DaemonError::Db` when opening the store set fails.
+pub fn compact_target(
+  datadir: &Path,
+  chain: &crate::config::ChainConfig,
+  cfg: Option<&crate::config::RocksdbConfig>,
+  target: StoreTarget,
+) -> Result<(), DaemonError> {
+  let started = Instant::now();
+  info!(target = ?target, "Starting secondary store compaction");
+  let stores = SecondaryStoreSet::open(datadir, chain, cfg)?;
+  for &id in target.ids() {
+    let db = stores.db(id)?;
+    for &cf_name in store::CF_NAMES {
+      let Some(cf) = db.cf_handle(cf_name) else {
+        tracing::debug!(store = id.as_str(), cf = cf_name, "column family not present, skipping");
+        continue;
+      };
+      info!(store = id.as_str(), cf = cf_name, "compacting column family");
+      db.compact_range_cf(cf, None::<&[u8]>, None::<&[u8]>);
+    }
+  }
+  info!(
+    target = ?target,
+    elapsed_ms = started.elapsed().as_millis() as u64,
+    "Finished secondary store compaction"
+  );
+  Ok(())
+}
+
+/// Remove any leftover `.rebuild-*` staging directories under `stores/`.
+///
+/// These are created during staged rebuilds and should not normally survive
+/// a clean shutdown. If they exist at startup, a previous rebuild was
+/// interrupted and the staging directory is incomplete.
+pub fn cleanup_stale_rebuild_dirs(datadir: &Path) {
+  let root = store::store_root(datadir);
+  let Ok(entries) = std::fs::read_dir(&root) else {
+    return;
+  };
+  for entry in entries.flatten() {
+    let name = entry.file_name();
+    let Some(name_str) = name.to_str() else {
+      continue;
+    };
+    if name_str.starts_with(".rebuild-") || name_str.contains(".trash.") {
+      let path = entry.path();
+      if path.is_dir() {
+        tracing::warn!(path = %path.display(), "removing stale rebuild staging directory");
+        let _ = std::fs::remove_dir_all(&path);
+      }
+    }
+  }
+}
+
+fn unique_rebuild_dir(datadir: &Path) -> PathBuf {
+  let timestamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|d| d.as_nanos())
+    .unwrap_or_default();
+  store::store_root(datadir).join(format!(".rebuild-{timestamp}"))
+}
+
 pub fn rebuild_target(
   raw_db: &DB,
   datadir: &Path,
@@ -110,12 +178,64 @@ pub fn rebuild_target(
 ) -> Result<SecondaryStoreSet, DaemonError> {
   let started = Instant::now();
   info!(target = ?target, "Starting secondary store rebuild");
+
+  // Mark live stores as rebuilding before any destructive operations.
   for &id in target.ids() {
-    store::reset_store_dir(datadir, id)?;
+    let live_path = store::store_path(datadir, id);
+    if live_path.exists() {
+      if let Ok(handle) = store::open(datadir, id, chain, cfg) {
+        let _ = store::mark_recovery_state(handle.db(), store::RecoveryState::Rebuilding, None);
+      }
+    }
   }
-  let stores = SecondaryStoreSet::open(datadir, chain, cfg)?;
+
+  // Build into a temporary staging directory on the same filesystem
+  // so that the final rename is atomic.
+  let tmp_root = unique_rebuild_dir(datadir);
+  std::fs::create_dir_all(&tmp_root).map_err(|e| DaemonError::Io {
+    context: "create rebuild staging dir",
+    source: e,
+  })?;
+
   let raw_tip = crate::db::get_tip_height(raw_db);
-  replay_raw_range(raw_db, &stores, chain, 0, raw_tip)?;
+  let tmp_stores = SecondaryStoreSet::open(&tmp_root, chain, cfg)?;
+  replay_raw_range(raw_db, &tmp_stores, chain, 0, raw_tip)?;
+
+  // Close the temporary store handles before renaming.
+  drop(tmp_stores);
+
+  // Crash-safe swap: park old data, promote new data, then clean up.
+  let nanos = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_nanos();
+  for &id in target.ids() {
+    let live_path = store::store_path(datadir, id);
+    let tmp_path = store::store_path(&tmp_root, id);
+    if live_path.exists() {
+      let trash_path = live_path.with_extension(format!("trash.{nanos}"));
+      std::fs::rename(&live_path, &trash_path).map_err(|e| DaemonError::Io {
+        context: "park old store for rebuild swap",
+        source: e,
+      })?;
+      std::fs::rename(&tmp_path, &live_path).map_err(|e| DaemonError::Io {
+        context: "promote rebuilt store into place",
+        source: e,
+      })?;
+      let _ = std::fs::remove_dir_all(&trash_path);
+    } else {
+      std::fs::rename(&tmp_path, &live_path).map_err(|e| DaemonError::Io {
+        context: "rename rebuilt store into place",
+        source: e,
+      })?;
+    }
+  }
+
+  // Clean up the staging root (may still contain store dirs for non-target IDs).
+  let _ = std::fs::remove_dir_all(&tmp_root);
+
+  // Reopen from the live location.
+  let stores = SecondaryStoreSet::open(datadir, chain, cfg)?;
   info!(
     target = ?target,
     raw_tip,
@@ -352,7 +472,7 @@ fn compare_store_contents(left: &DB, right: &DB, id: StoreId) -> Result<(), Daem
   let mut right_iter = right.iterator_cf(right_cf, IteratorMode::Start);
   loop {
     match (left_iter.next(), right_iter.next()) {
-      (None, None) => return Ok(()),
+      (None, None) => break,
       (Some(Ok((left_key, left_val))), Some(Ok((right_key, right_val)))) => {
         if left_key.as_ref() != right_key.as_ref() || left_val.as_ref() != right_val.as_ref() {
           return Err(DaemonError::Index(format!(
@@ -375,6 +495,26 @@ fn compare_store_contents(left: &DB, right: &DB, id: StoreId) -> Result<(), Daem
       }
     }
   }
+
+  // Compare tip metadata — data CF equality alone does not catch metadata drift.
+  let left_meta = store::read_meta(left)?;
+  let right_meta = store::read_meta(right)?;
+  if left_meta.tip_height != right_meta.tip_height {
+    return Err(DaemonError::Index(format!(
+      "secondary store {} tip_height mismatch: live={:?} scratch={:?}",
+      id.as_str(),
+      left_meta.tip_height,
+      right_meta.tip_height
+    )));
+  }
+  if left_meta.tip_hash != right_meta.tip_hash {
+    return Err(DaemonError::Index(format!(
+      "secondary store {} tip_hash mismatch",
+      id.as_str()
+    )));
+  }
+
+  Ok(())
 }
 
 fn verify_recent_prevouts(

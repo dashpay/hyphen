@@ -8,6 +8,7 @@
 
 use crate::error::DaemonError;
 use hyphend::bench::BenchDataset;
+use crate::sql::pg_err;
 
 const WHALE_ADDRESS: &str = "XbenchWhale1111111111111111111111111";
 const PAGE_LIMIT: i64 = 100;
@@ -70,7 +71,7 @@ async fn seed_blocks(pool: &crate::sql::SqlPool, count: i32) -> Result<(), Daemo
     .bind(format!("{height:064x}"))
     .execute(pool)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed spent bench block {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed spent bench block {height}"), error))?;
   }
   Ok(())
 }
@@ -82,7 +83,7 @@ async fn seed_transactions_and_address_history(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin spent history seed: {error}")))?;
+    .map_err(|error| pg_err("begin spent history seed", error))?;
   for height in 0..rows {
     let txid = super::synthetic_hash(b'T', i64::from(height));
     sqlx::query(
@@ -103,7 +104,7 @@ async fn seed_transactions_and_address_history(
     .bind(Some(10_i64))
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed spent tx {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed spent tx {height}"), error))?;
     sqlx::query(
       "INSERT INTO address_txs (address, txid, block_height, block_pos)
        VALUES ($1, $2, $3, $4)
@@ -115,7 +116,7 @@ async fn seed_transactions_and_address_history(
     .bind(0_i32)
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed spent address_txs {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed spent address_txs {height}"), error))?;
   }
   sqlx::query(
     "INSERT INTO address_stats (
@@ -131,10 +132,10 @@ async fn seed_transactions_and_address_history(
   .bind(rows - 1)
   .execute(&mut *tx)
   .await
-  .map_err(|error| DaemonError::Pg(format!("seed spent whale summary: {error}")))?;
+  .map_err(|error| pg_err("seed spent whale summary", error))?;
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit spent history seed: {error}")))?;
+    .map_err(|error| pg_err("commit spent history seed", error))?;
   Ok(())
 }
 
@@ -142,7 +143,7 @@ async fn seed_balances(pool: &crate::sql::SqlPool, rows: i32) -> Result<(), Daem
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin spent balances seed: {error}")))?;
+    .map_err(|error| pg_err("begin spent balances seed", error))?;
   let mut included_supply = 0_i64;
   for index in 0..rows {
     let balance = i64::from(rows - index) * 1_000;
@@ -160,7 +161,7 @@ async fn seed_balances(pool: &crate::sql::SqlPool, rows: i32) -> Result<(), Daem
     .bind(100_i32)
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed spent balance row {index}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed spent balance row {index}"), error))?;
     sqlx::query(
       "INSERT INTO address_balances (address, balance)
        VALUES ($1, $2)
@@ -170,9 +171,7 @@ async fn seed_balances(pool: &crate::sql::SqlPool, rows: i32) -> Result<(), Daem
     .bind(balance)
     .execute(&mut *tx)
     .await
-    .map_err(|error| {
-      DaemonError::Pg(format!("seed spent address_balances row {index}: {error}"))
-    })?;
+    .map_err(|error| pg_err(&format!("seed spent address_balances row {index}"), error))?;
     included_supply += balance;
   }
   sqlx::query(
@@ -186,9 +185,9 @@ async fn seed_balances(pool: &crate::sql::SqlPool, rows: i32) -> Result<(), Daem
   .bind(included_supply)
   .execute(&mut *tx)
   .await
-  .map_err(|error| DaemonError::Pg(format!("seed spent balances summary: {error}")))?;
+  .map_err(|error| pg_err("seed spent balances summary", error))?;
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit spent balances seed: {error}")))?;
+    .map_err(|error| pg_err("commit spent balances seed", error))?;
   Ok(())
 }

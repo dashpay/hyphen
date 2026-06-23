@@ -64,11 +64,11 @@ async fn upsert_current(pool: &SqlPool, raw_islock: Vec<u8>) -> Result<(), Daemo
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin islock current tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin islock current tx: {e}"), code: None })?;
   sql::live::islock::upsert_current(&mut tx, &row).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit islock current tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit islock current tx: {e}"), code: None })?;
   Ok(())
 }
 
@@ -77,11 +77,11 @@ async fn delete_current(pool: &SqlPool, txid: [u8; 32]) -> Result<(), DaemonErro
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin islock delete tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin islock delete tx: {e}"), code: None })?;
   sql::live::islock::delete_current(&mut tx, &txid).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit islock delete tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit islock delete tx: {e}"), code: None })?;
   Ok(())
 }
 

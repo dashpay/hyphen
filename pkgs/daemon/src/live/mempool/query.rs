@@ -13,7 +13,7 @@ use crate::sql::SqlPool;
 use dash_primitives::Transaction as DecodedTransaction;
 use serde_json::Value;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::rest::openapi::{
   TxDetail, TxInput, TxLive, TxOutput, TxScriptPubKey, TxScriptSig, TxTags,
 };
@@ -151,7 +151,7 @@ pub async fn normalize_tx(
       version: tx.version,
       tx_type,
       lock_time: i32::try_from(tx.lock_time)
-        .map_err(|_| DaemonError::RestSource("mempool tx lock_time exceeds i32::MAX".to_owned()))?,
+        .map_err(|_| DaemonError::RestSource { message: "mempool tx lock_time exceeds i32::MAX".to_owned(), kind: RestErrorKind::Other })?,
       size: raw_tx.len() as i32,
       value_out,
       input_count: tx.inputs.len() as i32,
@@ -244,7 +244,7 @@ pub async fn build_tx_value(
     version: tx.version,
     tx_type: public_tx_type.to_owned(),
     lock_time: i32::try_from(tx.lock_time)
-      .map_err(|_| DaemonError::RestSource("mempool tx lock_time exceeds i32::MAX".to_owned()))?,
+      .map_err(|_| DaemonError::RestSource { message: "mempool tx lock_time exceeds i32::MAX".to_owned(), kind: RestErrorKind::Other })?,
     size: raw_tx.len() as i32,
     value_out,
     input_count: tx.inputs.len() as i32,
@@ -455,7 +455,7 @@ struct PrevOutput {
 
 fn decode_tx(raw_tx: &[u8]) -> Result<DecodedTransaction, DaemonError> {
   bitcoin_consensus_encoding::decode_from_slice::<DecodedTransaction>(raw_tx)
-    .map_err(|e| DaemonError::RestSource(format!("decode mempool tx: {e}")))
+    .map_err(|e| DaemonError::RestSource { message: format!("decode mempool tx: {e}"), kind: RestErrorKind::Other })
 }
 
 fn decode_payload(tx: &DecodedTransaction, txid_bytes: &[u8]) -> Value {
@@ -498,13 +498,13 @@ async fn load_prevouts(
   let mut sql_tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin mempool prevout lookup tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin mempool prevout lookup tx: {e}"), code: None })?;
   let rows =
     crate::index::spent::sql::lookup_prev_outputs(&mut sql_tx, &prev_txids, &prev_vouts).await?;
   sql_tx
     .commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit mempool prevout lookup tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit mempool prevout lookup tx: {e}"), code: None })?;
 
   let mut out = HashMap::with_capacity(rows.len());
   for row in rows {

@@ -211,7 +211,12 @@ async fn apply_transition(
 /// Returns `DaemonError` when reconciliation, polling, admission, fetch, or
 /// RocksDB commit work fails permanently.
 pub async fn run(ctx: IngestCtx) -> Result<(), DaemonError> {
-  let next_height = reconcile::stored_tip_height(&ctx.db)?.map_or(0, |tip| tip.saturating_add(1));
+  let next_height = match reconcile::stored_tip_height(&ctx.db) {
+    Ok(tip) => tip.map_or(0, |t| t.saturating_add(1)),
+    Err(error) => {
+      return Err(error);
+    }
+  };
   let mut state = transition_to(&ctx, None, IngestState::Boot { next_height }).await?;
   let mut last_progress_log: Option<Instant> = None;
 
@@ -231,10 +236,16 @@ pub async fn run(ctx: IngestCtx) -> Result<(), DaemonError> {
     let transition = match state {
       IngestState::Boot { next_height } => Transition::To(IngestState::Reconciling { next_height }),
       IngestState::Reconciling { next_height } => {
-        let reconciled = reconcile::reconcile_start(&ctx, next_height).await?;
-        Transition::To(IngestState::PollingTip {
-          next_height: reconciled,
-        })
+        match reconcile::reconcile_start(&ctx, next_height).await {
+          Ok(reconciled) => Transition::To(IngestState::PollingTip {
+            next_height: reconciled,
+          }),
+          Err(error) => Transition::To(IngestState::backoff(
+            IngestState::Reconciling { next_height },
+            now_epoch(),
+            format!("reconcile failed: {error}"),
+          )),
+        }
       }
       IngestState::PollingTip { next_height } => match poll::poll_tip(&ctx).await {
         Ok(network_tip) => {
@@ -275,15 +286,23 @@ pub async fn run(ctx: IngestCtx) -> Result<(), DaemonError> {
       IngestState::Admitting {
         next_height,
         network_tip,
-      } => match admit::admit_batch(&ctx, next_height, network_tip).await? {
-        AdmissionDecision::Idle => Transition::Sleep(
+      } => match admit::admit_batch(&ctx, next_height, network_tip).await {
+        Err(error) => Transition::To(IngestState::backoff(
+          IngestState::Admitting {
+            next_height,
+            network_tip,
+          },
+          now_epoch(),
+          format!("admission check failed: {error}"),
+        )),
+        Ok(AdmissionDecision::Idle) => Transition::Sleep(
           Duration::from_secs(POLL_INTERVAL_SECS),
           IngestState::Idle {
             next_height,
             network_tip,
           },
         ),
-        AdmissionDecision::Throttle(throttle) => Transition::Sleep(
+        Ok(AdmissionDecision::Throttle(throttle)) => Transition::Sleep(
           Duration::from_secs(THROTTLE_POLL_SECS),
           IngestState::Throttled {
             next_height,
@@ -291,7 +310,7 @@ pub async fn run(ctx: IngestCtx) -> Result<(), DaemonError> {
             throttle,
           },
         ),
-        AdmissionDecision::Admit(batch) => Transition::To(IngestState::Fetching {
+        Ok(AdmissionDecision::Admit(batch)) => Transition::To(IngestState::Fetching {
           next_height,
           network_tip,
           batch,

@@ -7,71 +7,120 @@
 //! Schema reset helpers.
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 const LOCK_TIMEOUT: &str = "SET lock_timeout = '5s'";
 const SCHEMA_RESET_RETRIES: u32 = 3;
 
+const NUCLEAR_DROP_SQL: &str =
+  "DROP TABLE IF EXISTS address_txs CASCADE;
+   DROP TABLE IF EXISTS address_stats CASCADE;
+   DROP TABLE IF EXISTS address_balances CASCADE;
+   DROP TABLE IF EXISTS address_balances_summary CASCADE;
+   DROP TABLE IF EXISTS block_undo_address_balances CASCADE;
+   DROP TABLE IF EXISTS script_output_history CASCADE;
+   DROP TABLE IF EXISTS special_tx_payloads CASCADE;
+   DROP TABLE IF EXISTS validator_history CASCADE;
+   DROP TABLE IF EXISTS validator_counts CASCADE;
+   DROP TABLE IF EXISTS spent_output_history CASCADE;
+   DROP TABLE IF EXISTS block_metrics CASCADE;
+   DROP TABLE IF EXISTS validators CASCADE;
+   DROP TABLE IF EXISTS governance_summary CASCADE;
+   DROP TABLE IF EXISTS governance_votes CASCADE;
+   DROP TABLE IF EXISTS governance_objects CASCADE;
+   DROP TABLE IF EXISTS search_sync_events CASCADE;
+   DROP TABLE IF EXISTS network_snapshot CASCADE;
+   DROP TABLE IF EXISTS validator_protx_snapshot CASCADE;
+   DROP TABLE IF EXISTS chainlock_snapshot CASCADE;
+   DROP TABLE IF EXISTS islock_current CASCADE;
+   DROP TABLE IF EXISTS mempool_address_txs CASCADE;
+   DROP TABLE IF EXISTS mempool_tx_outputs CASCADE;
+   DROP TABLE IF EXISTS mempool_tx_inputs CASCADE;
+   DROP TABLE IF EXISTS mempool_tx_details CASCADE;
+   DROP TABLE IF EXISTS mempool_recent_txs CASCADE;
+   DROP TABLE IF EXISTS mempool_summary CASCADE;
+   DROP TABLE IF EXISTS tx_inputs CASCADE;
+   DROP TABLE IF EXISTS tx_outputs CASCADE;
+   DROP TABLE IF EXISTS transactions_summary CASCADE;
+   DROP TABLE IF EXISTS transactions CASCADE;
+   DROP TABLE IF EXISTS blocks CASCADE;
+   DROP TABLE IF EXISTS orphan_blocks CASCADE;
+   DROP TABLE IF EXISTS sync_state CASCADE;
+   DROP TABLE IF EXISTS chain_progress CASCADE;
+   DROP TYPE IF EXISTS tx_type CASCADE;
+   DROP TYPE IF EXISTS address_type CASCADE;";
+
 /// Nuclear reset: drop all application tables and re-apply schema.
+///
+/// The entire operation runs inside a single transaction with retries and
+/// exponential backoff, preventing partial schema states on crash.
 ///
 /// # Errors
 ///
 /// Returns `DaemonError::Pg` when PostgreSQL rejects the lock timeout,
-/// drop statements, or schema re-application.
+/// drop statements, schema re-application, or final commit.
 pub async fn reset(pool: &sqlx::PgPool) -> Result<(), DaemonError> {
-  sqlx::raw_sql(LOCK_TIMEOUT)
-    .execute(pool)
-    .await
-    .map_err(|e| DaemonError::Pg(format!("set lock_timeout: {e}")))?;
-
   tracing::warn!("nuclear schema reset: dropping all tables");
-  sqlx::raw_sql(
-    "DROP TABLE IF EXISTS address_txs CASCADE;
-     DROP TABLE IF EXISTS address_stats CASCADE;
-     DROP TABLE IF EXISTS address_balances CASCADE;
-     DROP TABLE IF EXISTS address_balances_summary CASCADE;
-     DROP TABLE IF EXISTS block_undo_address_balances CASCADE;
-     DROP TABLE IF EXISTS script_output_history CASCADE;
-     DROP TABLE IF EXISTS special_tx_payloads CASCADE;
-     DROP TABLE IF EXISTS validator_history CASCADE;
-     DROP TABLE IF EXISTS validator_counts CASCADE;
-     DROP TABLE IF EXISTS spent_output_history CASCADE;
-     DROP TABLE IF EXISTS block_metrics CASCADE;
-     DROP TABLE IF EXISTS validators CASCADE;
-     DROP TABLE IF EXISTS governance_summary CASCADE;
-     DROP TABLE IF EXISTS governance_votes CASCADE;
-     DROP TABLE IF EXISTS governance_objects CASCADE;
-     DROP TABLE IF EXISTS search_sync_events CASCADE;
-     DROP TABLE IF EXISTS network_snapshot CASCADE;
-     DROP TABLE IF EXISTS validator_protx_snapshot CASCADE;
-     DROP TABLE IF EXISTS chainlock_snapshot CASCADE;
-     DROP TABLE IF EXISTS islock_current CASCADE;
-     DROP TABLE IF EXISTS mempool_address_txs CASCADE;
-     DROP TABLE IF EXISTS mempool_tx_outputs CASCADE;
-     DROP TABLE IF EXISTS mempool_tx_inputs CASCADE;
-     DROP TABLE IF EXISTS mempool_tx_details CASCADE;
-     DROP TABLE IF EXISTS mempool_recent_txs CASCADE;
-     DROP TABLE IF EXISTS mempool_summary CASCADE;
-     DROP TABLE IF EXISTS tx_inputs CASCADE;
-     DROP TABLE IF EXISTS tx_outputs CASCADE;
-     DROP TABLE IF EXISTS transactions_summary CASCADE;
-     DROP TABLE IF EXISTS transactions CASCADE;
-     DROP TABLE IF EXISTS blocks CASCADE;
-     DROP TABLE IF EXISTS orphan_blocks CASCADE;
-     DROP TABLE IF EXISTS sync_state CASCADE;
-     DROP TYPE IF EXISTS tx_type CASCADE;
-     DROP TYPE IF EXISTS address_type CASCADE;",
-  )
-  .execute(pool)
-  .await
-  .map_err(|e| DaemonError::Pg(format!("nuclear drop: {e}")))?;
 
-  tracing::info!("re-applying schema after nuclear reset");
-  sqlx::raw_sql(super::SCHEMA)
-    .execute(pool)
-    .await
-    .map_err(|e| DaemonError::Pg(format!("re-apply schema: {e}")))?;
-  crate::sql::partition::ensure_core_history_partitions(pool).await?;
-  crate::sql::partition::ensure_core_canonical_partitions(pool).await?;
+  let mut last_err: Option<DaemonError> = None;
+  for attempt in 1..=SCHEMA_RESET_RETRIES {
+    if let Some(ref prev) = last_err {
+      tracing::warn!(attempt, "nuclear DROP failed, retrying: {prev}");
+      tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
+    }
+
+    let mut tx = pool
+      .begin()
+      .await
+      .map_err(|e| pg_err("nuclear reset begin", e))?;
+
+    if let Err(e) = sqlx::raw_sql(LOCK_TIMEOUT).execute(&mut *tx).await {
+      return Err(pg_err("set lock_timeout", e));
+    }
+
+    let result = async {
+      sqlx::raw_sql(NUCLEAR_DROP_SQL)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| pg_err("nuclear drop", e))?;
+
+      tracing::info!("re-applying schema after nuclear reset");
+      sqlx::raw_sql(super::SCHEMA)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| pg_err("re-apply schema", e))?;
+      for sql in crate::sql::partition::history_partition_sqls(0) {
+        sqlx::query(&sql)
+          .execute(&mut *tx)
+          .await
+          .map_err(|e| pg_err("ensure core history partitions", e))?;
+      }
+      for sql in crate::sql::partition::canonical_partition_sqls(0) {
+        sqlx::query(&sql)
+          .execute(&mut *tx)
+          .await
+          .map_err(|e| pg_err("ensure core canonical partitions", e))?;
+      }
+
+      tx.commit()
+        .await
+        .map_err(|e| pg_err("nuclear reset commit", e))
+    }
+    .await;
+
+    match result {
+      Ok(_) => {
+        last_err = None;
+        break;
+      }
+      Err(e) => {
+        last_err = Some(e);
+      }
+    }
+  }
+  if let Some(e) = last_err {
+    return Err(e);
+  }
 
   tracing::info!("nuclear reset complete");
   Ok(())
@@ -103,52 +152,57 @@ pub async fn targeted_reset(
     .collect();
   let drop_sql = drops.join("; ");
 
-  let mut last_err: Option<String> = None;
+  let mut last_err: Option<DaemonError> = None;
   for attempt in 1..=SCHEMA_RESET_RETRIES {
+    if let Some(ref prev) = last_err {
+      tracing::warn!(attempt, "targeted DROP failed, retrying: {prev}");
+      tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
+    }
+
     let mut tx = pool
       .begin()
       .await
-      .map_err(|e| DaemonError::Pg(format!("targeted reset begin: {e}")))?;
+      .map_err(|e| pg_err("targeted reset begin", e))?;
 
     if let Err(e) = sqlx::raw_sql(LOCK_TIMEOUT).execute(&mut *tx).await {
-      return Err(DaemonError::Pg(format!("set lock_timeout: {e}")));
+      return Err(pg_err("set lock_timeout", e));
     }
 
     let result = async {
       sqlx::raw_sql(&drop_sql)
         .execute(&mut *tx)
         .await
-        .map_err(|e| DaemonError::Pg(format!("targeted drop: {e}")))?;
+        .map_err(|e| pg_err("targeted drop", e))?;
 
       for stage in stages {
         sqlx::query("UPDATE sync_state SET indexed_height = -1, updated_at = 0 WHERE stage = $1")
           .bind(stage)
           .execute(&mut *tx)
           .await
-          .map_err(|e| DaemonError::Pg(format!("reset sync_state for {stage}: {e}")))?;
+          .map_err(|e| pg_err(&format!("reset sync_state for {stage}"), e))?;
       }
 
       tracing::info!("re-applying schema after targeted reset");
       sqlx::raw_sql(super::SCHEMA)
         .execute(&mut *tx)
         .await
-        .map_err(|e| DaemonError::Pg(format!("re-apply schema: {e}")))?;
+        .map_err(|e| pg_err("re-apply schema", e))?;
       for sql in crate::sql::partition::history_partition_sqls(0) {
         sqlx::query(&sql)
           .execute(&mut *tx)
           .await
-          .map_err(|e| DaemonError::Pg(format!("ensure core history partitions: {e}")))?;
+          .map_err(|e| pg_err("ensure core history partitions", e))?;
       }
       for sql in crate::sql::partition::canonical_partition_sqls(0) {
         sqlx::query(&sql)
           .execute(&mut *tx)
           .await
-          .map_err(|e| DaemonError::Pg(format!("ensure core canonical partitions: {e}")))?;
+          .map_err(|e| pg_err("ensure core canonical partitions", e))?;
       }
 
       tx.commit()
         .await
-        .map_err(|e| DaemonError::Pg(format!("targeted reset commit: {e}")))
+        .map_err(|e| pg_err("targeted reset commit", e))
     }
     .await;
 
@@ -158,14 +212,12 @@ pub async fn targeted_reset(
         break;
       }
       Err(e) => {
-        tracing::warn!(attempt, "targeted DROP failed, retrying: {e}");
-        last_err = Some(e.to_string());
-        tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
+        last_err = Some(e);
       }
     }
   }
   if let Some(e) = last_err {
-    return Err(DaemonError::Pg(format!("targeted drop after retries: {e}")));
+    return Err(e);
   }
 
   tracing::info!("targeted reset complete");

@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use crate::error::DaemonError;
+use super::pg_err;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct BlockUndoMetaRow {
@@ -89,7 +90,7 @@ pub async fn upsert_block_undo_meta(
   .bind(created_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert block_undo_meta at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("upsert block_undo_meta at {height}"), e))?;
   Ok(())
 }
 
@@ -111,7 +112,7 @@ pub async fn block_undo_meta(
   .bind(height)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read block_undo_meta at {height}: {e}")))
+  .map_err(|e| pg_err(&format!("read block_undo_meta at {height}"), e))
 }
 
 pub async fn capture_address_balances_undo(
@@ -143,11 +144,7 @@ pub async fn capture_address_balances_undo(
   .bind(&unique)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "capture block_undo_address_balances at {height}: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err(&format!("capture block_undo_address_balances at {height}"), e))?;
   Ok(())
 }
 
@@ -174,11 +171,7 @@ pub async fn capture_address_stats_undo(
   .bind(&unique)
   .fetch_all(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "read current address_stats before undo capture at {height}: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err(&format!("read current address_stats before undo capture at {height}"), e))?;
   let existing_by_address = existing
     .into_iter()
     .map(|row| (row.address.clone(), row))
@@ -252,7 +245,7 @@ pub async fn capture_address_stats_undo(
     .bind(&prev_last_seen_heights)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("capture block_undo_address_stats at {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("capture block_undo_address_stats at {height}"), e))?;
   }
   Ok(())
 }
@@ -297,7 +290,7 @@ pub async fn insert_block_undo_outputs(
   .bind(prev_spent_heights)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert block_undo_outputs at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("insert block_undo_outputs at {height}"), e))?;
   Ok(())
 }
 
@@ -318,7 +311,7 @@ pub async fn restore_tx_outputs_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("restore tx_outputs from undo at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("restore tx_outputs from undo at {height}"), e))?;
   Ok(())
 }
 
@@ -337,7 +330,7 @@ pub async fn restore_address_balances_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("clear touched address_balances at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("clear touched address_balances at {height}"), e))?;
   sqlx::query(
     "INSERT INTO address_balances (address, balance)
      SELECT address, prev_balance
@@ -349,11 +342,7 @@ pub async fn restore_address_balances_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "restore address_balances from undo at {height}: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err(&format!("restore address_balances from undo at {height}"), e))?;
   Ok(())
 }
 
@@ -372,7 +361,7 @@ pub async fn restore_address_stats_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("clear touched address_stats at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("clear touched address_stats at {height}"), e))?;
   sqlx::query(
     "INSERT INTO address_stats (
        address,
@@ -398,7 +387,7 @@ pub async fn restore_address_stats_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("restore address_stats from undo at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("restore address_stats from undo at {height}"), e))?;
   Ok(())
 }
 
@@ -417,11 +406,7 @@ pub async fn restore_transactions_summary_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "restore transactions_summary from undo at {height}: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err(&format!("restore transactions_summary from undo at {height}"), e))?;
   Ok(())
 }
 
@@ -443,10 +428,6 @@ pub async fn restore_address_balances_summary_from_undo(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "restore address_balances_summary from undo at {height}: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err(&format!("restore address_balances_summary from undo at {height}"), e))?;
   Ok(())
 }

@@ -9,6 +9,7 @@
 use sqlx::{PgPool, Row};
 
 use crate::error::DaemonError;
+use super::pg_err;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct ChainProgressRow {
@@ -34,7 +35,7 @@ async fn current_block_tip(pool: &PgPool) -> Result<(i32, Option<Vec<u8>>), Daem
   )
   .fetch_one(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read current block tip: {e}")))?;
+  .map_err(|e| pg_err("read current block tip", e))?;
   Ok((row.get("height"), row.get("hash")))
 }
 
@@ -42,7 +43,7 @@ async fn current_undo_tip(pool: &PgPool) -> Result<i32, DaemonError> {
   sqlx::query_scalar("SELECT COALESCE(MAX(height), -1) FROM block_undo_meta")
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read current undo tip: {e}")))
+    .map_err(|e| pg_err("read current undo tip", e))
 }
 
 pub async fn ensure_chain_progress(pool: &PgPool) -> Result<(), DaemonError> {
@@ -70,7 +71,7 @@ pub async fn ensure_chain_progress(pool: &PgPool) -> Result<(), DaemonError> {
   .bind(undo_tip)
   .execute(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("ensure chain_progress: {e}")))?;
+  .map_err(|e| pg_err("ensure chain_progress", e))?;
   Ok(())
 }
 
@@ -88,7 +89,7 @@ pub async fn chain_progress(pool: &PgPool) -> Result<ChainProgressRow, DaemonErr
   )
   .fetch_one(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read chain_progress: {e}")))
+  .map_err(|e| pg_err("read chain_progress", e))
 }
 
 /// Count undo rows covering canonical heights from genesis through `height`.
@@ -106,7 +107,7 @@ pub async fn count_block_undo_rows_through(pool: &PgPool, height: i32) -> Result
   .bind(height)
   .fetch_one(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count block_undo_meta rows through {height}: {e}")))
+  .map_err(|e| pg_err(&format!("count block_undo_meta rows through {height}"), e))
 }
 
 pub async fn sync_chain_progress_tx(
@@ -144,7 +145,7 @@ pub async fn sync_chain_progress_state_tx(
   .bind(updated_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("sync chain_progress: {e}")))?;
+  .map_err(|e| pg_err("sync chain_progress", e))?;
   Ok(())
 }
 
@@ -163,6 +164,6 @@ pub async fn mark_recovery_state(
   .bind(recovery_height)
   .execute(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("mark chain_progress recovery_state: {e}")))?;
+  .map_err(|e| pg_err("mark chain_progress recovery_state", e))?;
   Ok(())
 }

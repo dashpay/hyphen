@@ -49,6 +49,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use error::DaemonError;
+use init::args::IndexTarget;
 use init::{Args, Options, StartupMode};
 use sources::RestSource;
 use tracing::{info, warn};
@@ -95,17 +96,24 @@ fn run() -> Result<(), DaemonError> {
       lock.release()?;
       return Ok(());
     }
-    StartupMode::ReindexAll => {
-      rt.block_on(run_reindex(&cfg, Arc::clone(&db), &options, &dir))?;
-      info!("reindex request completed");
+    StartupMode::RebuildIndex(_) => {
+      rt.block_on(run_rebuild_index(&cfg, Arc::clone(&db), &options, &dir))?;
+      info!("rebuild-index request completed");
       drop(db);
       drop(rt);
       lock.release()?;
       return Ok(());
     }
-    StartupMode::Reindex(_) => {
-      rt.block_on(run_reindex(&cfg, Arc::clone(&db), &options, &dir))?;
-      info!("reindex request completed");
+    StartupMode::VerifyIndex(_) => {
+      rt.block_on(run_verify_index(&cfg, Arc::clone(&db), &options))?;
+      drop(db);
+      drop(rt);
+      lock.release()?;
+      return Ok(());
+    }
+    StartupMode::RewindAll { .. } => {
+      rt.block_on(run_rewind_all(&cfg, Arc::clone(&db), &options, &dir))?;
+      info!("rewind-all request completed");
       drop(db);
       drop(rt);
       lock.release()?;
@@ -115,6 +123,14 @@ fn run() -> Result<(), DaemonError> {
     StartupMode::RebuildStore(_) | StartupMode::VerifyStore(_) => {
       run_store_maintenance(&cfg, &db, &options, &dir)?;
       info!("store maintenance request completed");
+      drop(db);
+      drop(rt);
+      lock.release()?;
+      return Ok(());
+    }
+    StartupMode::CompactStore(_) => {
+      run_compact_store(&cfg, &options, &dir)?;
+      info!("compact-store request completed");
       drop(db);
       drop(rt);
       lock.release()?;
@@ -193,13 +209,13 @@ async fn run_docs_only(options: &Options) -> Result<(), DaemonError> {
   }
 }
 
-async fn run_reindex(
+async fn run_rebuild_index(
   cfg: &config::Config,
   db: Arc<rocksdb::DB>,
   options: &Options,
   datadir: &std::path::Path,
 ) -> Result<(), DaemonError> {
-  info!(url = %cfg.postgres.url, "connecting to postgres for reindex");
+  info!(url = %cfg.postgres.url, "connecting to postgres for rebuild-index");
   let pg_pools = sql::create_pools(&cfg.postgres).await?;
   sql::bootstrap::bootstrap(&pg_pools.write).await?;
   let secondary_stores = Arc::new(store::manager::SecondaryStoreSet::open(
@@ -209,8 +225,8 @@ async fn run_reindex(
   )?);
 
   match options.startup_mode {
-    StartupMode::ReindexAll => {
-      warn!("running --reindex-all: resetting the entire PostgreSQL schema");
+    StartupMode::RebuildIndex(IndexTarget::All) => {
+      warn!("running --rebuild-index all: resetting the entire PostgreSQL schema");
       let enabled_stages = index::enabled_stage_order(index::IndexStageFlags {
         address: options.indices.address,
         metrics: options.indices.metrics,
@@ -226,11 +242,13 @@ async fn run_reindex(
         cfg.chain.block_time_secs,
       )
       .await?;
-      info!(%message, "reindex complete");
+      info!(%message, "rebuild-index complete");
     }
-    StartupMode::Reindex(target) => {
-      let stage = target.as_stage_name();
-      warn!(stage, "running --reindex");
+    StartupMode::RebuildIndex(target) => {
+      let stage = target
+        .as_stage_name()
+        .ok_or_else(|| DaemonError::Index("IndexTarget::All should not reach single-stage path".into()))?;
+      warn!(stage, "running --rebuild-index");
       let message = sql::verbs::reindex::force_reindex_stage(
         &pg_pools.write,
         Arc::clone(&db),
@@ -241,11 +259,137 @@ async fn run_reindex(
         cfg.chain.block_time_secs,
       )
       .await?;
-      info!(%message, "reindex complete");
+      info!(%message, "rebuild-index complete");
     }
-    StartupMode::Serve | StartupMode::DocsOnly => {}
-    StartupMode::RebuildStore(_) | StartupMode::VerifyStore(_) => {}
+    _ => {}
   }
+  Ok(())
+}
+
+async fn run_verify_index(
+  cfg: &config::Config,
+  db: Arc<rocksdb::DB>,
+  options: &Options,
+) -> Result<(), DaemonError> {
+  info!(url = %cfg.postgres.url, "connecting to postgres for verify-index");
+  let pg_pools = sql::create_pools(&cfg.postgres).await?;
+  // No bootstrap() — verify is read-only and must not mutate the schema.
+
+  let stage_filter = match options.startup_mode {
+    StartupMode::VerifyIndex(IndexTarget::All) => None,
+    StartupMode::VerifyIndex(target) => target.as_stage_name(),
+    _ => None,
+  };
+
+  let report =
+    sql::verbs::verify::verify_index(&pg_pools.write, &db, stage_filter).await?;
+
+  if report.is_healthy() {
+    info!("verify-index: all checks passed");
+  } else {
+    return Err(DaemonError::Index(
+      "verify-index: health check failed, see log output above".to_owned(),
+    ));
+  }
+  Ok(())
+}
+
+async fn run_rewind_all(
+  cfg: &config::Config,
+  db: Arc<rocksdb::DB>,
+  options: &Options,
+  datadir: &std::path::Path,
+) -> Result<(), DaemonError> {
+  let target_height = match options.startup_mode {
+    StartupMode::RewindAll { target_height } => target_height,
+    _ => return Ok(()),
+  };
+
+  info!(url = %cfg.postgres.url, "connecting to postgres for rewind-all");
+  let pg_pools = sql::create_pools(&cfg.postgres).await?;
+  sql::bootstrap::bootstrap(&pg_pools.write).await?;
+  let secondary_stores = Arc::new(store::manager::SecondaryStoreSet::open(
+    datadir,
+    &cfg.chain,
+    cfg.rocksdb.as_ref(),
+  )?);
+
+  let rocks_tip = db::get_tip_height(&db);
+  let pg_height =
+    sql::query::indexed_stage_height(&pg_pools.write, index::Stage::Block).await?;
+
+  let effective_target = match target_height {
+    Some(h) => h,
+    None => {
+      // Auto-detect: rewind to one below the lowest tip.
+      let min_tip = match (pg_height >= 0, rocks_tip) {
+        (true, Some(r)) => std::cmp::min(pg_height as u32, r),
+        (true, None) => pg_height as u32,
+        (false, Some(r)) => r,
+        (false, None) => {
+          return Err(DaemonError::Index("nothing to rewind".to_owned()));
+        }
+      };
+      let auto = min_tip.saturating_sub(1);
+      warn!(
+        pg_height,
+        rocks_tip = ?rocks_tip,
+        auto_target = auto,
+        "auto-detected rewind target from lowest database tip"
+      );
+      auto
+    }
+  };
+
+  let max_allowed = match (pg_height >= 0, rocks_tip) {
+    (true, Some(r)) => std::cmp::min(pg_height as u32, r),
+    (true, None) => pg_height as u32,
+    (false, Some(r)) => r,
+    (false, None) => {
+      return Err(DaemonError::Index("nothing to rewind".to_owned()));
+    }
+  };
+  if effective_target >= max_allowed {
+    return Err(DaemonError::Config(format!(
+      "rewind target {effective_target} must be below min(pg={pg_height}, rocks={rocks_tip:?}) = {max_allowed}"
+    )));
+  }
+
+  warn!(target_height = effective_target, "running --rewind-all");
+  let message = sql::verbs::rewind::rewind_to_height(
+    &pg_pools.write,
+    &db,
+    Some(Arc::clone(&secondary_stores)),
+    effective_target,
+    cfg.chain.p2pkh_version,
+    cfg.chain.p2sh_version,
+    cfg.chain.block_time_secs,
+  )
+  .await?;
+  info!(%message, "rewind-all complete");
+
+  // If any secondary store tip exceeds the effective target and the raw
+  // blocks covering the rewind range are not fully present in RocksDB, the
+  // store disconnects were skipped. Delete the store directories so they
+  // auto-rebuild from RocksDB on next normal startup.
+  let mut stores_need_reset = false;
+  for id in store::StoreId::ALL {
+    if let Ok(meta) = secondary_stores.meta(id) {
+      if meta.tip_height.is_some_and(|tip| tip > effective_target) {
+        stores_need_reset = true;
+        break;
+      }
+    }
+  }
+  if stores_need_reset {
+    // Must drop the open store handles before deleting the directories.
+    drop(secondary_stores);
+    for id in store::StoreId::ALL {
+      store::reset_store_dir(datadir, id)?;
+    }
+    info!("secondary store directories reset; stores will auto-rebuild on next startup");
+  }
+
   Ok(())
 }
 
@@ -265,12 +409,21 @@ fn run_store_maintenance(
       warn!(target = ?target, "running --verify-store");
       store::manager::verify_target(db, datadir, &cfg.chain, cfg.rocksdb.as_ref(), target)?;
     }
-    StartupMode::Serve
-    | StartupMode::DocsOnly
-    | StartupMode::Reindex(_)
-    | StartupMode::ReindexAll => {}
+    _ => {}
   }
   Ok(())
+}
+
+fn run_compact_store(
+  cfg: &config::Config,
+  options: &Options,
+  datadir: &std::path::Path,
+) -> Result<(), DaemonError> {
+  let StartupMode::CompactStore(target) = options.startup_mode else {
+    return Ok(());
+  };
+  warn!(target = ?target, "running --compact-store");
+  store::manager::compact_target(datadir, &cfg.chain, cfg.rocksdb.as_ref(), target)
 }
 
 async fn run_async(

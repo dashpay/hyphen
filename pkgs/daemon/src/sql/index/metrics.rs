@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 #[derive(Debug, Clone)]
 pub struct MetricsRow {
@@ -45,7 +46,7 @@ pub async fn query_prev_metrics(
   .bind(prev)
   .fetch_optional(conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("prev metrics: {e}")))?;
+  .map_err(|e| pg_err("prev metrics", e))?;
 
   match row {
     Some(r) => Ok(r),
@@ -100,7 +101,7 @@ pub async fn insert_block_metrics(
   .bind(hashrate)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert metrics {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("insert metrics {height}"), e))?;
   Ok(())
 }
 
@@ -118,7 +119,7 @@ pub async fn latest_metrics(pool: &PgPool) -> Result<Option<MetricsRow>, DaemonE
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read latest metrics: {e}")))?;
+  .map_err(|e| pg_err("read latest metrics", e))?;
 
   Ok(row.map(metrics_row_from_tuple))
 }
@@ -145,7 +146,7 @@ pub async fn metrics_range(
   .bind(end_height)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read metrics range: {e}")))?;
+  .map_err(|e| pg_err("read metrics range", e))?;
 
   Ok(rows.into_iter().map(metrics_row_from_tuple).collect())
 }
@@ -188,7 +189,7 @@ pub(crate) async fn metrics_bucketed_range(
   .bind(bucket_blocks)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read metrics bucketed range: {e}")))?;
+  .map_err(|e| pg_err("read metrics bucketed range", e))?;
 
   Ok(rows.into_iter().map(metrics_row_from_tuple).collect())
 }
@@ -217,7 +218,7 @@ pub async fn delete_block_metrics(
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete metrics {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete metrics {height}"), e))?;
   Ok(())
 }
 
@@ -288,7 +289,7 @@ mod tests {
     .bind(2.0_f64 + f64::from(height))
     .execute(pool)
     .await
-    .map_err(|e| crate::error::DaemonError::Pg(format!("seed metrics row {height}: {e}")))?;
+    .map_err(|e| crate::sql::pg_err(&format!("seed metrics row {height}"), e))?;
     Ok(())
   }
 
@@ -297,7 +298,7 @@ mod tests {
   ) -> Result<(), crate::error::DaemonError> {
     let Some(pool) = crate::tests::pg_pool()
       .await
-      .map_err(|e| crate::error::DaemonError::Pg(format!("connect metrics test pool: {e}")))?
+      .map_err(|e| crate::error::DaemonError::Index(format!("connect metrics test pool: {e}")))?
     else {
       return Ok(());
     };
@@ -321,7 +322,7 @@ mod tests {
   ) -> Result<(), crate::error::DaemonError> {
     let Some(pool) = crate::tests::pg_pool()
       .await
-      .map_err(|e| crate::error::DaemonError::Pg(format!("connect metrics test pool: {e}")))?
+      .map_err(|e| crate::error::DaemonError::Index(format!("connect metrics test pool: {e}")))?
     else {
       return Ok(());
     };
@@ -349,7 +350,7 @@ mod tests {
   ) -> Result<(), crate::error::DaemonError> {
     let Some(pool) = crate::tests::pg_pool()
       .await
-      .map_err(|e| crate::error::DaemonError::Pg(format!("connect metrics test pool: {e}")))?
+      .map_err(|e| crate::error::DaemonError::Index(format!("connect metrics test pool: {e}")))?
     else {
       return Ok(());
     };
@@ -357,7 +358,7 @@ mod tests {
     seed_metric_row(&pool, 2).await?;
 
     let mut conn = pool.acquire().await.map_err(|e| {
-      crate::error::DaemonError::Pg(format!("acquire metrics test connection: {e}"))
+      crate::sql::pg_err("acquire metrics test connection", e)
     })?;
     let prev = query_prev_metrics(&mut conn, 3).await?;
     assert_eq!(prev.0, 5_002);

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::sql::SqlPool;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
 use crate::live::stream::{LiveEvent, StreamHub};
 use crate::live::warn;
@@ -37,18 +37,24 @@ pub async fn refresh_once(
 
   let row = sql::live::chainlock::ChainLockSnapshotRow {
     block_hash: hex::decode(&chainlock.blockhash).map_err(|e| {
-      DaemonError::RestSource(format!(
-        "decode chainlock block hash {}: {e}",
-        chainlock.blockhash
-      ))
+      DaemonError::RestSource {
+        message: format!(
+          "decode chainlock block hash {}: {e}",
+          chainlock.blockhash
+        ),
+        kind: RestErrorKind::Other,
+      }
     })?,
     block_height: Some(chainlock.height as i32),
     core_height: Some(chainlock.height as i32),
     raw_chainlock: hex::decode(&chainlock.hex).map_err(|e| {
-      DaemonError::RestSource(format!(
-        "decode chainlock hex for {}: {e}",
-        chainlock.blockhash
-      ))
+      DaemonError::RestSource {
+        message: format!(
+          "decode chainlock hex for {}: {e}",
+          chainlock.blockhash
+        ),
+        kind: RestErrorKind::Other,
+      }
     })?,
     seen_at: now_epoch_secs(),
   };
@@ -56,11 +62,11 @@ pub async fn refresh_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin chainlock snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin chainlock snapshot tx: {e}"), code: None })?;
   sql::live::chainlock::upsert_snapshot(&mut tx, &row).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit chainlock snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit chainlock snapshot tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     stream_hub.publish(LiveEvent::chainlock(
       chainlock.blockhash,
