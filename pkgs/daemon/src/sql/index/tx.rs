@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionsSummaryRow {
@@ -86,7 +87,7 @@ pub async fn transaction(pool: &PgPool, txid: &[u8]) -> Result<Option<TxRow>, Da
   .bind(txid)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read transaction: {e}")))?;
+  .map_err(|e| pg_err("read transaction", e))?;
 
   Ok(row.map(|row| TxRow {
     txid: row.get("txid"),
@@ -140,7 +141,7 @@ pub async fn transaction_inputs(
     .bind(txid)
     .fetch_all(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read transaction inputs: {e}")))?;
+    .map_err(|e| pg_err("read transaction inputs", e))?;
 
   Ok(
     rows
@@ -182,7 +183,7 @@ pub async fn transaction_outputs(
     .bind(txid)
     .fetch_all(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read transaction outputs: {e}")))?;
+    .map_err(|e| pg_err("read transaction outputs", e))?;
 
   Ok(
     rows
@@ -219,7 +220,7 @@ pub async fn transaction_payload(
   .bind(txid)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read transaction payload: {e}")))?;
+  .map_err(|e| pg_err("read transaction payload", e))?;
 
   Ok(row.map(|row| TxPayloadRow {
     block_height: row.get("block_height"),
@@ -252,7 +253,7 @@ pub async fn search_transactions_by_prefix(
   .bind(limit)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("search transaction prefix: {e}")))?;
+  .map_err(|e| pg_err("search transaction prefix", e))?;
 
   Ok(
     rows
@@ -281,7 +282,7 @@ pub async fn transaction_location(
     .bind(txid)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read transaction location: {e}")))?;
+    .map_err(|e| pg_err("read transaction location", e))?;
 
   Ok(row.map(|row| TxLocation {
     block_height: row.get("block_height"),
@@ -319,7 +320,7 @@ pub async fn insert_transaction_row(
   .bind(row.fee)
   .execute(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert transaction row: {e}")))?;
+  .map_err(|e| pg_err("insert transaction row", e))?;
   Ok(())
 }
 
@@ -379,7 +380,7 @@ pub async fn insert_transaction_input_rows(
   .bind(prev_values)
   .execute(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert transaction input rows: {e}")))?;
+  .map_err(|e| pg_err("insert transaction input rows", e))?;
   Ok(())
 }
 
@@ -434,7 +435,7 @@ pub async fn insert_transaction_output_rows(
   .bind(spent_txids)
   .execute(&mut *conn)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert transaction output rows: {e}")))?;
+  .map_err(|e| pg_err("insert transaction output rows", e))?;
   Ok(())
 }
 
@@ -480,7 +481,7 @@ pub async fn list_transactions(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("list transactions: {e}")))?;
+  .map_err(|e| pg_err("list transactions", e))?;
 
   Ok(
     rows
@@ -545,10 +546,10 @@ pub async fn insert_transactions(
     .bind(output_counts)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("batch insert transactions at {height}: {e}")))?
+    .map_err(|e| pg_err(&format!("batch insert transactions at {height}"), e))?
     .rows_affected(),
   )
-  .map_err(|_| DaemonError::Pg("batch insert transactions rows_affected overflow".to_owned()))?;
+  .map_err(|_| DaemonError::Pg { message: "batch insert transactions rows_affected overflow".to_owned(), code: None })?;
   apply_transactions_summary_delta(tx, inserted).await?;
   Ok(())
 }
@@ -589,7 +590,7 @@ pub async fn insert_tx_inputs(
   .bind(sequences)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("batch insert tx_inputs at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("batch insert tx_inputs at {height}"), e))?;
   Ok(())
 }
 
@@ -616,13 +617,13 @@ pub async fn prepare_tx_outputs_staging(
     )
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("create tx_outputs staging: {e}")))?;
+    .map_err(|e| pg_err("create tx_outputs staging", e))?;
   }
 
   sqlx::query("TRUNCATE tmp_tx_outputs_delta RESTART IDENTITY")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("truncate tx_outputs staging: {e}")))?;
+    .map_err(|e| pg_err("truncate tx_outputs staging", e))?;
   Ok(())
 }
 
@@ -659,7 +660,7 @@ pub async fn stage_tx_outputs(
   .bind(addr_types)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("stage tx_outputs: {e}")))?;
+  .map_err(|e| pg_err("stage tx_outputs", e))?;
   Ok(())
 }
 
@@ -674,7 +675,7 @@ pub async fn staged_tx_outputs_count(
   sqlx::query_scalar("SELECT COUNT(*) FROM tmp_tx_outputs_delta")
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("count staged tx_outputs: {e}")))
+    .map_err(|e| pg_err("count staged tx_outputs", e))
 }
 
 /// Apply one staged `tx_outputs` chunk into the final table.
@@ -701,7 +702,7 @@ pub async fn apply_staged_tx_outputs_chunk(
   .bind(end_stage_id)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply staged tx_outputs chunk at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("apply staged tx_outputs chunk at {height}"), e))?;
   Ok(())
 }
 
@@ -739,7 +740,7 @@ pub async fn insert_special_tx_payloads(
   .bind(&payload_vals)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("batch insert special_tx_payloads: {e}")))?;
+  .map_err(|e| pg_err("batch insert special_tx_payloads", e))?;
   Ok(())
 }
 
@@ -756,7 +757,7 @@ pub async fn delete_tx_outputs(
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete tx_outputs {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete tx_outputs {height}"), e))?;
   Ok(())
 }
 
@@ -773,7 +774,7 @@ pub async fn delete_tx_inputs(
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete tx_inputs {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete tx_inputs {height}"), e))?;
   Ok(())
 }
 
@@ -790,7 +791,7 @@ pub async fn delete_special_tx_payloads(
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete special_tx_payloads {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete special_tx_payloads {height}"), e))?;
   Ok(())
 }
 
@@ -808,10 +809,10 @@ pub async fn delete_transactions(
       .bind(height as i32)
       .execute(&mut **tx)
       .await
-      .map_err(|e| DaemonError::Pg(format!("delete transactions {height}: {e}")))?
+      .map_err(|e| pg_err(&format!("delete transactions {height}"), e))?
       .rows_affected(),
   )
-  .map_err(|_| DaemonError::Pg("delete transactions rows_affected overflow".to_owned()))?;
+  .map_err(|_| DaemonError::Pg { message: "delete transactions rows_affected overflow".to_owned(), code: None })?;
   apply_transactions_summary_delta(tx, -deleted).await?;
   Ok(())
 }
@@ -830,7 +831,7 @@ pub async fn delete_transactions_exact_summary(
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete transactions {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete transactions {height}"), e))?;
   let undo_rows = sqlx::query_scalar::<_, i64>(
     "SELECT COUNT(*)
        FROM block_undo_meta
@@ -839,7 +840,7 @@ pub async fn delete_transactions_exact_summary(
   .bind(height as i32)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count block_undo_meta at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("count block_undo_meta at {height}"), e))?;
   if undo_rows == 0 {
     return Err(DaemonError::Index(format!(
       "missing block_undo_meta at {height}; wipe or reindex postgres before disconnecting"
@@ -861,7 +862,7 @@ pub async fn transactions_summary(pool: &PgPool) -> Result<TransactionsSummaryRo
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read transactions summary: {e}")))?
+  .map_err(|e| pg_err("read transactions summary", e))?
   .flatten()
   .unwrap_or(0);
   Ok(TransactionsSummaryRow { total })
@@ -882,7 +883,7 @@ pub async fn refresh_transactions_summary(pool: &PgPool) -> Result<(), DaemonErr
   )
   .execute(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh transactions summary: {e}")))?;
+  .map_err(|e| pg_err("refresh transactions summary", e))?;
   Ok(())
 }
 
@@ -898,7 +899,7 @@ async fn refresh_transactions_summary_tx(
   )
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh transactions summary in tx: {e}")))?;
+  .map_err(|e| pg_err("refresh transactions summary in tx", e))?;
   Ok(())
 }
 
@@ -912,32 +913,24 @@ async fn apply_transactions_summary_delta(
   sqlx::query("SAVEPOINT transactions_summary_delta")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("savepoint transactions summary delta: {e}")))?;
+    .map_err(|e| pg_err("savepoint transactions summary delta", e))?;
   match apply_transactions_summary_delta_once(tx, delta).await {
     Ok(()) => {
       sqlx::query("RELEASE SAVEPOINT transactions_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!("release savepoint transactions summary delta: {e}"))
-        })?;
+        .map_err(|e| pg_err("release savepoint transactions summary delta", e))?;
       Ok(())
     }
-    Err(DaemonError::Pg(message)) if message.contains("transactions_summary_total_check") => {
+    Err(DaemonError::Pg { message, .. }) if message.contains("transactions_summary_total_check") => {
       sqlx::query("ROLLBACK TO SAVEPOINT transactions_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "rollback savepoint transactions summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("rollback savepoint transactions summary delta", e))?;
       sqlx::query("RELEASE SAVEPOINT transactions_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!("release savepoint transactions summary delta: {e}"))
-        })?;
+        .map_err(|e| pg_err("release savepoint transactions summary delta", e))?;
       tracing::warn!(
         "transactions_summary constraint failed during incremental apply; refreshing singleton exactly"
       );
@@ -969,7 +962,7 @@ async fn apply_transactions_summary_delta_once(
   .bind(delta)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply transactions summary delta: {e}")))?;
+  .map_err(|e| pg_err("apply transactions summary delta", e))?;
   Ok(())
 }
 
@@ -982,7 +975,7 @@ async fn temp_table_exists(
     .fetch_one(&mut **tx)
     .await
     .map(|value| value.is_some())
-    .map_err(|e| DaemonError::Pg(format!("check temp table {table_name}: {e}")))
+    .map_err(|e| pg_err(&format!("check temp table {table_name}"), e))
 }
 
 pub async fn ensure_canonical_partitions(
@@ -993,7 +986,7 @@ pub async fn ensure_canonical_partitions(
     sqlx::query(&sql)
       .execute(&mut **tx)
       .await
-      .map_err(|e| DaemonError::Pg(format!("ensure canonical partitions: {e}")))?;
+      .map_err(|e| pg_err("ensure canonical partitions", e))?;
   }
   Ok(())
 }
@@ -1006,7 +999,7 @@ async fn ensure_canonical_partitions_conn(
     sqlx::query(&sql)
       .execute(&mut *conn)
       .await
-      .map_err(|e| DaemonError::Pg(format!("ensure canonical partitions: {e}")))?;
+      .map_err(|e| pg_err("ensure canonical partitions", e))?;
   }
   Ok(())
 }

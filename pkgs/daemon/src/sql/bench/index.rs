@@ -8,6 +8,7 @@
 
 use crate::error::DaemonError;
 use hyphend::bench::BenchDataset;
+use crate::sql::pg_err;
 
 const PAGE_LIMIT: i64 = 100;
 const CHART_TARGET_POINTS: i32 = 144;
@@ -47,7 +48,7 @@ async fn seed_blocks_transactions_metrics(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin index seed tx: {error}")))?;
+    .map_err(|error| pg_err("begin index seed tx", error))?;
   for height in 0..rows {
     sqlx::query(
       "INSERT INTO blocks (
@@ -72,7 +73,7 @@ async fn seed_blocks_transactions_metrics(
     .bind(format!("{height:064x}"))
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed index block {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed index block {height}"), error))?;
     let txid = super::synthetic_hash(b'T', i64::from(height));
     sqlx::query(
       "INSERT INTO transactions (
@@ -92,7 +93,7 @@ async fn seed_blocks_transactions_metrics(
     .bind(Some(10_i64))
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed index tx {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed index tx {height}"), error))?;
     sqlx::query(
       "INSERT INTO tx_inputs (
          txid, vin_index, prev_txid, prev_vout, script_sig, sequence, prev_address, prev_value
@@ -124,7 +125,7 @@ async fn seed_blocks_transactions_metrics(
     })
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed index input {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed index input {height}"), error))?;
     sqlx::query(
       "INSERT INTO tx_outputs (
          txid, vout_index, block_height, value, script_pubkey, address, address_type, spent_txid, spent_vin, spent_height
@@ -138,7 +139,7 @@ async fn seed_blocks_transactions_metrics(
     .bind(format!("Xto{height:05}"))
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed index output {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed index output {height}"), error))?;
     sqlx::query(
       "INSERT INTO block_metrics (
          height, tx_count, utxos_spendable, utxos_unspendable, blockchain_size, credit_pool_balance,
@@ -157,11 +158,11 @@ async fn seed_blocks_transactions_metrics(
     .bind(987_654.0_f64)
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed index metrics {height}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed index metrics {height}"), error))?;
   }
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit index seed tx: {error}")))?;
+    .map_err(|error| pg_err("commit index seed tx", error))?;
   Ok(())
 }
 
@@ -172,7 +173,7 @@ async fn seed_validators(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin validator seed tx: {error}")))?;
+    .map_err(|error| pg_err("begin validator seed tx", error))?;
   for index in 0..validator_rows(dataset) {
     let pro_tx_hash = super::synthetic_hash(b'V', i64::from(index));
     sqlx::query(
@@ -209,7 +210,7 @@ async fn seed_validators(
     .bind(index + 100)
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed validator {index}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed validator {index}"), error))?;
     for history_step in 0..VALIDATOR_HISTORY_ROWS_PER_VALIDATOR {
       let txid = super::synthetic_hash(b'P', i64::from(index * 10 + history_step));
       let block_height = block_rows(dataset)
@@ -234,7 +235,7 @@ async fn seed_validators(
       .bind(Some(10_i64))
       .execute(&mut *tx)
       .await
-      .map_err(|error| DaemonError::Pg(format!("seed validator tx {index}:{history_step}: {error}")))?;
+      .map_err(|error| pg_err(&format!("seed validator tx {index}:{history_step}"), error))?;
       sqlx::query(
         "INSERT INTO special_tx_payloads (txid, tx_type, pro_tx_hash, payload)
          VALUES ($1, 'provider_register', $2, $3)
@@ -248,15 +249,11 @@ async fn seed_validators(
       }))
       .execute(&mut *tx)
       .await
-      .map_err(|error| {
-        DaemonError::Pg(format!(
-          "seed validator payload {index}:{history_step}: {error}"
-        ))
-      })?;
+      .map_err(|error| pg_err(&format!("seed validator payload {index}:{history_step}"), error))?;
     }
   }
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit validator seed tx: {error}")))?;
+    .map_err(|error| pg_err("commit validator seed tx", error))?;
   Ok(())
 }

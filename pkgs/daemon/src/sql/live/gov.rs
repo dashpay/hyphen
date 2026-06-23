@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 const PUBLIC_VALIDATOR_TYPE_FROM_VOTE_SQL: &str = "CASE
          WHEN lower(regexp_replace(COALESCE(vps.validator_type, validators.validator_type, ''), '[^a-zA-Z0-9]+', '', 'g'))
@@ -79,11 +80,11 @@ pub async fn replace_objects(
   sqlx::query("DELETE FROM governance_votes")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear governance votes: {e}")))?;
+    .map_err(|e| pg_err("clear governance votes", e))?;
   sqlx::query("DELETE FROM governance_objects")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear governance objects: {e}")))?;
+    .map_err(|e| pg_err("clear governance objects", e))?;
 
   if !objects.is_empty() {
     sqlx::query(
@@ -104,7 +105,7 @@ pub async fn replace_objects(
     .bind(objects.iter().map(|row| row.updated_at).collect::<Vec<_>>())
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert governance objects: {e}")))?;
+    .map_err(|e| pg_err("insert governance objects", e))?;
   }
   set_governance_summary_total(tx, objects.len() as i64).await?;
   Ok(())
@@ -142,7 +143,7 @@ pub async fn upsert_object(
   .bind(object.updated_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert governance object: {e}")))?;
+  .map_err(|e| pg_err("upsert governance object", e))?;
   refresh_governance_summary(tx).await?;
   Ok(())
 }
@@ -160,7 +161,7 @@ pub async fn replace_votes(
   sqlx::query("DELETE FROM governance_votes")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear governance votes: {e}")))?;
+    .map_err(|e| pg_err("clear governance votes", e))?;
 
   if !votes.is_empty() {
     sqlx::query(
@@ -194,7 +195,7 @@ pub async fn replace_votes(
     .bind(votes.iter().map(|row| row.updated_at).collect::<Vec<_>>())
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert governance votes: {e}")))?;
+    .map_err(|e| pg_err("insert governance votes", e))?;
   }
   Ok(())
 }
@@ -214,7 +215,7 @@ pub async fn replace_votes_for_object(
     .bind(object_hash)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("clear governance votes for object: {e}")))?;
+    .map_err(|e| pg_err("clear governance votes for object", e))?;
 
   if !votes.is_empty() {
     sqlx::query(
@@ -248,7 +249,7 @@ pub async fn replace_votes_for_object(
     .bind(votes.iter().map(|row| row.updated_at).collect::<Vec<_>>())
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert governance votes for object: {e}")))?;
+    .map_err(|e| pg_err("insert governance votes for object", e))?;
   }
   Ok(())
 }
@@ -266,7 +267,7 @@ pub async fn governance_summary(pool: &PgPool) -> Result<GovernanceSummaryRow, D
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read governance summary: {e}")))?
+  .map_err(|e| pg_err("read governance summary", e))?
   .flatten()
   .unwrap_or(0);
   Ok(GovernanceSummaryRow { proposal_total })
@@ -311,7 +312,7 @@ pub async fn vote_type_counts(
     .bind(object_hashes)
     .fetch_all(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read governance vote type counts: {e}")))?;
+    .map_err(|e| pg_err("read governance vote type counts", e))?;
 
   Ok(
     rows
@@ -335,7 +336,7 @@ async fn refresh_governance_summary(
   let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::bigint FROM governance_objects")
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("count governance objects: {e}")))?;
+    .map_err(|e| pg_err("count governance objects", e))?;
   set_governance_summary_total(tx, total).await
 }
 
@@ -352,7 +353,7 @@ async fn set_governance_summary_total(
   .bind(total)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("set governance summary total: {e}")))?;
+  .map_err(|e| pg_err("set governance summary total", e))?;
   Ok(())
 }
 
@@ -395,7 +396,7 @@ pub async fn objects(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read governance objects: {e}")))?;
+  .map_err(|e| pg_err("read governance objects", e))?;
   Ok(
     rows
       .into_iter()
@@ -427,7 +428,7 @@ pub async fn all_objects(pool: &PgPool) -> Result<Vec<GovernanceObjectRow>, Daem
   )
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read all governance objects: {e}")))?;
+  .map_err(|e| pg_err("read all governance objects", e))?;
   Ok(
     rows
       .into_iter()
@@ -463,7 +464,7 @@ pub async fn object(
   .bind(hash)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read governance object: {e}")))?;
+  .map_err(|e| pg_err("read governance object", e))?;
   Ok(row.map(|row| GovernanceObjectRow {
     object_hash: row.get("object_hash"),
     parent_hash: row.get("parent_hash"),
@@ -518,7 +519,7 @@ pub async fn votes(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read governance votes: {e}")))?;
+  .map_err(|e| pg_err("read governance votes", e))?;
   Ok(
     rows
       .into_iter()
@@ -562,7 +563,7 @@ pub async fn search_objects_by_query(
   .bind(limit)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("search governance objects: {e}")))?;
+  .map_err(|e| pg_err("search governance objects", e))?;
 
   Ok(
     rows

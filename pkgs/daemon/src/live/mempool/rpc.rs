@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
 use crate::live::warn;
 use crate::policy::api::API_REFRESH_WARN_INTERVAL_SECS;
@@ -33,7 +33,7 @@ async fn build_snapshot_tx(
   DaemonError,
 > {
   let txid = utils::decode_hex_to(txid_hex, HashEndian::Ser)
-    .map_err(|e| DaemonError::RestSource(format!("mempool snapshot txid decode: {e}")))?;
+    .map_err(|e| DaemonError::RestSource { message: format!("mempool snapshot txid decode: {e}"), kind: RestErrorKind::Other })?;
   let row = sql::live::mempool::MempoolRecentTxRow {
     txid: txid.clone(),
     raw_tx,
@@ -85,7 +85,7 @@ async fn refresh_recent_snapshot(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin mempool snapshot refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin mempool snapshot refresh tx: {e}"), code: None })?;
   sql::live::mempool::clear_recent_snapshot(&mut tx).await?;
   for (row, normalized) in snapshot_rows {
     sql::live::mempool::upsert_recent_tx(&mut tx, &row).await?;
@@ -100,7 +100,7 @@ async fn refresh_recent_snapshot(
   }
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit mempool snapshot refresh tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit mempool snapshot refresh tx: {e}"), code: None })?;
   Ok(())
 }
 
@@ -114,16 +114,16 @@ async fn refresh_summary_once(
   let info = rpc.get_mempool_info().await?;
   let row = sql::live::mempool::MempoolSummaryRow {
     tx_count: i64::try_from(info.size)
-      .map_err(|_| DaemonError::RestSource("mempool size exceeds i64::MAX".to_owned()))?,
+      .map_err(|_| DaemonError::RestSource { message: "mempool size exceeds i64::MAX".to_owned(), kind: RestErrorKind::Other })?,
     total_bytes: i64::try_from(info.bytes)
-      .map_err(|_| DaemonError::RestSource("mempool bytes exceeds i64::MAX".to_owned()))?,
+      .map_err(|_| DaemonError::RestSource { message: "mempool bytes exceeds i64::MAX".to_owned(), kind: RestErrorKind::Other })?,
     usage_bytes: Some(
       i64::try_from(info.usage)
-        .map_err(|_| DaemonError::RestSource("mempool usage exceeds i64::MAX".to_owned()))?,
+        .map_err(|_| DaemonError::RestSource { message: "mempool usage exceeds i64::MAX".to_owned(), kind: RestErrorKind::Other })?,
     ),
     max_bytes: Some(
       i64::try_from(info.maxmempool)
-        .map_err(|_| DaemonError::RestSource("mempool maxmempool exceeds i64::MAX".to_owned()))?,
+        .map_err(|_| DaemonError::RestSource { message: "mempool maxmempool exceeds i64::MAX".to_owned(), kind: RestErrorKind::Other })?,
     ),
     updated_at: std::time::SystemTime::now()
       .duration_since(std::time::UNIX_EPOCH)
@@ -133,21 +133,21 @@ async fn refresh_summary_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin mempool summary tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin mempool summary tx: {e}"), code: None })?;
   sql::live::mempool::upsert_summary(&mut tx, &row).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit mempool summary tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit mempool summary tx: {e}"), code: None })?;
 
   if row.tx_count == 0 {
     let mut tx = pool
       .begin()
       .await
-      .map_err(|e| DaemonError::Pg(format!("begin mempool snapshot clear: {e}")))?;
+      .map_err(|e| DaemonError::Pg { message: format!("begin mempool snapshot clear: {e}"), code: None })?;
     sql::live::mempool::clear_recent_snapshot(&mut tx).await?;
     tx.commit()
       .await
-      .map_err(|e| DaemonError::Pg(format!("commit mempool snapshot clear: {e}")))?;
+      .map_err(|e| DaemonError::Pg { message: format!("commit mempool snapshot clear: {e}"), code: None })?;
     return Ok(());
   }
 
@@ -188,7 +188,7 @@ mod tests {
   use async_trait::async_trait;
 
   use super::refresh_summary_once;
-  use crate::error::DaemonError;
+  use crate::error::{DaemonError, RestErrorKind};
   use crate::sources::rpc::{
     BestChainLock, MempoolInfo, MempoolTxEntry, MempoolTxMap, NetworkInfo, PeerInfo, ProTxListEntry,
   };
@@ -216,7 +216,7 @@ mod tests {
         .raw
         .get(txid)
         .cloned()
-        .ok_or_else(|| DaemonError::RestSource(format!("missing test tx {txid}")))
+        .ok_or_else(|| DaemonError::RestSource { message: format!("missing test tx {txid}"), kind: RestErrorKind::Other })
     }
 
     async fn get_network_info(&self) -> Result<NetworkInfo, DaemonError> {

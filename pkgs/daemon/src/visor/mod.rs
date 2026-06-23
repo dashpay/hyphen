@@ -331,7 +331,9 @@ where
               task = name,
               "failed to rebuild supervised task: {error}"
             );
-            lifecycle.stop();
+            if error.classify() == crate::error::Outcome::Fatal {
+              lifecycle.stop();
+            }
             return;
           }
         },
@@ -570,14 +572,22 @@ where
                   task = name,
                   attempts = restart_attempts,
                   detail = %error,
-                  "supervised task exhausted restart budget after failure"
+                  "supervised task exhausted restart budget after failure; subsystem will not be restarted — daemon continues without it"
                 );
-                lifecycle.stop();
+                if error.classify() == crate::error::Outcome::Fatal {
+                  lifecycle.stop();
+                }
                 return;
               }
               RecoveryDisposition::NotNeeded => {
-                tracing::error!(visor, task = name, "supervised task failed: {error}");
-                lifecycle.stop();
+                tracing::error!(
+                  visor,
+                  task = name,
+                  "supervised task failed: {error}; subsystem will not be restarted — daemon continues without it"
+                );
+                if error.classify() == crate::error::Outcome::Fatal {
+                  lifecycle.stop();
+                }
                 return;
               }
               RecoveryDisposition::Blocked(reason) => {
@@ -586,9 +596,11 @@ where
                   task = name,
                   reason,
                   detail = %error,
-                  "supervised task failed without recoverable disposition"
+                  "supervised task failed without recoverable disposition; subsystem will not be restarted — daemon continues without it"
                 );
-                lifecycle.stop();
+                if error.classify() == crate::error::Outcome::Fatal {
+                  lifecycle.stop();
+                }
                 return;
               }
               RecoveryDisposition::Exhausted => {
@@ -596,9 +608,11 @@ where
                   visor,
                   task = name,
                   detail = %error,
-                  "supervised task recovery exhausted after failure"
+                  "supervised task recovery exhausted after failure; subsystem will not be restarted — daemon continues without it"
                 );
-                lifecycle.stop();
+                if error.classify() == crate::error::Outcome::Fatal {
+                  lifecycle.stop();
+                }
                 return;
               }
               RecoveryDisposition::Fatal(reason) => {
@@ -1004,5 +1018,80 @@ mod tests {
 
     assert!(lifecycle.terminated());
     assert_eq!(builds.load(Ordering::SeqCst), 0);
+  }
+
+  #[tokio::test]
+  async fn spawn_supervised_task_does_not_stop_lifecycle_for_non_fatal_error() {
+    let lifecycle = crate::lifecycle::Lifecycle::start();
+    let handle = SupervisedHandle::new(FakeWorker {
+      fenced: Arc::new(AtomicBool::new(false)),
+    });
+    let task = spawn_supervised_task(
+      "test",
+      "nonfatal",
+      Arc::clone(&lifecycle),
+      handle,
+      crate::worker::WorkerTask::new(
+        FakeWorker {
+          fenced: Arc::new(AtomicBool::new(false)),
+        },
+        async {
+          // Pg with SQLSTATE 23505 (unique violation) classifies as Error, not Fatal
+          Err(DaemonError::Pg {
+            message: "constraint violation".to_owned(),
+            code: Some("23505".to_owned()),
+          })
+        },
+      ),
+      || {
+        Ok(crate::worker::WorkerTask::new(
+          FakeWorker {
+            fenced: Arc::new(AtomicBool::new(false)),
+          },
+          async { Ok(()) },
+        ))
+      },
+    );
+
+    let _ = task.await;
+
+    // Non-fatal error: lifecycle should NOT be terminated
+    assert!(!lifecycle.terminated());
+  }
+
+  #[tokio::test]
+  async fn spawn_supervised_task_stops_lifecycle_for_fatal_error() {
+    let lifecycle = crate::lifecycle::Lifecycle::start();
+    let handle = SupervisedHandle::new(FakeWorker {
+      fenced: Arc::new(AtomicBool::new(false)),
+    });
+    let task = spawn_supervised_task(
+      "test",
+      "fatal",
+      Arc::clone(&lifecycle),
+      handle,
+      crate::worker::WorkerTask::new(
+        FakeWorker {
+          fenced: Arc::new(AtomicBool::new(false)),
+        },
+        async {
+          // Config error classifies as Fatal
+          Err(DaemonError::Config("bad config".to_owned()))
+        },
+      ),
+      || {
+        Ok(crate::worker::WorkerTask::new(
+          FakeWorker {
+            fenced: Arc::new(AtomicBool::new(false)),
+          },
+          async { Ok(()) },
+        ))
+      },
+    );
+
+    let _ = task.await;
+
+    // Fatal error: lifecycle should be terminated
+    assert!(lifecycle.terminated());
   }
 }

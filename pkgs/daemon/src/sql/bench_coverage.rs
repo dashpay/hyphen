@@ -134,6 +134,10 @@ const COVERAGE: &[CoverageEntry] = &[
   ),
   excluded!("init::validate::validate", "schema validation helper"),
   excluded!(
+    "verbs::reindex::force_reindex_all",
+    "maintenance orchestration"
+  ),
+  excluded!(
     "verbs::reindex::force_reindex_stage",
     "maintenance orchestration"
   ),

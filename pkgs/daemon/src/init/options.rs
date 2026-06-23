@@ -12,7 +12,7 @@ use crate::config::{
   DEFAULT_GOVERNANCE_REFRESH_SECS, DEFAULT_NETWORK_REFRESH_SECS, DEFAULT_PROTX_REFRESH_SECS,
 };
 use crate::error::DaemonError;
-use crate::init::args::{Args, ReindexTarget, StoreTargetArg};
+use crate::init::args::{Args, IndexTarget, StoreTarget as StoreTargetArg};
 use hyphend::wire::msg::{
   ConfigApiSnapshot, ConfigCacheSnapshot, ConfigIndexSnapshot, ConfigLiveSnapshot,
   ConfigOverlaySnapshot, ConfigPerformanceSnapshot, ConfigSnapshot, ConfigSourcesSnapshot,
@@ -22,10 +22,12 @@ use hyphend::wire::msg::{
 pub enum StartupMode {
   Serve,
   DocsOnly,
-  Reindex(ReindexTarget),
-  ReindexAll,
+  RebuildIndex(IndexTarget),
   RebuildStore(crate::store::StoreTarget),
+  VerifyIndex(IndexTarget),
   VerifyStore(crate::store::StoreTarget),
+  CompactStore(crate::store::StoreTarget),
+  RewindAll { target_height: Option<u32> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,14 +111,18 @@ impl Options {
   pub fn resolve(args: &Args, cfg: &Config) -> Result<Self, DaemonError> {
     let startup_mode = if args.docs_only {
       StartupMode::DocsOnly
-    } else if args.reindex_all {
-      StartupMode::ReindexAll
-    } else if let Some(target) = args.reindex {
-      StartupMode::Reindex(target)
+    } else if let Some(target) = args.rebuild_index {
+      StartupMode::RebuildIndex(target)
     } else if let Some(target) = args.rebuild_store {
       StartupMode::RebuildStore(store_target(target))
+    } else if let Some(target) = args.verify_index {
+      StartupMode::VerifyIndex(target)
     } else if let Some(target) = args.verify_store {
       StartupMode::VerifyStore(store_target(target))
+    } else if let Some(target) = args.compact_store {
+      StartupMode::CompactStore(store_target(target))
+    } else if let Some(target_height) = args.rewind_all {
+      StartupMode::RewindAll { target_height }
     } else {
       StartupMode::Serve
     };
@@ -375,8 +381,8 @@ impl Options {
 fn store_target(arg: StoreTargetArg) -> crate::store::StoreTarget {
   match arg {
     StoreTargetArg::All => crate::store::StoreTarget::All,
-    StoreTargetArg::AddressHistory => crate::store::StoreTarget::AddressHistory,
-    StoreTargetArg::PrevoutLookup => crate::store::StoreTarget::PrevoutLookup,
+    StoreTargetArg::Address => crate::store::StoreTarget::AddressHistory,
+    StoreTargetArg::Prevout => crate::store::StoreTarget::PrevoutLookup,
   }
 }
 
@@ -399,37 +405,53 @@ impl ApiOptions {
 #[cfg(test)]
 mod tests {
   use super::{Options, StartupMode};
-  use crate::init::args::StoreTargetArg;
+  use crate::init::args::{IndexTarget, StoreTarget};
 
-  #[test]
-  fn options_resolve_reindex_all_mode() {
-    let args = crate::init::Args {
+  fn default_args() -> crate::init::Args {
+    crate::init::Args {
       datadir: None,
       loglevel: 2,
       logconsole: false,
       docs_only: false,
-      reindex: None,
-      reindex_all: true,
+      rebuild_index: None,
       rebuild_store: None,
+      verify_index: None,
       verify_store: None,
+      compact_store: None,
+      rewind_all: None,
+    }
+  }
+
+  #[test]
+  fn options_resolve_rebuild_index_all_mode() {
+    let args = crate::init::Args {
+      rebuild_index: Some(IndexTarget::All),
+      ..default_args()
     };
     let options =
       Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(options.startup_mode, StartupMode::ReindexAll);
+    assert_eq!(
+      options.startup_mode,
+      StartupMode::RebuildIndex(IndexTarget::All)
+    );
+  }
+
+  #[test]
+  fn options_resolve_rebuild_index_block_mode() {
+    let args = crate::init::Args {
+      rebuild_index: Some(IndexTarget::Block),
+      ..default_args()
+    };
+    let options =
+      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
+    assert_eq!(
+      options.startup_mode,
+      StartupMode::RebuildIndex(IndexTarget::Block)
+    );
   }
 
   #[test]
   fn options_require_overlay_protx_rpc() {
-    let args = crate::init::Args {
-      datadir: None,
-      loglevel: 2,
-      logconsole: false,
-      docs_only: false,
-      reindex: None,
-      reindex_all: false,
-      rebuild_store: None,
-      verify_store: None,
-    };
     let cfg = crate::config::Config {
       overlays: Some(crate::config::OverlaysConfig {
         enable_protx: true,
@@ -437,7 +459,7 @@ mod tests {
       }),
       ..crate::config::Config::default()
     };
-    let err = Options::resolve(&args, &cfg).expect_err("rpc should be required");
+    let err = Options::resolve(&default_args(), &cfg).expect_err("rpc should be required");
     assert!(matches!(
       err,
       crate::error::DaemonError::Config(message)
@@ -448,14 +470,8 @@ mod tests {
   #[test]
   fn options_resolve_rebuild_store_mode() {
     let args = crate::init::Args {
-      datadir: None,
-      loglevel: 2,
-      logconsole: false,
-      docs_only: false,
-      reindex: None,
-      reindex_all: false,
-      rebuild_store: Some(StoreTargetArg::All),
-      verify_store: None,
+      rebuild_store: Some(StoreTarget::All),
+      ..default_args()
     };
     let options =
       Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
@@ -468,14 +484,8 @@ mod tests {
   #[test]
   fn options_resolve_verify_store_mode() {
     let args = crate::init::Args {
-      datadir: None,
-      loglevel: 2,
-      logconsole: false,
-      docs_only: false,
-      reindex: None,
-      reindex_all: false,
-      rebuild_store: None,
-      verify_store: Some(StoreTargetArg::PrevoutLookup),
+      verify_store: Some(StoreTarget::Prevout),
+      ..default_args()
     };
     let options =
       Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
@@ -486,16 +496,56 @@ mod tests {
   }
 
   #[test]
+  fn options_resolve_compact_store_mode() {
+    let args = crate::init::Args {
+      compact_store: Some(StoreTarget::Address),
+      ..default_args()
+    };
+    let options =
+      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
+    assert_eq!(
+      options.startup_mode,
+      StartupMode::CompactStore(crate::store::StoreTarget::AddressHistory)
+    );
+  }
+
+  #[test]
+  fn options_resolve_rewind_all_auto_detect() {
+    let args = crate::init::Args {
+      rewind_all: Some(None),
+      ..default_args()
+    };
+    let options =
+      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
+    assert_eq!(
+      options.startup_mode,
+      StartupMode::RewindAll {
+        target_height: None
+      }
+    );
+  }
+
+  #[test]
+  fn options_resolve_rewind_all_explicit_height() {
+    let args = crate::init::Args {
+      rewind_all: Some(Some(1000)),
+      ..default_args()
+    };
+    let options =
+      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
+    assert_eq!(
+      options.startup_mode,
+      StartupMode::RewindAll {
+        target_height: Some(1000)
+      }
+    );
+  }
+
+  #[test]
   fn options_resolve_docs_only_mode_without_source_validation() {
     let args = crate::init::Args {
-      datadir: None,
-      loglevel: 2,
-      logconsole: false,
       docs_only: true,
-      reindex: None,
-      reindex_all: false,
-      rebuild_store: None,
-      verify_store: None,
+      ..default_args()
     };
     let cfg = crate::config::Config {
       live: Some(crate::config::LiveConfig {

@@ -10,6 +10,7 @@ use sqlx::PgPool;
 
 use crate::error::DaemonError;
 use crate::index::Stage;
+use super::pg_err;
 
 /// One `sync_state` row projected into a small transport-friendly struct.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +31,7 @@ pub async fn indexed_height(pool: &PgPool, stage: &str) -> Result<i32, DaemonErr
     .bind(stage)
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read {stage} sync_state: {e}")))
+    .map_err(|e| pg_err(&format!("read {stage} sync_state"), e))
 }
 
 /// Read the `indexed_height` for a typed stage from `sync_state`.
@@ -57,7 +58,7 @@ pub async fn indexed_stage_height_tx(
     .bind(stage.name())
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read {} sync_state in tx: {e}", stage.name())))
+    .map_err(|e| pg_err(&format!("read {} sync_state in tx", stage.name()), e))
 }
 
 /// Read the durable height for a stage from its owning table.
@@ -75,7 +76,7 @@ pub async fn durable_stage_height(pool: &PgPool, stage: Stage) -> Result<i32, Da
   sqlx::query_scalar(query)
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read {stage_name} actual height: {e}")))
+    .map_err(|e| pg_err(&format!("read {stage_name} actual height"), e))
 }
 
 /// Update one stage height outside an explicit SQL transaction.
@@ -93,7 +94,7 @@ pub async fn update_indexed_stage_height(
     .bind(stage.name())
     .execute(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("update {} sync_state: {e}", stage.name())))?;
+    .map_err(|e| pg_err(&format!("update {} sync_state", stage.name()), e))?;
   Ok(())
 }
 
@@ -114,7 +115,7 @@ pub async fn update_indexed_stage_height_tx(
     .bind(stage.name())
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("update {} sync_state: {e}", stage.name())))?;
+    .map_err(|e| pg_err(&format!("update {} sync_state", stage.name()), e))?;
   Ok(())
 }
 
@@ -132,7 +133,7 @@ pub async fn block_hash_at_height_tx(
     .bind(height)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read block hash at height {height} in tx: {e}")))
+    .map_err(|e| pg_err(&format!("read block hash at height {height} in tx"), e))
 }
 
 /// Relax commit durability for the current transaction only.
@@ -146,7 +147,7 @@ pub async fn set_local_async_commit(
   sqlx::query("SET LOCAL synchronous_commit = off")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("SET sync_commit: {e}")))?;
+    .map_err(|e| pg_err("SET sync_commit", e))?;
   Ok(())
 }
 
@@ -161,7 +162,7 @@ pub async fn sync_state_rows(pool: &PgPool) -> Result<Vec<SyncStateRow>, DaemonE
   let rows = sqlx::query("SELECT stage, indexed_height, updated_at FROM sync_state ORDER BY stage")
     .fetch_all(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read sync_state rows: {e}")))?;
+    .map_err(|e| pg_err("read sync_state rows", e))?;
 
   Ok(
     rows
@@ -184,7 +185,7 @@ pub async fn table_row_count(pool: &PgPool, table_name: &'static str) -> Result<
   sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table_name}"))
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("count {table_name}: {e}")))
+    .map_err(|e| pg_err(&format!("count {table_name}"), e))
 }
 
 #[cfg(test)]

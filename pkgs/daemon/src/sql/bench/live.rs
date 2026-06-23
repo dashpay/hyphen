@@ -8,6 +8,7 @@
 
 use crate::error::DaemonError;
 use hyphend::bench::BenchDataset;
+use crate::sql::pg_err;
 
 const PAGE_LIMIT: i64 = 100;
 
@@ -21,7 +22,7 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin live seed tx: {error}")))?;
+    .map_err(|error| pg_err("begin live seed tx", error))?;
   crate::sql::live::mempool::upsert_summary(
     &mut tx,
     &crate::sql::live::mempool::MempoolSummaryRow {
@@ -166,7 +167,7 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
   .await?;
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit live seed tx: {error}")))?;
+    .map_err(|error| pg_err("commit live seed tx", error))?;
   Ok(())
 }
 

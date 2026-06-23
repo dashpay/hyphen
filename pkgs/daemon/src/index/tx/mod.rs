@@ -49,15 +49,29 @@ impl IndexOps for TransactionIndex {
     sql::delete_special_tx_payloads(tx, height).await?;
     sql::delete_transactions_exact_summary(tx, height).await?;
     if let (Some(db), Some(stores)) = (&self.db, &self.secondary_stores) {
-      let block = crate::store::load_block_ctx(db, height)?;
-      let next_tip = height.checked_sub(1);
-      let next_hash = next_tip.and_then(|h| crate::db::get_hash_for_height(db, h));
-      crate::store::prevout::disconnect_block(
-        stores.db(crate::store::StoreId::PrevoutLookup)?,
-        &block,
-        next_tip,
-        next_hash,
-      )?;
+      match crate::store::load_block_ctx(db, height) {
+        Ok(block) => {
+          let next_tip = height.checked_sub(1);
+          let next_hash = next_tip.and_then(|h| crate::db::get_hash_for_height(db, h));
+          match stores.db(crate::store::StoreId::PrevoutLookup) {
+            Ok(pl_db) => {
+              if let Err(e) = crate::store::prevout::disconnect_block(pl_db, &block, next_tip, next_hash) {
+                tracing::warn!(height, error = %e, "prevout store disconnect failed (best-effort)");
+              }
+            }
+            Err(e) => {
+              tracing::warn!(height, error = %e, "skipping prevout store disconnect: store unavailable");
+            }
+          }
+        }
+        Err(e) => {
+          tracing::warn!(
+            height,
+            error = %e,
+            "skipping prevout store disconnect: raw block not available in RocksDB"
+          );
+        }
+      }
     }
     Ok(())
   }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::sql::SqlPool;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
 use crate::live::warn;
 use crate::policy::api::API_REFRESH_WARN_INTERVAL_SECS;
@@ -42,11 +42,11 @@ pub async fn refresh_once(pool: &SqlPool, rpc: &dyn RpcSource) -> Result<(), Dae
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin validator protx snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin validator protx snapshot tx: {e}"), code: None })?;
   sql::live::protx::replace_snapshot(&mut tx, &rows).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit validator protx snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit validator protx snapshot tx: {e}"), code: None })?;
   Ok(())
 }
 
@@ -79,10 +79,13 @@ fn snapshot_row(
   updated_at: i64,
 ) -> Result<sql::live::protx::ValidatorProTxSnapshotRow, DaemonError> {
   let pro_tx_lookup = HashLookup::from_hex(&entry.pro_tx_hash).map_err(|e| {
-    DaemonError::RestSource(format!(
-      "decode validator protx hash {}: {e}",
-      entry.pro_tx_hash
-    ))
+    DaemonError::RestSource {
+      message: format!(
+        "decode validator protx hash {}: {e}",
+        entry.pro_tx_hash
+      ),
+      kind: RestErrorKind::Other,
+    }
   })?;
   Ok(sql::live::protx::ValidatorProTxSnapshotRow {
     pro_tx_hash: pro_tx_lookup.bytes(HashEndian::Ser).to_vec(),

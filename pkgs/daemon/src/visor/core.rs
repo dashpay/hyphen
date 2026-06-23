@@ -262,27 +262,6 @@ impl Visor for CoreVisor {
       return Ok(());
     }
 
-    let reconcile = crate::sql::verbs::rewind::reconcile_postgres_with_local_rocks(
-      &self.cfg.pool,
-      Arc::clone(&self.cfg.db),
-      self.cfg.secondary_stores.clone(),
-      self.cfg.p2pkh_version,
-      self.cfg.p2sh_version,
-      self.cfg.block_time_secs,
-    )
-    .await?;
-    tracing::info!(
-      pg_block_before = reconcile.pg_block_before,
-      pg_block_after = reconcile.pg_block_after,
-      local_tip_before_repair = reconcile.local_tip_before_repair,
-      local_tip_after_repair = reconcile.local_tip_after_repair,
-      disconnected_heights = reconcile.disconnected_heights,
-      clamped_sync_rows = reconcile.clamped_sync_rows,
-      "startup reconciliation complete"
-    );
-    crate::sql::index::tx::refresh_transactions_summary(&self.cfg.pool).await?;
-    crate::sql::index::spent::refresh_address_balances_summary_pool(&self.cfg.pool).await?;
-
     let ingest_spec = ingest::ingestion_supervised_task(ingest::IngestCtx {
       db: Arc::clone(&self.cfg.db),
       secondary_stores: self.cfg.secondary_stores.clone(),

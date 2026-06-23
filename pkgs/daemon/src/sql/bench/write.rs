@@ -9,6 +9,7 @@
 use crate::error::DaemonError;
 use crate::index::Stage;
 use hyphend::bench::BenchDataset;
+use crate::sql::pg_err;
 
 /// Prime write benchmark baseline state.
 ///
@@ -19,7 +20,7 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin write seed tx: {error}")))?;
+    .map_err(|error| pg_err("begin write seed tx", error))?;
   crate::sql::index::block::insert_block(
     &mut tx,
     1,
@@ -42,7 +43,7 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
   crate::sql::sync::update_indexed_stage_height_tx(&mut tx, Stage::Spent, 100, 1000).await?;
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit write seed tx: {error}")))?;
+    .map_err(|error| pg_err("commit write seed tx", error))?;
   let seeded_delta_rows = delta_rows(dataset);
   let addresses: Vec<String> = (0..seeded_delta_rows)
     .map(|index| format!("Xdelta{index:05}"))
@@ -56,7 +57,7 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin write address seed tx: {error}")))?;
+    .map_err(|error| pg_err("begin write address seed tx", error))?;
   crate::sql::index::spent::apply_address_stats_chunk(
     &mut tx,
     &addresses,
@@ -70,12 +71,12 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
   .await?;
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit write address seed tx: {error}")))?;
+    .map_err(|error| pg_err("commit write address seed tx", error))?;
   let existing_balance_rows = delta_rows(dataset) / 2;
   let mut tx = pool
     .begin()
     .await
-    .map_err(|error| DaemonError::Pg(format!("begin write balance seed tx: {error}")))?;
+    .map_err(|error| pg_err("begin write balance seed tx", error))?;
   for index in 0..existing_balance_rows {
     sqlx::query(
       "INSERT INTO address_balances (address, balance)
@@ -86,11 +87,11 @@ pub async fn seed(pool: &crate::sql::SqlPool, dataset: BenchDataset) -> Result<(
     .bind(1_000_i64)
     .execute(&mut *tx)
     .await
-    .map_err(|error| DaemonError::Pg(format!("seed write address_balances {index}: {error}")))?;
+    .map_err(|error| pg_err(&format!("seed write address_balances {index}"), error))?;
   }
   tx.commit()
     .await
-    .map_err(|error| DaemonError::Pg(format!("commit write balance seed tx: {error}")))?;
+    .map_err(|error| pg_err("commit write balance seed tx", error))?;
   Ok(())
 }
 

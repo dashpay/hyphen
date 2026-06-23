@@ -10,6 +10,7 @@ use num_bigint::BigUint;
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 use crate::index::block::util::CbTxFields;
 
@@ -86,7 +87,7 @@ pub async fn prev_chainwork(
     .bind((height - 1) as i32)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("prev chainwork: {e}")))?;
+    .map_err(|e| pg_err("prev chainwork", e))?;
   Ok(
     row
       .and_then(|s| BigUint::parse_bytes(s.as_bytes(), 16))
@@ -132,7 +133,7 @@ pub async fn list_blocks(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("list blocks: {e}")))?;
+  .map_err(|e| pg_err("list blocks", e))?;
 
   Ok(
     rows
@@ -173,7 +174,7 @@ pub async fn block_by_height(
     .bind(height)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read block {height}: {e}")))?,
+    .map_err(|e| pg_err(&format!("read block {height}"), e))?,
   )
 }
 
@@ -198,7 +199,7 @@ pub async fn block_by_hash(
     .bind(hash)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read block by hash: {e}")))?,
+    .map_err(|e| pg_err("read block by hash", e))?,
   )
 }
 
@@ -223,7 +224,7 @@ pub async fn orphan_block_by_hash(
     .bind(hash)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read orphan block by hash: {e}")))?,
+    .map_err(|e| pg_err("read orphan block by hash", e))?,
   )
 }
 
@@ -251,7 +252,7 @@ pub async fn search_blocks_by_prefix(
   .bind(limit)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("search block prefix: {e}")))?;
+  .map_err(|e| pg_err("search block prefix", e))?;
 
   Ok(
     rows
@@ -287,7 +288,7 @@ pub async fn insert_orphan_block_for_tests(
   .bind(format!("{height:064x}"))
   .execute(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert orphan block {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("insert orphan block {height}"), e))?;
   Ok(())
 }
 
@@ -337,7 +338,7 @@ pub async fn block_txs(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read block txs at height {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("read block txs at height {height}"), e))?;
 
   Ok(
     rows
@@ -367,7 +368,7 @@ pub async fn block_exists(pool: &PgPool, height: i32) -> Result<bool, DaemonErro
     .bind(height)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("check block {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("check block {height}"), e))?;
   Ok(exists.is_some())
 }
 
@@ -381,7 +382,7 @@ pub async fn block_height_for_hash(pool: &PgPool, hash: &[u8]) -> Result<Option<
     .bind(hash)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read block height for hash: {e}")))?;
+    .map_err(|e| pg_err("read block height for hash", e))?;
   Ok(row.map(|(height,)| height))
 }
 
@@ -398,7 +399,7 @@ pub async fn block_hash_for_height(
     .bind(height)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read block hash at height {height}: {e}")))
+    .map_err(|e| pg_err(&format!("read block hash at height {height}"), e))
 }
 
 fn block_detail(row: Option<sqlx::postgres::PgRow>) -> Result<Option<BlockDetailRow>, DaemonError> {
@@ -649,7 +650,7 @@ pub async fn insert_block(
   .bind(cb.credit_pool)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("insert block {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("insert block {height}"), e))?;
 
   Ok(())
 }
@@ -676,12 +677,12 @@ pub async fn delete_block(
   .bind(height as i32)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("archive block {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("archive block {height}"), e))?;
 
   sqlx::query("DELETE FROM blocks WHERE height = $1")
     .bind(height as i32)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete block {height}: {e}")))?;
+    .map_err(|e| pg_err(&format!("delete block {height}"), e))?;
   Ok(())
 }

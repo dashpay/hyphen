@@ -43,11 +43,11 @@ pub async fn refresh_once(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("begin network snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("begin network snapshot tx: {e}"), code: None })?;
   sql::live::network::upsert_snapshot(&mut tx, &row).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("commit network snapshot tx: {e}")))?;
+    .map_err(|e| DaemonError::Pg { message: format!("commit network snapshot tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     stream_hub.publish(LiveEvent::network(row.payload));
   }

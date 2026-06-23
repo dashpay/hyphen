@@ -11,3 +11,4 @@
 
 pub mod reindex;
 pub mod rewind;
+pub mod verify;

@@ -10,6 +10,7 @@ use sqlx::PgPool;
 
 use crate::error::DaemonError;
 use crate::rest::openapi::AddressTxDirection;
+use crate::sql::pg_err;
 
 // ── Connect phases ─────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ pub async fn ensure_history_partitions(
     sqlx::query(&sql)
       .execute(&mut **tx)
       .await
-      .map_err(|e| DaemonError::Pg(format!("ensure spent history partitions: {e}")))?;
+      .map_err(|e| pg_err("ensure spent history partitions", e))?;
   }
   Ok(())
 }
@@ -141,7 +142,7 @@ pub async fn address_summary(
   .bind(address)
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read address summary: {e}")))?;
+  .map_err(|e| pg_err("read address summary", e))?;
 
   Ok(row.map(|row| AddressSummaryRow {
     balance: row.get("balance"),
@@ -171,7 +172,7 @@ pub async fn address_exists(pool: &PgPool, address: &str) -> Result<bool, Daemon
   .bind(address)
   .fetch_one(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read address existence: {e}")))?;
+  .map_err(|e| pg_err("read address existence", e))?;
   Ok(exists)
 }
 
@@ -185,7 +186,7 @@ pub async fn block_time_by_height(pool: &PgPool, height: i32) -> Result<Option<i
     .bind(height)
     .fetch_optional(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read block time by height: {e}")))
+    .map_err(|e| pg_err("read block time by height", e))
 }
 
 /// Read paginated transaction summaries for one address.
@@ -293,7 +294,7 @@ pub async fn address_history_txs(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read address txs: {e}")))?;
+  .map_err(|e| pg_err("read address txs", e))?;
 
   Ok(
     rows
@@ -388,7 +389,7 @@ pub async fn hydrate_address_history_page(
   .bind(address)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("hydrate address txs: {e}")))?;
+  .map_err(|e| pg_err("hydrate address txs", e))?;
 
   if rows.len() != page.len() {
     tracing::warn!(
@@ -477,7 +478,7 @@ pub async fn address_utxos(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read address utxos: {e}")))?;
+  .map_err(|e| pg_err("read address utxos", e))?;
 
   Ok(
     rows
@@ -570,7 +571,7 @@ pub async fn balances_page(
       .await
     }
   }
-  .map_err(|e| DaemonError::Pg(format!("read balances: {e}")))?;
+  .map_err(|e| pg_err("read balances", e))?;
 
   Ok(
     rows
@@ -612,7 +613,7 @@ pub async fn balances_summary(pool: &PgPool) -> Result<BalancesSummaryRow, Daemo
     )
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read balances summary fallback: {e}")))?,
+    .map_err(|e| pg_err("read balances summary fallback", e))?,
     Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("42P01") => sqlx::query(
       "SELECT COUNT(*) AS total,
                 COALESCE(SUM(balance), 0)::bigint AS included_supply
@@ -621,9 +622,9 @@ pub async fn balances_summary(pool: &PgPool) -> Result<BalancesSummaryRow, Daemo
     )
     .fetch_one(pool)
     .await
-    .map_err(|e| DaemonError::Pg(format!("read balances summary fallback: {e}")))?,
+    .map_err(|e| pg_err("read balances summary fallback", e))?,
     Err(e) => {
-      return Err(DaemonError::Pg(format!("read balances summary: {e}")));
+      return Err(pg_err("read balances summary", e));
     }
   };
 
@@ -657,7 +658,7 @@ pub async fn search_addresses_by_prefix(
   .bind(limit)
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("search address prefix: {e}")))?;
+  .map_err(|e| pg_err("search address prefix", e))?;
 
   Ok(
     rows
@@ -719,7 +720,7 @@ pub async fn lookup_prev_outputs(
     .bind(&prev_vouts[start..end])
     .fetch_all(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("lookup prev outputs: {e}")))?;
+    .map_err(|e| pg_err("lookup prev outputs", e))?;
     all_rows.extend(rows.into_iter().map(|row| PrevoutLookupRow {
       prev_txid: row.0,
       prev_vout: row.1,
@@ -757,13 +758,13 @@ pub async fn prepare_prevout_stage(
     )
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("create prevout staging: {e}")))?;
+    .map_err(|e| pg_err("create prevout staging", e))?;
   }
 
   sqlx::query("TRUNCATE tmp_prevout_spend_delta RESTART IDENTITY")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("truncate prevout staging: {e}")))?;
+    .map_err(|e| pg_err("truncate prevout staging", e))?;
   Ok(())
 }
 
@@ -2910,7 +2911,7 @@ pub async fn stage_prevout_snapshot_rows(
     .bind(&prev_values[start..end])
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("stage prevout snapshot rows: {e}")))?;
+    .map_err(|e| pg_err("stage prevout snapshot rows", e))?;
   }
 
   Ok(())
@@ -2927,7 +2928,7 @@ pub async fn staged_prevout_count(
   sqlx::query_scalar("SELECT COUNT(*) FROM tmp_prevout_spend_delta")
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("count staged prevouts: {e}")))
+    .map_err(|e| pg_err("count staged prevouts", e))
 }
 
 /// Snapshot spent-output history rows using a precomputed prevout snapshot.
@@ -2982,7 +2983,7 @@ pub async fn insert_spent_output_history(
     .bind(&prev_spent_heights[start..end])
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert spent output history: {e}")))?;
+    .map_err(|e| pg_err("insert spent output history", e))?;
   }
 
   Ok(())
@@ -3016,7 +3017,7 @@ pub async fn mark_outputs_spent_chunk(
   .bind(end_stage_id)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("mark outputs spent chunk: {e}")))?;
+  .map_err(|e| pg_err("mark outputs spent chunk", e))?;
   Ok(())
 }
 
@@ -3045,7 +3046,7 @@ pub async fn batch_update_tx_inputs(
   .bind(values)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("batch update tx_inputs: {e}")))?;
+  .map_err(|e| pg_err("batch update tx_inputs", e))?;
   Ok(())
 }
 
@@ -3072,7 +3073,7 @@ pub async fn batch_update_fees(
   .bind(block_height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("batch update fees: {e}")))?;
+  .map_err(|e| pg_err("batch update fees", e))?;
   Ok(())
 }
 
@@ -3108,7 +3109,7 @@ pub async fn insert_address_history(
     .bind(&block_positions[start..end])
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("insert address history: {e}")))?;
+    .map_err(|e| pg_err("insert address history", e))?;
   }
 
   Ok(())
@@ -3133,7 +3134,7 @@ pub async fn stage_address_balances_delta(
   .bind(balances)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("stage address_balances delta: {e}")))?;
+  .map_err(|e| pg_err("stage address_balances delta", e))?;
   Ok(())
 }
 
@@ -3173,7 +3174,7 @@ pub async fn apply_address_balances_chunk(
   .bind(balances)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply address_balances chunk: {e}")))?;
+  .map_err(|e| pg_err("apply address_balances chunk", e))?;
   Ok(())
 }
 
@@ -3194,36 +3195,24 @@ pub async fn apply_address_balances_summary_chunk(
   sqlx::query("SAVEPOINT address_balances_summary_delta")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("savepoint address balances summary delta: {e}")))?;
+    .map_err(|e| pg_err("savepoint address balances summary delta", e))?;
   match apply_address_balances_summary_chunk_once(tx, addrs, balances).await {
     Ok(()) => {
       sqlx::query("RELEASE SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "release savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("release savepoint address balances summary delta", e))?;
       Ok(())
     }
-    Err(DaemonError::Pg(message)) if is_balances_summary_constraint_error(&message) => {
+    Err(DaemonError::Pg { message, .. }) if is_balances_summary_constraint_error(&message) => {
       sqlx::query("ROLLBACK TO SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "rollback savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("rollback savepoint address balances summary delta", e))?;
       sqlx::query("RELEASE SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "release savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("release savepoint address balances summary delta", e))?;
       tracing::warn!(
         rows = addrs.len(),
         "address_balances_summary constraint failed during direct apply; refreshing singleton to post-chunk state"
@@ -3260,36 +3249,24 @@ pub async fn apply_address_stats_summary_chunk(
   sqlx::query("SAVEPOINT address_balances_summary_delta")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("savepoint address balances summary delta: {e}")))?;
+    .map_err(|e| pg_err("savepoint address balances summary delta", e))?;
   match apply_address_stats_summary_chunk_once(tx, addrs, balances).await {
     Ok(()) => {
       sqlx::query("RELEASE SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "release savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("release savepoint address balances summary delta", e))?;
       Ok(())
     }
-    Err(DaemonError::Pg(message)) if is_balances_summary_constraint_error(&message) => {
+    Err(DaemonError::Pg { message, .. }) if is_balances_summary_constraint_error(&message) => {
       sqlx::query("ROLLBACK TO SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "rollback savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("rollback savepoint address balances summary delta", e))?;
       sqlx::query("RELEASE SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "release savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("release savepoint address balances summary delta", e))?;
       tracing::warn!(
         rows = addrs.len(),
         "address_balances_summary constraint failed during address_stats apply; refreshing singleton to post-chunk state"
@@ -3373,7 +3350,7 @@ pub async fn apply_address_stats_chunk(
   .bind(last_seen_heights)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert address_stats chunk: {e}")))?;
+  .map_err(|e| pg_err("upsert address_stats chunk", e))?;
 
   sqlx::query(
     "DELETE FROM address_stats
@@ -3386,7 +3363,7 @@ pub async fn apply_address_stats_chunk(
   .bind(addrs)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("delete zeroed address_stats after apply: {e}")))?;
+  .map_err(|e| pg_err("delete zeroed address_stats after apply", e))?;
 
   Ok(())
 }
@@ -3409,13 +3386,13 @@ pub async fn prepare_address_balances_staging(
     )
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("create address_balances staging: {e}")))?;
+    .map_err(|e| pg_err("create address_balances staging", e))?;
   }
 
   sqlx::query("TRUNCATE tmp_address_balances_delta RESTART IDENTITY")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("truncate address_balances staging: {e}")))?;
+    .map_err(|e| pg_err("truncate address_balances staging", e))?;
   Ok(())
 }
 
@@ -3430,7 +3407,7 @@ pub async fn staged_address_balances_count(
   sqlx::query_scalar("SELECT COUNT(*) FROM tmp_address_balances_delta")
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("count staged address_balances: {e}")))
+    .map_err(|e| pg_err("count staged address_balances", e))
 }
 
 /// Apply one staged address balances delta chunk to the final snapshot table.
@@ -3468,7 +3445,7 @@ pub async fn apply_staged_address_balances_chunk(
   .bind(end_stage_id)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply address_balances staging chunk: {e}")))?;
+  .map_err(|e| pg_err("apply address_balances staging chunk", e))?;
   Ok(())
 }
 
@@ -3485,36 +3462,24 @@ pub async fn apply_staged_address_balances_summary_chunk(
   sqlx::query("SAVEPOINT address_balances_summary_delta")
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("savepoint address balances summary delta: {e}")))?;
+    .map_err(|e| pg_err("savepoint address balances summary delta", e))?;
   match apply_staged_address_balances_summary_chunk_once(tx, start_stage_id, end_stage_id).await {
     Ok(()) => {
       sqlx::query("RELEASE SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "release savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("release savepoint address balances summary delta", e))?;
       Ok(())
     }
-    Err(DaemonError::Pg(message)) if is_balances_summary_constraint_error(&message) => {
+    Err(DaemonError::Pg { message, .. }) if is_balances_summary_constraint_error(&message) => {
       sqlx::query("ROLLBACK TO SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "rollback savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("rollback savepoint address balances summary delta", e))?;
       sqlx::query("RELEASE SAVEPOINT address_balances_summary_delta")
         .execute(&mut **tx)
         .await
-        .map_err(|e| {
-          DaemonError::Pg(format!(
-            "release savepoint address balances summary delta: {e}"
-          ))
-        })?;
+        .map_err(|e| pg_err("release savepoint address balances summary delta", e))?;
       tracing::warn!(
         start_stage_id,
         end_stage_id,
@@ -3648,7 +3613,7 @@ async fn load_address_balances_summary_delta_diag(
   .bind(end_stage_id)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("diagnose address_balances summary delta: {e}")))?;
+  .map_err(|e| pg_err("diagnose address_balances summary delta", e))?;
 
   Ok(BalancesSummaryDeltaDiag {
     current_total: row.0,
@@ -3710,11 +3675,7 @@ async fn refresh_address_balances_summary_for_chunk(
   .bind(end_stage_id)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "refresh address_balances summary for staged chunk: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err("refresh address_balances summary for staged chunk", e))?;
   Ok(())
 }
 
@@ -3768,11 +3729,7 @@ async fn refresh_address_balances_summary_for_addresses(
   .bind(balances)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "refresh address_balances summary for direct chunk: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err("refresh address_balances summary for direct chunk", e))?;
   Ok(())
 }
 
@@ -3826,11 +3783,7 @@ async fn refresh_address_balances_summary_for_stats_addresses(
   .bind(balances)
   .execute(&mut **tx)
   .await
-  .map_err(|e| {
-    DaemonError::Pg(format!(
-      "refresh address_balances summary for address_stats chunk: {e}"
-    ))
-  })?;
+  .map_err(|e| pg_err("refresh address_balances summary for address_stats chunk", e))?;
   Ok(())
 }
 
@@ -3886,7 +3839,7 @@ async fn apply_staged_address_balances_summary_chunk_once(
   .bind(end_stage_id)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply address_balances summary staging chunk: {e}")))?;
+  .map_err(|e| pg_err("apply address_balances summary staging chunk", e))?;
   Ok(())
 }
 
@@ -3939,7 +3892,7 @@ async fn apply_address_balances_summary_chunk_once(
   .bind(balances)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply address_balances summary chunk: {e}")))?;
+  .map_err(|e| pg_err("apply address_balances summary chunk", e))?;
   Ok(())
 }
 
@@ -3992,7 +3945,7 @@ async fn apply_address_stats_summary_chunk_once(
   .bind(balances)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("apply address_stats summary chunk: {e}")))?;
+  .map_err(|e| pg_err("apply address_stats summary chunk", e))?;
   Ok(())
 }
 
@@ -4020,7 +3973,7 @@ pub async fn refresh_address_balances_summary_pool(pool: &sqlx::PgPool) -> Resul
   )
   .execute(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh address_balances summary: {e}")))?;
+  .map_err(|e| pg_err("refresh address_balances summary", e))?;
   Ok(())
 }
 
@@ -4045,7 +3998,7 @@ pub async fn refresh_address_balances_summary(
   )
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh address_balances summary: {e}")))?;
+  .map_err(|e| pg_err("refresh address_balances summary", e))?;
   Ok(())
 }
 
@@ -4058,7 +4011,7 @@ async fn temp_table_exists(
     .fetch_one(&mut **tx)
     .await
     .map(|value| value.is_some())
-    .map_err(|e| DaemonError::Pg(format!("check temp table {table_name}: {e}")))
+    .map_err(|e| pg_err(&format!("check temp table {table_name}"), e))
 }
 
 // ── Disconnect phases ──────────────────────────────────────────────────────
@@ -4080,7 +4033,7 @@ pub async fn restore_spent_at_height(
   .bind(height)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count block_undo_meta at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("count block_undo_meta at {height}"), e))?;
   if undo_meta_rows == 0 {
     return Err(DaemonError::Index(format!(
       "missing block_undo_meta at {height}; wipe or reindex postgres before disconnecting"
@@ -4097,7 +4050,7 @@ pub async fn restore_spent_at_height(
   .bind(height)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count expected prevouts at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("count expected prevouts at {height}"), e))?;
   let undo_rows = sqlx::query_scalar::<_, i64>(
     "SELECT COUNT(*)
        FROM block_undo_outputs
@@ -4106,7 +4059,7 @@ pub async fn restore_spent_at_height(
   .bind(height)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count block_undo_outputs at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("count block_undo_outputs at {height}"), e))?;
   if undo_rows != expected_prevouts {
     return Err(DaemonError::Index(format!(
       "block_undo_outputs mismatch at {height}: expected {expected_prevouts}, found {undo_rows}; wipe or reindex postgres before disconnecting"
@@ -4136,7 +4089,7 @@ async fn count_expected_touched_addresses_at_height(
   .bind(height)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count touched addresses at {height}: {e}")))
+  .map_err(|e| pg_err(&format!("count touched addresses at {height}"), e))
 }
 
 /// Reverse address balances updates owned by one disconnected height.
@@ -4154,7 +4107,7 @@ pub async fn reverse_address_balances_at_height(
     .bind(height)
     .execute(&mut **tx)
     .await
-    .map_err(|e| DaemonError::Pg(format!("delete spent history: {e}")))?;
+    .map_err(|e| pg_err("delete spent history", e))?;
   Ok(())
 }
 
@@ -4176,7 +4129,7 @@ pub async fn reverse_address_history_at_height(
   .bind(height)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("reverse address history at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("reverse address history at {height}"), e))?;
   Ok(())
 }
 
@@ -4275,7 +4228,7 @@ pub async fn reverse_address_stats_at_height(
   .bind(height)
   .fetch_one(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("count block_undo_address_stats at {height}: {e}")))?;
+  .map_err(|e| pg_err(&format!("count block_undo_address_stats at {height}"), e))?;
   if undo_rows != expected_rows {
     return Err(DaemonError::Index(format!(
       "block_undo_address_stats mismatch at {height}: expected {expected_rows}, found {undo_rows}; wipe or reindex postgres before disconnecting"
@@ -4299,7 +4252,7 @@ async fn refresh_address_stats_for_addresses(
   .bind(addresses)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("clear touched address_stats rows: {e}")))?;
+  .map_err(|e| pg_err("clear touched address_stats rows", e))?;
 
   sqlx::query(
     "WITH touched AS (
@@ -4345,6 +4298,6 @@ async fn refresh_address_stats_for_addresses(
   .bind(addresses)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("refresh touched address_stats rows: {e}")))?;
+  .map_err(|e| pg_err("refresh touched address_stats rows", e))?;
   Ok(())
 }

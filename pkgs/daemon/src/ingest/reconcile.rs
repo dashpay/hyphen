@@ -12,7 +12,7 @@ use std::time::Instant;
 use crate::consensus;
 
 use crate::db::{self, CF_META};
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::utils::{self, HashEndian};
 
 use super::IngestCtx;
@@ -54,13 +54,16 @@ async fn canonical_hash_at_height(ctx: &IngestCtx, height: u32) -> Result<[u8; 3
   let requested_hash = ctx.source.block_hash(height).await?;
   let raw = ctx.source.raw_block(&requested_hash).await?;
   let computed_hash = consensus::block_hash(&raw)
-    .map_err(|error| DaemonError::RestSource(format!("hash raw block {height}: {error}")))?
+    .map_err(|error| DaemonError::RestSource { message: format!("hash raw block {height}: {error}"), kind: RestErrorKind::Other })?
     .to_bytes();
   let computed_hex = utils::view_hex(&computed_hash, HashEndian::Ser);
   if computed_hex != requested_hash {
-    return Err(DaemonError::RestSource(format!(
-      "raw block hash mismatch at {height}: source returned {requested_hash}, raw hashes to {computed_hex}"
-    )));
+    return Err(DaemonError::RestSource {
+      message: format!(
+        "raw block hash mismatch at {height}: source returned {requested_hash}, raw hashes to {computed_hex}"
+      ),
+      kind: RestErrorKind::Other,
+    });
   }
   Ok(computed_hash)
 }

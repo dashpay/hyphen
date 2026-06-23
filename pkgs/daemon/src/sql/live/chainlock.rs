@@ -9,6 +9,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 /// Latest known ChainLock snapshot stored in PostgreSQL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +48,7 @@ pub async fn upsert_snapshot(
   .bind(row.seen_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert chainlock snapshot: {e}")))?;
+  .map_err(|e| pg_err("upsert chainlock snapshot", e))?;
   Ok(())
 }
 
@@ -66,7 +67,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<Option<ChainLockSnapshotRow>, Dae
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read chainlock snapshot: {e}")))?;
+  .map_err(|e| pg_err("read chainlock snapshot", e))?;
 
   Ok(row.map(|row| ChainLockSnapshotRow {
     block_hash: row.get("block_hash"),

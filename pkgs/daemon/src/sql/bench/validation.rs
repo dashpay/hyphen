@@ -11,6 +11,7 @@
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationMethod {
@@ -502,7 +503,7 @@ async fn explain_text(
   sqlx::query_scalar::<_, String>(&statement)
     .fetch_all(pool)
     .await
-    .map_err(|error| DaemonError::Pg(format!("run benchmark validation explain: {error}")))
+    .map_err(|error| pg_err("run benchmark validation explain", error))
 }
 
 fn ensure_read_only_statement(select_sql: &str) -> Result<(), DaemonError> {

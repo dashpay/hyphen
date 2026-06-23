@@ -7,6 +7,7 @@
 //! Live schema validation helpers.
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 #[derive(sqlx::FromRow)]
 struct ForeignKeySupportRow {
@@ -263,7 +264,7 @@ pub async fn validate(pool: &sqlx::PgPool) -> Result<Vec<String>, DaemonError> {
   )
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("validate query: {e}")))?;
+  .map_err(|e| pg_err("validate query", e))?;
 
   let mut existing: std::collections::HashMap<String, std::collections::HashSet<String>> =
     std::collections::HashMap::new();
@@ -330,7 +331,7 @@ pub async fn validate(pool: &sqlx::PgPool) -> Result<Vec<String>, DaemonError> {
   )
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("validate foreign key index query: {e}")))?;
+  .map_err(|e| pg_err("validate foreign key index query", e))?;
 
   for row in fk_support_rows {
     problems.push(format!(
@@ -352,7 +353,7 @@ pub async fn validate(pool: &sqlx::PgPool) -> Result<Vec<String>, DaemonError> {
   .bind(["transactions", "tx_outputs"].as_slice())
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("validate partitioned table query: {e}")))?;
+  .map_err(|e| pg_err("validate partitioned table query", e))?;
   let existing_partitioned = partitioned_tables
     .into_iter()
     .map(|row| row.relname)
@@ -382,7 +383,7 @@ pub async fn validate(pool: &sqlx::PgPool) -> Result<Vec<String>, DaemonError> {
   .bind(expected_indexes.as_slice())
   .fetch_all(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("validate required index query: {e}")))?;
+  .map_err(|e| pg_err("validate required index query", e))?;
   let existing_indexes = index_rows
     .into_iter()
     .map(|row| row.indexname)

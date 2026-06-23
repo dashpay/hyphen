@@ -13,6 +13,7 @@ use crate::db;
 use crate::error::DaemonError;
 use crate::index;
 use crate::index::Stage;
+use crate::sql::pg_err;
 use crate::policy::log::log_threshold_met;
 use crate::sql;
 
@@ -24,12 +25,16 @@ pub struct StartupReconcileReport {
   pub local_tip_after_repair: Option<u32>,
   pub disconnected_heights: u32,
   pub clamped_sync_rows: u64,
+  /// Set when PG blocks were disconnected but their raw bytes were missing
+  /// from RocksDB, meaning secondary store disconnects were skipped and the
+  /// store directories should be reset so they auto-rebuild on next startup.
+  pub stores_invalidated: bool,
 }
 
 async fn current_canonical_height(pool: &sqlx::PgPool) -> Result<i32, DaemonError> {
   match crate::sql::progress::chain_progress(pool).await {
     Ok(progress) => Ok(progress.canonical_tip_height),
-    Err(DaemonError::Pg(_)) => sql::query::indexed_stage_height(pool, Stage::Block).await,
+    Err(DaemonError::Pg { .. }) => sql::query::indexed_stage_height(pool, Stage::Block).await,
     Err(error) => Err(error),
   }
 }
@@ -55,7 +60,7 @@ async fn clamp_all_stage_heights_to_local_floor(
   .bind(&stage_names)
   .execute(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("clamp sync_state to local floor: {e}")))?;
+  .map_err(|e| pg_err("clamp sync_state to local floor", e))?;
 
   Ok(changed.rows_affected())
 }
@@ -203,15 +208,54 @@ fn reconcile_forward_frontier(
     return Ok(Some(local_tip));
   }
 
-  let next_height = start.saturating_add(1);
-  if !block_present_at_height(db, next_height)? {
+  // Verify that the PG frontier height itself has a valid RocksDB mapping.
+  // If not, search downward for the nearest valid height.
+  let effective_start = if start > 0 && db::get_hash_for_height(db, start).is_none() {
+    let mut cursor = start;
+    loop {
+      if cursor == 0 {
+        break None;
+      }
+      cursor -= 1;
+      if db::get_hash_for_height(db, cursor).is_some() {
+        break Some(cursor);
+      }
+    }
+  } else {
+    Some(start)
+  };
+
+  let Some(effective_start) = effective_start else {
     tracing::warn!(
-      gap_height = next_height,
+      start,
       local_tip,
-      usable_tip = start,
-      "local RocksDB tip skipped missing next block height; lowering tip metadata to current PostgreSQL frontier"
+      "no valid RocksDB mapping at or below PG frontier; clearing tip metadata"
     );
-    return set_local_tip_metadata(db, Some(start));
+    return set_local_tip_metadata(db, None);
+  };
+
+  // Scan upward from effective_start + 1 to local_tip, finding the highest
+  // contiguous height where blocks exist.
+  let mut usable_tip = effective_start;
+  for height in (effective_start + 1)..=local_tip {
+    if block_present_at_height(db, height)? {
+      usable_tip = height;
+    } else {
+      break;
+    }
+  }
+
+  if usable_tip < local_tip {
+    tracing::warn!(
+      gap_after = usable_tip + 1,
+      local_tip,
+      usable_tip,
+      "RocksDB has gap; lowering tip to highest contiguous block"
+    );
+    return set_local_tip_metadata(
+      db,
+      if usable_tip > 0 { Some(usable_tip) } else if effective_start == 0 { Some(0) } else { Some(usable_tip) },
+    );
   }
 
   Ok(Some(local_tip))
@@ -238,11 +282,11 @@ async fn disconnect_height_postgres_only(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("rewind begin: {e}")))?;
+    .map_err(|e| pg_err("rewind begin", e))?;
   plan.apply(&pipeline, &mut tx).await?;
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("rewind commit: {e}")))?;
+    .map_err(|e| pg_err("rewind commit", e))?;
   Ok(())
 }
 
@@ -280,11 +324,16 @@ pub async fn reconcile_postgres_with_local_rocks(
         local_tip_after_repair: None,
         disconnected_heights: 0,
         clamped_sync_rows,
+        stores_invalidated: false,
       });
     }
     sql::index::tx::refresh_transactions_summary(pool).await?;
     let mut disconnected_heights = 0;
+    let mut stores_invalidated = false;
     for height in (0..=current_pg as u32).rev() {
+      if !stores_invalidated && !block_present_at_height(&db, height)? {
+        stores_invalidated = true;
+      }
       disconnect_height_postgres_only(
         pool,
         Some(Arc::clone(&db)),
@@ -297,6 +346,18 @@ pub async fn reconcile_postgres_with_local_rocks(
       .await?;
       disconnected_heights += 1;
     }
+    if !stores_invalidated {
+      if let Some(stores) = &secondary_stores {
+        for id in crate::store::StoreId::ALL {
+          if let Ok(meta) = stores.meta(id) {
+            if meta.tip_height.is_some() {
+              stores_invalidated = true;
+              break;
+            }
+          }
+        }
+      }
+    }
     let clamped_sync_rows = clamp_all_stage_heights_to_local_floor(pool, None).await?;
     return Ok(StartupReconcileReport {
       pg_block_before: current_pg,
@@ -305,6 +366,7 @@ pub async fn reconcile_postgres_with_local_rocks(
       local_tip_after_repair: None,
       disconnected_heights,
       clamped_sync_rows,
+      stores_invalidated,
     });
   };
 
@@ -317,6 +379,7 @@ pub async fn reconcile_postgres_with_local_rocks(
       local_tip_after_repair: Some(local_tip),
       disconnected_heights: 0,
       clamped_sync_rows,
+      stores_invalidated: false,
     });
   }
 
@@ -327,7 +390,11 @@ pub async fn reconcile_postgres_with_local_rocks(
   );
   sql::index::tx::refresh_transactions_summary(pool).await?;
   let mut disconnected_heights = 0;
+  let mut stores_invalidated = false;
   for height in ((local_tip + 1)..=current_pg as u32).rev() {
+    if !stores_invalidated && !block_present_at_height(&db, height)? {
+      stores_invalidated = true;
+    }
     disconnect_height_postgres_only(
       pool,
       Some(Arc::clone(&db)),
@@ -340,6 +407,20 @@ pub async fn reconcile_postgres_with_local_rocks(
     .await?;
     disconnected_heights += 1;
   }
+  // Also check store tip heights — best-effort store disconnects during the
+  // loop above may have silently failed, leaving stores ahead of the target.
+  if !stores_invalidated {
+    if let Some(stores) = &secondary_stores {
+      for id in crate::store::StoreId::ALL {
+        if let Ok(meta) = stores.meta(id) {
+          if meta.tip_height.is_some_and(|tip| tip > local_tip) {
+            stores_invalidated = true;
+            break;
+          }
+        }
+      }
+    }
+  }
   let clamped_sync_rows = clamp_all_stage_heights_to_local_floor(pool, Some(local_tip)).await?;
   Ok(StartupReconcileReport {
     pg_block_before: current_pg,
@@ -348,6 +429,7 @@ pub async fn reconcile_postgres_with_local_rocks(
     local_tip_after_repair: Some(local_tip),
     disconnected_heights,
     clamped_sync_rows,
+    stores_invalidated,
   })
 }
 
@@ -372,13 +454,13 @@ async fn disconnect_height(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("rewind begin: {e}")))?;
+    .map_err(|e| pg_err("rewind begin", e))?;
 
   plan.apply(&pipeline, &mut tx).await?;
 
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("rewind commit: {e}")))?;
+    .map_err(|e| pg_err("rewind commit", e))?;
   finalize_local_disconnect(&db, height)?;
   crate::sql::progress::mark_recovery_state(pool, "clean", None).await?;
 
@@ -406,13 +488,13 @@ async fn disconnect_height_shared(
   let mut tx = pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("rewind begin: {e}")))?;
+    .map_err(|e| pg_err("rewind begin", e))?;
 
   plan.apply(&pipeline, &mut tx).await?;
 
   tx.commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("rewind commit: {e}")))?;
+    .map_err(|e| pg_err("rewind commit", e))?;
   finalize_local_disconnect(&db, height)?;
   crate::sql::progress::mark_recovery_state(&pool, "clean", None).await?;
 
@@ -424,10 +506,11 @@ pub(crate) fn rewind_target_after_disconnect(current: u32) -> Option<u32> {
 }
 
 fn rewind_start_height(current_pg: i32, current_rocks: Option<u32>) -> Option<u32> {
-  if current_pg >= 0 {
-    Some(current_pg as u32)
-  } else {
-    current_rocks
+  match (current_pg >= 0, current_rocks) {
+    (true, Some(rocks)) => Some(std::cmp::max(current_pg as u32, rocks)),
+    (true, None) => Some(current_pg as u32),
+    (false, Some(rocks)) => Some(rocks),
+    (false, None) => None,
   }
 }
 
@@ -468,18 +551,50 @@ pub async fn rewind_to_height(
     "Starting block-range rewind"
   );
 
+  let pg_ceiling = if current_pg >= 0 { current_pg as u32 } else { 0 };
+
   let mut last_progress_log: Option<(u32, Instant)> = None;
   for height in ((target_height + 1)..=current).rev() {
-    disconnect_height(
-      pool,
-      Arc::clone(db),
-      secondary_stores.clone(),
-      height,
-      p2pkh_version,
-      p2sh_version,
-      block_time_secs,
-    )
-    .await?;
+    let in_pg = current_pg >= 0 && height <= pg_ceiling;
+    let in_rocks =
+      current_rocks.is_some() && db::get_hash_for_height(db, height).is_some();
+
+    match (in_pg, in_rocks) {
+      (true, true) => {
+        // Both PG and RocksDB have this height — full disconnect.
+        disconnect_height(
+          pool,
+          Arc::clone(db),
+          secondary_stores.clone(),
+          height,
+          p2pkh_version,
+          p2sh_version,
+          block_time_secs,
+        )
+        .await?;
+      }
+      (true, false) => {
+        // PG only — no RocksDB mapping for this height.
+        disconnect_height_postgres_only(
+          pool,
+          None,
+          None,
+          height,
+          p2pkh_version,
+          p2sh_version,
+          block_time_secs,
+        )
+        .await?;
+      }
+      (false, true) => {
+        // RocksDB only — no PG data to remove.
+        finalize_local_disconnect(db, height)?;
+      }
+      (false, false) => {
+        // Neither has data at this height, skip.
+      }
+    }
+
     let rewound_to = height.saturating_sub(1);
     if log_threshold_met(last_progress_log, rewound_to, target_height) {
       tracing::info!(
@@ -491,6 +606,15 @@ pub async fn rewind_to_height(
         "block-range rewind progress"
       );
       last_progress_log = Some((rewound_to, Instant::now()));
+    }
+  }
+
+  // Ensure RocksDB tip metadata is correct after the rewind.
+  if current_rocks.is_some_and(|r| r > target_height) {
+    if db::get_hash_for_height(db, target_height).is_some() {
+      set_local_tip_metadata(db, Some(target_height))?;
+    } else if target_height == 0 {
+      set_local_tip_metadata(db, None)?;
     }
   }
 
@@ -546,18 +670,45 @@ pub async fn rewind_to_height_shared(
     "Starting block-range rewind"
   );
 
+  let pg_ceiling = if current_pg >= 0 { current_pg as u32 } else { 0 };
+
   let mut last_progress_log: Option<(u32, Instant)> = None;
   for height in ((target_height + 1)..=current).rev() {
-    disconnect_height_shared(
-      pool.clone(),
-      Arc::clone(&db),
-      secondary_stores.clone(),
-      height,
-      p2pkh_version,
-      p2sh_version,
-      block_time_secs,
-    )
-    .await?;
+    let in_pg = current_pg >= 0 && height <= pg_ceiling;
+    let in_rocks =
+      current_rocks.is_some() && db::get_hash_for_height(&db, height).is_some();
+
+    match (in_pg, in_rocks) {
+      (true, true) => {
+        disconnect_height_shared(
+          pool.clone(),
+          Arc::clone(&db),
+          secondary_stores.clone(),
+          height,
+          p2pkh_version,
+          p2sh_version,
+          block_time_secs,
+        )
+        .await?;
+      }
+      (true, false) => {
+        disconnect_height_postgres_only(
+          &pool,
+          None,
+          None,
+          height,
+          p2pkh_version,
+          p2sh_version,
+          block_time_secs,
+        )
+        .await?;
+      }
+      (false, true) => {
+        finalize_local_disconnect(&db, height)?;
+      }
+      (false, false) => {}
+    }
+
     let rewound_to = height.saturating_sub(1);
     if log_threshold_met(last_progress_log, rewound_to, target_height) {
       tracing::info!(
@@ -569,6 +720,15 @@ pub async fn rewind_to_height_shared(
         "block-range rewind progress"
       );
       last_progress_log = Some((rewound_to, Instant::now()));
+    }
+  }
+
+  // Ensure RocksDB tip metadata is correct after the rewind.
+  if current_rocks.is_some_and(|r| r > target_height) {
+    if db::get_hash_for_height(&db, target_height).is_some() {
+      set_local_tip_metadata(&db, Some(target_height))?;
+    } else if target_height == 0 {
+      set_local_tip_metadata(&db, None)?;
     }
   }
 
@@ -691,8 +851,13 @@ mod tests {
   }
 
   #[test]
-  fn rewind_prefers_current_postgres_height_over_future_rocks_tip() {
-    assert_eq!(rewind_start_height(720_353, Some(1_873_921)), Some(720_353));
+  fn rewind_start_height_returns_max_of_pg_and_rocks() {
+    // When both are present, return the higher value so the rewind loop
+    // covers all data in both databases.
+    assert_eq!(rewind_start_height(720_353, Some(1_873_921)), Some(1_873_921));
+    assert_eq!(rewind_start_height(1_873_921, Some(720_353)), Some(1_873_921));
+    // When only one source has data, return that source's height.
+    assert_eq!(rewind_start_height(720_353, None), Some(720_353));
     assert_eq!(rewind_start_height(-1, Some(1_873_921)), Some(1_873_921));
     assert_eq!(rewind_start_height(-1, None), None);
   }

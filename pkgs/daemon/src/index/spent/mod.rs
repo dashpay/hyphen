@@ -58,18 +58,39 @@ impl IndexOps for SpentIndex {
     };
 
     sql::restore_spent_at_height(tx, h).await?;
-    let block = crate::store::load_block_ctx(db, height)?;
-    let next_tip = height.checked_sub(1);
-    let next_hash = next_tip.and_then(|next| crate::db::get_hash_for_height(db, next));
-    crate::store::address_history::disconnect_block(
-      stores.db(crate::store::StoreId::AddressHistory)?,
-      stores.db(crate::store::StoreId::PrevoutLookup)?,
-      &block,
-      self.p2pkh_version,
-      self.p2sh_version,
-      next_tip,
-      next_hash,
-    )?;
+    match crate::store::load_block_ctx(db, height) {
+      Ok(block) => {
+        let next_tip = height.checked_sub(1);
+        let next_hash = next_tip.and_then(|next| crate::db::get_hash_for_height(db, next));
+        let ah_result = stores.db(crate::store::StoreId::AddressHistory);
+        let pl_result = stores.db(crate::store::StoreId::PrevoutLookup);
+        match (ah_result, pl_result) {
+          (Ok(ah_db), Ok(pl_db)) => {
+            if let Err(e) = crate::store::address_history::disconnect_block(
+              ah_db,
+              pl_db,
+              &block,
+              self.p2pkh_version,
+              self.p2sh_version,
+              next_tip,
+              next_hash,
+            ) {
+              tracing::warn!(height, error = %e, "address history store disconnect failed (best-effort)");
+            }
+          }
+          (Err(e), _) | (_, Err(e)) => {
+            tracing::warn!(height, error = %e, "skipping address history disconnect: store handle unavailable");
+          }
+        }
+      }
+      Err(e) => {
+        tracing::warn!(
+          height,
+          error = %e,
+          "skipping address history store disconnect: raw block not available in RocksDB"
+        );
+      }
+    }
     sql::reverse_address_stats_at_height(tx, h).await?;
     sql::reverse_address_balances_at_height(tx, h).await?;
 

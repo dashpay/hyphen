@@ -10,6 +10,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::error::DaemonError;
+use crate::sql::pg_err;
 
 /// Current network snapshot persisted in PostgreSQL.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +39,7 @@ pub async fn upsert_snapshot(
   .bind(snapshot.updated_at)
   .execute(&mut **tx)
   .await
-  .map_err(|e| DaemonError::Pg(format!("upsert network snapshot: {e}")))?;
+  .map_err(|e| pg_err("upsert network snapshot", e))?;
   Ok(())
 }
 
@@ -57,7 +58,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<Option<NetworkSnapshotRow>, Daemo
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| DaemonError::Pg(format!("read network snapshot: {e}")))?;
+  .map_err(|e| pg_err("read network snapshot", e))?;
 
   Ok(row.map(|row| NetworkSnapshotRow {
     payload: row.get("payload"),

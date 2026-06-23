@@ -126,6 +126,9 @@ pub async fn force_reindex_all(
   block_time_secs: f64,
 ) -> Result<String, DaemonError> {
   sql::bootstrap::reset(pool).await?;
+  // Mark rebuilding AFTER reset (which preserves chain_progress) but BEFORE
+  // the long-running replay so a crash leaves a durable marker.
+  sql::progress::mark_recovery_state(pool, "rebuilding", None).await?;
   rebuild_stages_from_local_rocks(
     pool.clone(),
     db,
@@ -136,6 +139,7 @@ pub async fn force_reindex_all(
     block_time_secs,
   )
   .await?;
+  sql::progress::mark_recovery_state(pool, "clean", None).await?;
   let names: Vec<&str> = std::iter::once(Stage::Block)
     .chain(enabled_stages.iter().copied())
     .map(Stage::name)
@@ -161,6 +165,7 @@ pub async fn force_reindex_stage(
   let Some(stage) = Stage::from_name(stage) else {
     return Err(DaemonError::Index(format!("unknown stage: {stage}")));
   };
+  sql::progress::mark_recovery_state(pool, "rebuilding", None).await?;
   let stages = reset_reindex_stages(pool, stage).await?;
   rebuild_stages_from_local_rocks(
     pool.clone(),
@@ -172,6 +177,7 @@ pub async fn force_reindex_stage(
     block_time_secs,
   )
   .await?;
+  sql::progress::mark_recovery_state(pool, "clean", None).await?;
 
   let names: Vec<&str> = stages.iter().copied().map(Stage::name).collect();
   Ok(format!("reindex complete for: {}", names.join(", ")))
@@ -194,6 +200,7 @@ pub async fn force_reindex_stage_shared(
   let Some(stage) = Stage::from_name(&stage) else {
     return Err(DaemonError::Index(format!("unknown stage: {stage}")));
   };
+  sql::progress::mark_recovery_state(&pool, "rebuilding", None).await?;
   let stages = reset_reindex_stages(&pool, stage).await?;
   rebuild_stages_from_local_rocks(
     pool.clone(),
@@ -205,6 +212,7 @@ pub async fn force_reindex_stage_shared(
     block_time_secs,
   )
   .await?;
+  sql::progress::mark_recovery_state(&pool, "clean", None).await?;
 
   let names: Vec<&str> = stages.iter().copied().map(Stage::name).collect();
   Ok(format!("reindex complete for: {}", names.join(", ")))

@@ -15,7 +15,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::db;
-use crate::error::DaemonError;
+use crate::error::{DaemonError, Outcome};
+use crate::sql::pg_err;
 use crate::policy::log::{log_threshold_met, LOG_INTERVAL_SECS};
 use crate::policy::watchdog::{
   WATCHDOG_ACTIVITY_STALE_SECS, WATCHDOG_OPERATION_TIMEOUT_SECS, WATCHDOG_PROGRESS_STALE_SECS,
@@ -1181,17 +1182,38 @@ pub(crate) async fn block_indexer_loop(
     if let Ok(mut state) = ctx.scheduler_state.lock() {
       state.enter_loop_phase(wire::msg::SchedulerLoopPhase::LoadStageHeights);
     }
-    let mut stage_heights = tokio::time::timeout(
+    let stage_heights_result = tokio::time::timeout(
       Duration::from_secs(WATCHDOG_OPERATION_TIMEOUT_SECS),
       load_stage_heights(&ctx),
     )
-    .await
-    .map_err(|_| {
-      DaemonError::Index(format!(
-        "scheduler stalled while loading stage heights for {}s",
-        WATCHDOG_OPERATION_TIMEOUT_SECS
-      ))
-    })??;
+    .await;
+    let mut stage_heights = match stage_heights_result {
+      Ok(Ok(heights)) => heights,
+      Ok(Err(error)) => {
+        if error.classify() == Outcome::Fatal {
+          return Err(error);
+        }
+        tracing::error!(%error, "load_stage_heights failed; auto-pausing indexing");
+        ctx.operator_pause_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut state) = ctx.scheduler_state.lock() {
+          state.clear_forward_runtime();
+        }
+        pipeline.reset_caches();
+        continue;
+      }
+      Err(_timeout) => {
+        tracing::error!(
+          timeout_secs = WATCHDOG_OPERATION_TIMEOUT_SECS,
+          "load_stage_heights timed out; auto-pausing indexing"
+        );
+        ctx.operator_pause_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut state) = ctx.scheduler_state.lock() {
+          state.clear_forward_runtime();
+        }
+        pipeline.reset_caches();
+        continue;
+      }
+    };
     if let Ok(mut state) = ctx.scheduler_state.lock() {
       state.enter_loop_phase(wire::msg::SchedulerLoopPhase::ChooseLane);
     }
@@ -1232,7 +1254,27 @@ pub(crate) async fn block_indexer_loop(
       batch_sizer: &batch_sizer,
       prefetch_blocks,
     };
-    let elapsed_ms = run_lane_turn(&shared, &mut stage_heights, lane, lane_budget_ms).await?;
+    let elapsed_ms = match run_lane_turn(&shared, &mut stage_heights, lane, lane_budget_ms).await {
+      Ok(ms) => ms,
+      Err(error) => {
+        if error.classify() == Outcome::Fatal {
+          return Err(error);
+        }
+        tracing::error!(
+          lane = ?lane,
+          height = ?stage_heights.values().max(),
+          %error,
+          "block indexer encountered a recoverable error; auto-pausing indexing \
+           (API remains available, resume with IPC or restart after fixing the issue)"
+        );
+        ctx.operator_pause_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut state) = ctx.scheduler_state.lock() {
+          state.clear_forward_runtime();
+        }
+        pipeline.reset_caches();
+        continue;
+      }
+    };
     cycle.consume(lane, elapsed_ms);
 
     lanes = active_lanes(&ctx.enabled_stages, &stage_heights, rocks_tip);
@@ -1454,7 +1496,7 @@ async fn run_lane_turn(
       }
       Ok(())
     }
-    Err(error) if is_pg_shutdown_error(&error) => {
+    Err(error) if is_pg_transient_error(&error) => {
       back_off_for_pg_shutdown(shared.ctx, &error).await?;
       Ok(())
     }
@@ -1538,10 +1580,22 @@ async fn run_rebuild_lane_turn(
   result
 }
 
-fn is_pg_shutdown_error(error: &DaemonError) -> bool {
-  let DaemonError::Pg(message) = error else {
+fn is_pg_transient_error(error: &DaemonError) -> bool {
+  let DaemonError::Pg { message, code } = error else {
     return false;
   };
+  // Programmatic: SQLSTATE classes for transient/shutdown conditions
+  if let Some(c) = code {
+    if c.starts_with("08")
+      || c.starts_with("40")
+      || c.starts_with("53")
+      || (c.starts_with("57") && c != "57014")
+      || c == "55006"
+    {
+      return true;
+    }
+  }
+  // Fallback: message heuristics (pool errors don't carry SQLSTATE)
   let lower = message.to_ascii_lowercase();
   [
     "admin shutdown",
@@ -1556,15 +1610,24 @@ fn is_pg_shutdown_error(error: &DaemonError) -> bool {
     "the database system is shutting down",
     "the database system is starting up",
     "could not connect to server",
+    "deadlock detected",
+    "lock timeout",
+    "could not obtain lock",
+    "could not serialize access",
+    "serialization failure",
   ]
   .iter()
   .any(|needle| lower.contains(needle))
 }
 
 fn is_pg_cancelled_error(error: &DaemonError) -> bool {
-  let DaemonError::Pg(message) = error else {
+  let DaemonError::Pg { message, code } = error else {
     return false;
   };
+  // 57014 = query_canceled
+  if code.as_deref() == Some("57014") {
+    return true;
+  }
   let lower = message.to_ascii_lowercase();
   ["canceling statement due to user request", "query canceled"]
     .iter()
@@ -1883,7 +1946,7 @@ async fn execute_forward_height(
         .pool
         .begin()
         .await
-        .map_err(|e| DaemonError::Pg(format!("forward begin: {e}")))?;
+        .map_err(|e| pg_err("forward begin", e))?;
       crate::sql::query::set_local_async_commit(&mut pg_tx).await?;
       Ok(pg_tx)
     },
@@ -1931,7 +1994,7 @@ async fn execute_forward_height(
       pg_tx
         .commit()
         .await
-        .map_err(|e| DaemonError::Pg(format!("forward COMMIT: {e}")))
+        .map_err(|e| pg_err("forward COMMIT", e))
     },
   )
   .await?;
@@ -2106,6 +2169,12 @@ where
           phase: Some(phase),
           reason: "forward run interrupted".to_owned(),
         })
+      } else if err.is_transient() {
+        Err(ForwardTurnError::Recoverable {
+          height,
+          phase,
+          reason: format!("transient error: {err}"),
+        })
       } else {
         Err(ForwardTurnError::Fatal(err))
       }
@@ -2279,7 +2348,7 @@ async fn execute_height_inner(
     .pool
     .begin()
     .await
-    .map_err(|e| DaemonError::Pg(format!("catch-up begin: {e}")))?;
+    .map_err(|e| pg_err("catch-up begin", e))?;
 
   crate::sql::query::set_local_async_commit(&mut pg_tx).await?;
   let begin_elapsed_ms = begin_started.elapsed().as_millis() as u64;
@@ -2336,7 +2405,7 @@ async fn execute_height_inner(
   pg_tx
     .commit()
     .await
-    .map_err(|e| DaemonError::Pg(format!("catch-up COMMIT: {e}")))?;
+    .map_err(|e| pg_err("catch-up COMMIT", e))?;
   let commit_elapsed_ms = commit_started.elapsed().as_millis() as u64;
   log_catch_up_step_complete(
     lane_label,
@@ -2688,7 +2757,7 @@ mod tests {
   use std::collections::HashMap;
 
   use super::{
-    forward_ready_stages, is_pg_cancelled_error, is_pg_shutdown_error, next_lagging_height,
+    forward_ready_stages, is_pg_cancelled_error, is_pg_transient_error, next_lagging_height,
     now_epoch, ApplyStagePlanSubstage, IndexSchedulerState, SchedulerLane,
   };
   use crate::error::DaemonError;
@@ -2753,36 +2822,95 @@ mod tests {
 
   #[test]
   fn pg_shutdown_classifier_matches_shutdown_and_disconnect_errors() {
-    assert!(is_pg_shutdown_error(&DaemonError::Pg(
-      "forward begin: error returned from database: terminating connection due to administrator command"
+    assert!(is_pg_transient_error(&DaemonError::Pg {
+      message: "forward begin: error returned from database: terminating connection due to administrator command"
         .to_owned(),
-    )));
-    assert!(is_pg_shutdown_error(&DaemonError::Pg(
-      "forward COMMIT: pool closed".to_owned(),
-    )));
-    assert!(!is_pg_shutdown_error(&DaemonError::Pg(
-      "forward COMMIT: duplicate key value violates unique constraint".to_owned(),
-    )));
-    assert!(!is_pg_shutdown_error(&DaemonError::Index(
+      code: None,
+    }));
+    assert!(is_pg_transient_error(&DaemonError::Pg {
+      message: "forward COMMIT: pool closed".to_owned(),
+      code: None,
+    }));
+    assert!(!is_pg_transient_error(&DaemonError::Pg {
+      message: "forward COMMIT: duplicate key value violates unique constraint".to_owned(),
+      code: None,
+    }));
+    assert!(!is_pg_transient_error(&DaemonError::Index(
       "not a postgres error".to_owned(),
     )));
   }
 
   #[test]
   fn pg_cancel_classifier_matches_statement_cancellation_errors() {
-    assert!(is_pg_cancelled_error(&DaemonError::Pg(
-      "forward apply: error returned from database: canceling statement due to user request"
+    assert!(is_pg_cancelled_error(&DaemonError::Pg {
+      message: "forward apply: error returned from database: canceling statement due to user request"
         .to_owned(),
-    )));
-    assert!(is_pg_cancelled_error(&DaemonError::Pg(
-      "forward apply: query canceled".to_owned(),
-    )));
-    assert!(!is_pg_cancelled_error(&DaemonError::Pg(
-      "forward apply: terminating connection due to administrator command".to_owned(),
-    )));
+      code: None,
+    }));
+    assert!(is_pg_cancelled_error(&DaemonError::Pg {
+      message: "forward apply: query canceled".to_owned(),
+      code: None,
+    }));
+    assert!(!is_pg_cancelled_error(&DaemonError::Pg {
+      message: "forward apply: terminating connection due to administrator command".to_owned(),
+      code: None,
+    }));
     assert!(!is_pg_cancelled_error(&DaemonError::Index(
       "not a postgres error".to_owned(),
     )));
+  }
+
+  #[test]
+  fn pg_shutdown_classifier_matches_transient_lock_errors() {
+    for msg in [
+      "deadlock detected",
+      "lock timeout",
+      "could not obtain lock on relation",
+      "could not serialize access due to concurrent update",
+      "serialization failure",
+    ] {
+      assert!(
+        is_pg_transient_error(&DaemonError::Pg {
+          message: format!("forward apply: {msg}"),
+          code: None,
+        }),
+        "expected is_pg_transient_error to match: {msg}"
+      );
+    }
+  }
+
+  #[test]
+  fn pg_shutdown_classifier_matches_sqlstate_codes() {
+    for (code, desc) in [
+      ("40P01", "deadlock"),
+      ("40001", "serialization failure"),
+      ("57P01", "admin shutdown"),
+      ("57P02", "crash shutdown"),
+      ("08006", "connection failure"),
+      ("53300", "too many connections"),
+      ("55006", "database in recovery"),
+    ] {
+      assert!(
+        is_pg_transient_error(&DaemonError::Pg {
+          message: desc.to_owned(),
+          code: Some(code.to_owned()),
+        }),
+        "expected is_pg_transient_error to match SQLSTATE {code} ({desc})"
+      );
+    }
+    // Non-transient SQLSTATE should NOT match
+    assert!(!is_pg_transient_error(&DaemonError::Pg {
+      message: "unique violation".to_owned(),
+      code: Some("23505".to_owned()),
+    }));
+  }
+
+  #[test]
+  fn pg_cancel_classifier_matches_sqlstate_57014() {
+    assert!(is_pg_cancelled_error(&DaemonError::Pg {
+      message: "query canceled".to_owned(),
+      code: Some("57014".to_owned()),
+    }));
   }
 
   #[test]

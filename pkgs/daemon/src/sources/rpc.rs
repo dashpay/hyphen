@@ -16,9 +16,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::rest::rest_err;
 use super::RpcSource;
 use crate::config::{ResolvedRpcAuth, RpcAuth, RpcConfig};
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use crate::policy::api::API_TCP_KEEPALIVE_SECS;
 use hyphend::wire::msg::RpcDiag;
 
@@ -231,7 +232,7 @@ impl CoreRpcClient {
       .timeout(Duration::from_secs(config.timeout_secs))
       .tcp_keepalive(Duration::from_secs(API_TCP_KEEPALIVE_SECS))
       .build()
-      .map_err(|e| DaemonError::RestSource(e.to_string()))?;
+      .map_err(|e| rest_err("RPC client build", e))?;
     Ok(Self {
       http,
       url: config.url.clone(),
@@ -268,30 +269,30 @@ impl CoreRpcClient {
       .await
       .map_err(|e| {
         self.metrics.record_error("transport");
-        DaemonError::RestSource(format!("RPC request failed: {e}"))
+        rest_err("RPC request", e)
       })?;
 
     if !resp.status().is_success() {
       self
         .metrics
         .record_error(&format!("http_{}", resp.status().as_u16()));
-      return Err(DaemonError::RestSource(format!(
-        "RPC HTTP {}",
-        resp.status()
-      )));
+      return Err(DaemonError::RestSource {
+        message: format!("RPC HTTP {}", resp.status()),
+        kind: RestErrorKind::Http(resp.status().as_u16()),
+      });
     }
 
     let body: RpcResponse = resp.json().await.map_err(|e| {
       self.metrics.record_error("decode");
-      DaemonError::RestSource(format!("RPC JSON parse: {e}"))
+      DaemonError::RestSource { message: format!("RPC JSON parse: {e}"), kind: RestErrorKind::Other }
     })?;
 
     if let Some(error) = body.error {
       self.metrics.record_error(&format!("rpc_{}", error.code));
-      return Err(DaemonError::RestSource(format!(
-        "RPC {} {}",
-        error.code, error.message
-      )));
+      return Err(DaemonError::RestSource {
+        message: format!("RPC {} {}", error.code, error.message),
+        kind: RestErrorKind::Other,
+      });
     }
 
     self.metrics.record_success(method);
@@ -574,44 +575,44 @@ fn encode_basic_token(value: &str) -> String {
 
 fn decode_mempool_info(value: Value) -> Result<MempoolInfo, DaemonError> {
   serde_json::from_value(value)
-    .map_err(|e| DaemonError::RestSource(format!("RPC getmempoolinfo decode: {e}")))
+    .map_err(|e| DaemonError::RestSource { message: format!("RPC getmempoolinfo decode: {e}"), kind: RestErrorKind::Other })
 }
 
 fn decode_raw_mempool(value: Value) -> Result<MempoolTxMap, DaemonError> {
   let object = value.as_object().ok_or_else(|| {
-    DaemonError::RestSource("RPC getrawmempool decode: expected object".to_owned())
+    DaemonError::RestSource { message: "RPC getrawmempool decode: expected object".to_owned(), kind: RestErrorKind::Other }
   })?;
   object
     .iter()
     .map(|(txid, entry)| {
       serde_json::from_value(entry.clone())
         .map(|entry| (txid.clone(), entry))
-        .map_err(|e| DaemonError::RestSource(format!("RPC getrawmempool decode: {e}")))
+        .map_err(|e| DaemonError::RestSource { message: format!("RPC getrawmempool decode: {e}"), kind: RestErrorKind::Other })
     })
     .collect()
 }
 
 fn decode_raw_transaction(value: Value) -> Result<Vec<u8>, DaemonError> {
   let raw_tx_hex = value.as_str().ok_or_else(|| {
-    DaemonError::RestSource("RPC getrawtransaction decode: expected hex string".to_owned())
+    DaemonError::RestSource { message: "RPC getrawtransaction decode: expected hex string".to_owned(), kind: RestErrorKind::Other }
   })?;
   hex::decode(raw_tx_hex)
-    .map_err(|e| DaemonError::RestSource(format!("RPC getrawtransaction decode: {e}")))
+    .map_err(|e| DaemonError::RestSource { message: format!("RPC getrawtransaction decode: {e}"), kind: RestErrorKind::Other })
 }
 
 fn decode_protx_list(value: Value) -> Result<Vec<ProTxListEntry>, DaemonError> {
   serde_json::from_value(value)
-    .map_err(|e| DaemonError::RestSource(format!("RPC protx list decode: {e}")))
+    .map_err(|e| DaemonError::RestSource { message: format!("RPC protx list decode: {e}"), kind: RestErrorKind::Other })
 }
 
 fn decode_best_chainlock(value: Value) -> Result<BestChainLock, DaemonError> {
   serde_json::from_value(value)
-    .map_err(|e| DaemonError::RestSource(format!("RPC getbestchainlock decode: {e}")))
+    .map_err(|e| DaemonError::RestSource { message: format!("RPC getbestchainlock decode: {e}"), kind: RestErrorKind::Other })
 }
 
 fn decode_governance_objects(value: Value) -> Result<GovernanceObjectMap, DaemonError> {
   let object = value.as_object().ok_or_else(|| {
-    DaemonError::RestSource("RPC gobject list decode: expected object".to_owned())
+    DaemonError::RestSource { message: "RPC gobject list decode: expected object".to_owned(), kind: RestErrorKind::Other }
   })?;
   Ok(
     object
@@ -623,7 +624,7 @@ fn decode_governance_objects(value: Value) -> Result<GovernanceObjectMap, Daemon
 
 fn decode_governance_votes(value: Value) -> Result<GovernanceVoteMap, DaemonError> {
   let object = value.as_object().ok_or_else(|| {
-    DaemonError::RestSource("RPC gobject getcurrentvotes decode: expected object".to_owned())
+    DaemonError::RestSource { message: "RPC gobject getcurrentvotes decode: expected object".to_owned(), kind: RestErrorKind::Other }
   })?;
   object
     .iter()
@@ -632,7 +633,7 @@ fn decode_governance_votes(value: Value) -> Result<GovernanceVoteMap, DaemonErro
         .as_str()
         .map(|vote| (hash.clone(), vote.to_owned()))
         .ok_or_else(|| {
-          DaemonError::RestSource("RPC governance vote decode: expected string vote".to_owned())
+          DaemonError::RestSource { message: "RPC governance vote decode: expected string vote".to_owned(), kind: RestErrorKind::Other }
         })
     })
     .collect()

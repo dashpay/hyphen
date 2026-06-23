@@ -18,7 +18,7 @@ use zeromq::{Socket, SocketRecv, SubSocket, ZmqMessage};
 
 use super::ZmqSource as ZmqSourceTrait;
 use crate::config::{ZmqConfig, ZmqTopic};
-use crate::error::DaemonError;
+use crate::error::{DaemonError, RestErrorKind};
 use hyphend::wire::msg::ZmqDiag;
 
 const ZMQ_STARTUP_TIMEOUT_SECS: u64 = 5;
@@ -201,12 +201,15 @@ impl CoreZmqSource {
       )
       .await
       .map_err(|_| {
-        DaemonError::RestSource(format!(
-          "ZMQ subscribe timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {}",
-          topic.subscription_name()
-        ))
+        DaemonError::RestSource {
+          message: format!(
+            "ZMQ subscribe timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {}",
+            topic.subscription_name()
+          ),
+          kind: RestErrorKind::Timeout,
+        }
       })?
-      .map_err(|e| DaemonError::RestSource(format!("ZMQ subscribe failed: {e}")))?;
+      .map_err(|e| DaemonError::RestSource { message: format!("ZMQ subscribe failed: {e}"), kind: RestErrorKind::Connect })?;
     }
     for endpoint in &config.connect {
       info!(%endpoint, "connecting to Core ZMQ endpoint");
@@ -216,11 +219,14 @@ impl CoreZmqSource {
       )
       .await
       .map_err(|_| {
-        DaemonError::RestSource(format!(
-          "ZMQ connect timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {endpoint}"
-        ))
+        DaemonError::RestSource {
+          message: format!(
+            "ZMQ connect timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {endpoint}"
+          ),
+          kind: RestErrorKind::Timeout,
+        }
       })?
-      .map_err(|e| DaemonError::RestSource(format!("ZMQ connect failed: {e}")))?;
+      .map_err(|e| DaemonError::RestSource { message: format!("ZMQ connect failed: {e}"), kind: RestErrorKind::Connect })?;
     }
     let metrics = ZmqMetrics::new(config);
     metrics.mark_connected();
@@ -241,7 +247,7 @@ impl CoreZmqSource {
     let mut socket = self.socket.lock().await;
     let msg = socket.recv().await.map_err(|e| {
       self.metrics.record_error("receive");
-      DaemonError::RestSource(format!("ZMQ receive failed: {e}"))
+      DaemonError::RestSource { message: format!("ZMQ receive failed: {e}"), kind: RestErrorKind::Other }
     })?;
     Ok(RawZmqMessage {
       frames: split_message(msg),
@@ -306,14 +312,17 @@ fn split_message(msg: ZmqMessage) -> Vec<Vec<u8>> {
 
 fn decode_event(raw: &RawZmqMessage) -> Result<ZmqEvent, DaemonError> {
   if raw.frames.len() != 3 {
-    return Err(DaemonError::RestSource(format!(
-      "ZMQ message must have 3 frames, got {}",
-      raw.frames.len()
-    )));
+    return Err(DaemonError::RestSource {
+      message: format!(
+        "ZMQ message must have 3 frames, got {}",
+        raw.frames.len()
+      ),
+      kind: RestErrorKind::Other,
+    });
   }
 
   let topic = std::str::from_utf8(&raw.frames[0])
-    .map_err(|e| DaemonError::RestSource(format!("ZMQ topic is not valid UTF-8: {e}")))?;
+    .map_err(|e| DaemonError::RestSource { message: format!("ZMQ topic is not valid UTF-8: {e}"), kind: RestErrorKind::Other })?;
   let payload = raw.frames[1].clone();
   let sequence = parse_u32_le(&raw.frames[2], "ZMQ sequence")?;
 
@@ -342,9 +351,10 @@ fn decode_event(raw: &RawZmqMessage) -> Result<ZmqEvent, DaemonError> {
       event: decode_sequence_event(&payload)?,
       sequence,
     }),
-    _ => Err(DaemonError::RestSource(format!(
-      "unsupported ZMQ topic: {topic}"
-    ))),
+    _ => Err(DaemonError::RestSource {
+      message: format!("unsupported ZMQ topic: {topic}"),
+      kind: RestErrorKind::Other,
+    }),
   }
 }
 
@@ -374,15 +384,18 @@ impl ZmqEvent {
 
 fn decode_sequence_event(payload: &[u8]) -> Result<SequenceEvent, DaemonError> {
   if payload.len() < 33 {
-    return Err(DaemonError::RestSource(format!(
-      "sequence payload too short: {}",
-      payload.len()
-    )));
+    return Err(DaemonError::RestSource {
+      message: format!(
+        "sequence payload too short: {}",
+        payload.len()
+      ),
+      kind: RestErrorKind::Other,
+    });
   }
 
   let hash: [u8; 32] = payload[..32]
     .try_into()
-    .map_err(|_| DaemonError::RestSource("sequence hash must be 32 bytes".to_owned()))?;
+    .map_err(|_| DaemonError::RestSource { message: "sequence hash must be 32 bytes".to_owned(), kind: RestErrorKind::Other })?;
   let kind = payload[32];
   match kind {
     b'C' => {
@@ -407,18 +420,22 @@ fn decode_sequence_event(payload: &[u8]) -> Result<SequenceEvent, DaemonError> {
         mempool_sequence: parse_u64_le(&payload[33..41], "sequence remove mempool number")?,
       })
     }
-    _ => Err(DaemonError::RestSource(format!(
-      "unsupported sequence action byte: {kind:#x}"
-    ))),
+    _ => Err(DaemonError::RestSource {
+      message: format!("unsupported sequence action byte: {kind:#x}"),
+      kind: RestErrorKind::Other,
+    }),
   }
 }
 
 fn ensure_sequence_len(payload: &[u8], expected: usize) -> Result<(), DaemonError> {
   if payload.len() != expected {
-    return Err(DaemonError::RestSource(format!(
-      "sequence payload length mismatch: expected {expected}, got {}",
-      payload.len()
-    )));
+    return Err(DaemonError::RestSource {
+      message: format!(
+        "sequence payload length mismatch: expected {expected}, got {}",
+        payload.len()
+      ),
+      kind: RestErrorKind::Other,
+    });
   }
   Ok(())
 }
@@ -426,14 +443,14 @@ fn ensure_sequence_len(payload: &[u8], expected: usize) -> Result<(), DaemonErro
 fn parse_u32_le(bytes: &[u8], field: &str) -> Result<u32, DaemonError> {
   let raw: [u8; 4] = bytes
     .try_into()
-    .map_err(|_| DaemonError::RestSource(format!("{field} must be 4 bytes")))?;
+    .map_err(|_| DaemonError::RestSource { message: format!("{field} must be 4 bytes"), kind: RestErrorKind::Other })?;
   Ok(u32::from_le_bytes(raw))
 }
 
 fn parse_u64_le(bytes: &[u8], field: &str) -> Result<u64, DaemonError> {
   let raw: [u8; 8] = bytes
     .try_into()
-    .map_err(|_| DaemonError::RestSource(format!("{field} must be 8 bytes")))?;
+    .map_err(|_| DaemonError::RestSource { message: format!("{field} must be 8 bytes"), kind: RestErrorKind::Other })?;
   Ok(u64::from_le_bytes(raw))
 }
 
@@ -527,7 +544,7 @@ mod tests {
     let err = decode_event(&raw).expect_err("unknown topic should fail");
     assert!(matches!(
       err,
-      crate::error::DaemonError::RestSource(message)
+      crate::error::DaemonError::RestSource { message, .. }
       if message.contains("unsupported ZMQ topic")
     ));
   }
