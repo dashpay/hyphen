@@ -336,81 +336,107 @@ async fn ingest_once(
     return Ok(());
   }
 
+  // One look-ahead for the whole run, not one per chunk. A per-chunk queue
+  // would only hide the fetch behind the absorb; this hides it behind the
+  // *connect* as well, which is where nearly all the wall time is. While the
+  // engine spends seconds writing a chunk, the node is answering the next
+  // one's requests. `max_lead_blocks` is what stops that from being unbounded,
+  // and is the reason production sets it to 2048 rather than to the chunk.
   let start = u32::try_from(local + 1).unwrap_or(0);
   let mut height = start;
+  let mut queue = prefetch::FetchQueue::spawn(Arc::clone(source), concurrency, start, node_height);
   while height <= node_height && lifecycle.running() {
     let chunk_end = height
       .saturating_add(ABSORB_CHUNK_BLOCKS - 1)
       .min(node_height);
     status.set_state(STATE_FETCHING);
-    let chunk_tip = absorb_chunk(
+    let absorbed = absorb_upto(
+      &mut queue,
       ingest,
-      source,
-      concurrency,
+      source.as_ref(),
       status,
       lifecycle,
       height,
       chunk_end,
     )
     .await?;
-    if let Some(tip) = chunk_tip {
+    if absorbed.discarded {
+      // The engine could not place a block on the chain it has, so every
+      // height still queued was fetched against an assumption that no longer
+      // holds. Refill from where the ancestor walk left off.
+      queue =
+        prefetch::FetchQueue::spawn(Arc::clone(source), concurrency, absorbed.next, node_height);
+    }
+    if let Some(tip) = absorbed.chunk_tip {
       status.set_state(STATE_COMMITTING);
       advance_until_settled(db, ingest, status, tip).await?;
     }
-    height = chunk_end.saturating_add(1);
+    if absorbed.next <= height {
+      break; // the queue ran dry early; nothing more to absorb this cycle
+    }
+    height = absorbed.next;
   }
   Ok(())
 }
 
-/// Absorb `[lo, hi]` with the fetch running ahead of the absorb, and return
-/// the chunk tip's hash.
+/// What one absorb pass through the look-ahead did.
+struct Absorbed {
+  /// Hash of the block at the chunk's last height, when it was reached — the
+  /// tip the engine is then asked to connect toward.
+  chunk_tip: Option<HyDbHash>,
+  /// The next height still to absorb.
+  next: u32,
+  /// Whether an ancestor walk ran, which invalidates everything still queued.
+  discarded: bool,
+}
+
+/// Absorb from the look-ahead up to and including `hi`.
 ///
-/// The queue is dropped — and with it every block still queued behind the
-/// current one — the moment the engine reports a missing parent. That report
-/// is the reorg seam: it means the engine cannot place this block on the chain
-/// it has, so the heights queued behind it were fetched against an assumption
-/// that no longer holds. They are refetched after the ancestor walk, from
-/// wherever the walk left the chain, rather than absorbed from a stale queue.
-async fn absorb_chunk(
+/// Stops early — reporting `discarded` — when the engine answers
+/// [`HyDbBlockSeen::MissingParent`]. That report is the reorg seam: the engine
+/// is saying it cannot place this block on the chain it has, so the heights
+/// queued behind it belong to a branch it has just rejected. The caller
+/// discards the queue and refills rather than feeding it stale blocks.
+async fn absorb_upto(
+  queue: &mut prefetch::FetchQueue,
   ingest: &HyDbIngest,
-  source: &Arc<dyn RestSource>,
-  concurrency: usize,
+  source: &dyn RestSource,
   status: &IngestStatus,
   lifecycle: &Lifecycle,
   lo: u32,
   hi: u32,
-) -> Result<Option<HyDbHash>, DaemonError> {
-  let mut next = lo;
-  let mut chunk_tip: Option<HyDbHash> = None;
-  while next <= hi {
-    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(source), concurrency, next, hi);
-    let mut discarded = false;
-    while let Some(item) = queue.next().await {
-      if !lifecycle.running() {
-        return Ok(None);
-      }
-      status
-        .lead_blocks
-        .store(queue.in_flight() as u64, Ordering::Relaxed);
-      let block = item?;
-      let height = block.height;
-      if height == hi {
-        chunk_tip = Some(block_hash(&block.raw)?);
-      }
-      next = height.saturating_add(1);
-      if absorb_one(ingest, source.as_ref(), block.raw).await? {
-        // An ancestor walk ran. Everything still queued was fetched on the
-        // superseded assumption; discard and refill from here.
-        discarded = true;
-        break;
-      }
+) -> Result<Absorbed, DaemonError> {
+  // Seeded at `lo`, not at `hi + 1`: a queue that runs dry before the chunk
+  // end has absorbed nothing further, and the caller must not step over the
+  // heights it did not get.
+  let mut out = Absorbed {
+    chunk_tip: None,
+    next: lo,
+    discarded: false,
+  };
+  while let Some(item) = queue.next().await {
+    if !lifecycle.running() {
+      out.chunk_tip = None;
+      return Ok(out);
     }
-    if !discarded {
-      break;
+    status
+      .lead_blocks
+      .store(queue.in_flight() as u64, Ordering::Relaxed);
+    let block = item?;
+    let height = block.height;
+    if height == hi {
+      out.chunk_tip = Some(block_hash(&block.raw)?);
+    }
+    out.next = height.saturating_add(1);
+    if absorb_one(ingest, source, block.raw).await? {
+      out.discarded = true;
+      return Ok(out);
+    }
+    if height >= hi {
+      return Ok(out);
     }
   }
-  status.lead_blocks.store(0, Ordering::Relaxed);
-  Ok(chunk_tip)
+  Ok(out)
 }
 
 /// Absorb one block, walking to fetch any ancestor the engine reports missing.
