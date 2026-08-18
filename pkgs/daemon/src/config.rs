@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::DaemonError;
 use crate::rest::DEFAULT_API_BIND;
 use hyphen_db::layout::HyDbLayoutCfg;
-use hyphen_db::HyDbClientCfg;
+use hyphen_db::{HyDbClientCfg, HyDbIngestCfg};
 
 /// Top-level daemon configuration loaded from `hyphen.conf`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -32,10 +32,11 @@ pub struct Config {
   pub db: DbConfig,
 }
 
-/// The `[db]` tree. Two halves that must not be confused with each other:
+/// The `[db]` tree. Three parts that must not be confused with each other:
 /// `[db.layout]` is immutable for the life of a database and is enforced
 /// against `init_params` at startup; `[db.client]` is pure connection
-/// configuration and may change on any restart.
+/// configuration; `[db.ingest]` is the write path's runtime tunables. The
+/// last two may change on any restart and invalidate nothing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +50,10 @@ pub struct DbConfig {
   /// owns the redacting `Debug`/`Serialize` the daemon needs, and a mirrored
   /// copy would have to be kept in step with four pool sub-sections by hand.
   pub client: HyDbClientCfg,
+  /// Write-path tunables. The engine's own type for the same reason as the
+  /// other two: one definition of the key set, next to the code that reads
+  /// it.
+  pub ingest: HyDbIngestCfg,
 }
 
 /// Connection settings for the node REST interface.
@@ -337,6 +342,7 @@ impl Config {
     hyphen_db::HyDbConfig {
       client: self.db.client.clone(),
       layout: self.db.layout.clone(),
+      ingest: self.db.ingest.clone(),
       created_by: format!("hyphend/{}", env!("CARGO_PKG_VERSION")),
     }
   }

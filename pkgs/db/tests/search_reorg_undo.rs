@@ -310,12 +310,14 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
 /// overshoots the horizon and the drop rule has to hold the line.
 const PRUNE_BLOCKS: u64 = 2_100;
 
-/// Undo horizon, mirrored from `pipeline::UNDO_KEEP_DEPTH` (private).
+/// Undo horizon, mirrored from `[db.ingest] undo_keep_depth`'s default
+/// (`hyphen_db::tuning::DEFAULT_UNDO_KEEP_DEPTH`).
 const KEEP_DEPTH: i32 = 1_000;
 
 /// Connect `count` blocks of value 10 from `seed` and advance the projection
 /// onto them, returning their hashes in height order. An advance is capped at
-/// `MAX_SEGMENT_BLOCKS`, so the tip is announced until it stops moving.
+/// `[db.ingest] max_advance_blocks`, so the tip is announced until it stops
+/// moving.
 async fn build_chain(
   ingest: &hyphen_db::HyDbIngest,
   seed: u64,
@@ -470,7 +472,7 @@ async fn run_prune(tmp: &TempDb) -> TestResult {
 }
 
 /// The horizon itself: after two prunes have run, a branch switch forking at
-/// exactly `tip - UNDO_KEEP_DEPTH` — the deepest fork the reorg bound admits,
+/// exactly `tip - undo_keep_depth` — the deepest fork the reorg bound admits,
 /// and so the deepest undo row that must still exist — has to succeed.
 #[tokio::test]
 async fn deepest_reversible_reorg_survives_the_prune() -> TestResult {

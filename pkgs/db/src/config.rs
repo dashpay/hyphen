@@ -31,7 +31,8 @@ use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::error::HyDbError;
-use crate::layout::HyDbLayoutCfg;
+use crate::layout::{HyDbLayoutCfg, DEFAULT_PARTITION_SPAN};
+use crate::tuning::HyDbIngestCfg;
 use crate::util::redact_url;
 
 pub const DEFAULT_POSTGRES_URL: &str = "postgresql://hyphen:hyphen@127.0.0.1:5432/hyphen";
@@ -65,6 +66,8 @@ pub struct HyDbConfig {
   /// `[db.layout]` — the immutable storage-layout contract. Compared against
   /// `init_params` on connect; see [`crate::layout`].
   pub layout: HyDbLayoutCfg,
+  /// `[db.ingest]` — the runtime write-path tunables; see [`crate::tuning`].
+  pub ingest: HyDbIngestCfg,
   /// Identifier recorded in `init_params.created_by` when this process writes
   /// a layout key. Set by the daemon to its own version; not a config key.
   pub created_by: String,
@@ -75,6 +78,7 @@ impl Default for HyDbConfig {
     Self {
       client: HyDbClientCfg::default(),
       layout: HyDbLayoutCfg::default(),
+      ingest: HyDbIngestCfg::default(),
       created_by: format!("hyphen-db/{}", env!("CARGO_PKG_VERSION")),
     }
   }
@@ -82,14 +86,23 @@ impl Default for HyDbConfig {
 
 impl HyDbConfig {
   /// Check the `[db.client]` values that are interpolated into `SET`
-  /// statements, and the sizes that must be non-zero, before any connection is
-  /// attempted.
+  /// statements, the sizes that must be non-zero, and the `[db.ingest]`
+  /// tunables, before any connection is attempted.
+  ///
+  /// `[db.ingest] stepped_sync_gap` is checked against the *configured*
+  /// partition span, or the built-in default when the operator left the key
+  /// out. That is the best available answer before a connection exists;
+  /// [`crate::HyphenDb::connect`] repeats the check against the span the
+  /// database actually has, which is the authoritative one.
   ///
   /// # Errors
   ///
   /// [`HyDbError::Config`] naming the offending key.
   pub fn validate(&self) -> Result<(), HyDbError> {
-    self.client.validate()
+    self.client.validate()?;
+    self
+      .ingest
+      .validate(self.layout.partition_span.unwrap_or(DEFAULT_PARTITION_SPAN))
   }
 }
 

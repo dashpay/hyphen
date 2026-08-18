@@ -32,6 +32,7 @@ mod migrate;
 mod pool;
 pub mod query;
 mod records;
+pub mod tuning;
 pub mod types;
 mod util;
 
@@ -51,6 +52,7 @@ pub use records::{
   HyDbBlock, HyDbBlockId, HyDbCbFields, HyDbDataSrc, HyDbHeader, HyDbPayload, HyDbTx, HyDbTxIn,
   HyDbTxOut, HyDbVlEvent, HyDbVlRegister, HyDbVlRevoke, HyDbVlUpdRegistrar, HyDbVlUpdService,
 };
+pub use tuning::{HyDbIngestCfg, HyDbTuningProfile};
 // The query surface is broad; rather than mirror every row type at the crate
 // root, consumers reach them through `hyphen_db::query::*` (re-exported by
 // `query/mod.rs`). Only the domain traits are pulled in here, for the facade.
@@ -144,7 +146,15 @@ impl HyphenDb {
       .schema_version
       .get_or_insert(migrate::latest_version());
     let resolved = layout::verify(&pools.write, &layout_cfg, &cfg.created_by).await?;
+
+    // The cross-section check, repeated against the span the database
+    // actually has: the configured span may be absent or may have been
+    // overridden by the stored one, and `stepped_sync_gap` has to sit below
+    // whichever is in force, not below whichever was written in the file.
+    cfg.ingest.validate(resolved.partition_span)?;
     layout::install(resolved)?;
+    tuning::install(cfg.ingest.clone())?;
+    tuning::apply_storage(&pools.admin, &cfg.ingest).await?;
 
     let read = PgRead {
       query: pools.query.clone(),

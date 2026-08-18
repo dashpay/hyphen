@@ -75,7 +75,7 @@ impl HyDbIngest {
   /// The node's reported tip changed (ZMQ `hashblock`, or a poll). Selects the
   /// canonical chain ending at `node_tip` and advances the projection toward
   /// it, disconnecting and re-deriving the affected range on a fork. The
-  /// advance is *bounded*: at most [`pipeline::MAX_SEGMENT_BLOCKS`] blocks are
+  /// advance is *bounded*: at most `[db.ingest] max_advance_blocks` blocks are
   /// connected per call, so a cold sync reports progress continuously and the
   /// caller simply calls again (`report.to < target`) to resume deeper.
   pub async fn on_tip(&self, node_tip: HyDbHash) -> HyDbResult<HyDbTipReport> {

@@ -35,16 +35,33 @@ use super::{balances, base, chain, stats, validators};
 use super::{HyDbBlockSeen, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport};
 use crate::error::{HyDbError, HyDbResult};
 use crate::records::{HyDbDataSrc, PgTx};
+use crate::tuning;
 use crate::types::{HyDbHash, HyDbHeight};
 
 /// Upper bound on blocks connected per [`advance`] call. Keeps each call's
 /// working set small and progress observable; the caller resumes by calling
 /// again while `report.to < report.target`.
-pub(super) const MAX_SEGMENT_BLOCKS: usize = 2_000;
+///
+/// `[db.ingest] max_advance_blocks`; the built-in default is the 2,000 this
+/// was a constant at.
+fn max_advance_blocks() -> usize {
+  tuning::max_advance_blocks()
+}
 
 /// Deepest reorg the pipeline will unwind. Must not exceed
-/// [`UNDO_KEEP_DEPTH`], since disconnect replays undo rows.
-const MAX_REORG_DEPTH: i64 = 1_000;
+/// [`undo_keep_depth`], which `HyDbIngestCfg::validate` now enforces at load
+/// rather than leaving to a doc comment.
+///
+/// `[db.ingest] max_reorg_depth`.
+fn max_reorg_depth() -> i64 {
+  tuning::max_reorg_depth()
+}
+
+/// How far back the fork walk may look: the reorg bound plus one advance
+/// segment, since the canonical tip may itself be a segment behind the node.
+fn walk_bound() -> i64 {
+  max_reorg_depth() + max_advance_blocks() as i64
+}
 
 /// How many blocks of undo pre-images to retain below the tip. Anything
 /// deeper than the reorg bound can never be replayed, so it is pruned after
@@ -56,8 +73,10 @@ const MAX_REORG_DEPTH: i64 = 1_000;
 /// Raising the depth can only retain more — the drop rule is keyed on the
 /// cutoff this produces.
 ///
-/// Becomes `[db.ingest] undo_keep_depth` under task T2.
-const UNDO_KEEP_DEPTH: i32 = 1_000;
+/// `[db.ingest] undo_keep_depth`.
+fn undo_keep_depth() -> i32 {
+  tuning::undo_keep_depth()
+}
 
 /// Store a block's raw bytes and parent link in `ser_blocks` (the absorb stage).
 /// Thin spine entry point over [`chain::absorb`].
@@ -137,7 +156,7 @@ enum Plan {
 }
 
 /// Advance the canonical projection toward `node_tip`, connecting at most
-/// [`MAX_SEGMENT_BLOCKS`] blocks. Publishes per-block progress on `progress`.
+/// [`max_advance_blocks`] blocks. Publishes per-block progress on `progress`.
 pub(super) async fn advance(
   pool: &PgPool,
   data_src: &dyn HyDbDataSrc,
@@ -208,12 +227,13 @@ pub(super) async fn advance(
     } => {
       let from_height = from_tip.map(|(h, _)| h).unwrap_or(-1);
       let floor = fork_height.unwrap_or(-1);
-      if i64::from(from_height - floor) > MAX_REORG_DEPTH {
+      let max_reorg = max_reorg_depth();
+      if i64::from(from_height - floor) > max_reorg {
         return Err(HyDbError::Derive(format!(
-          "reorg from height {from_height} to fork {floor} exceeds the supported depth ({MAX_REORG_DEPTH})"
+          "reorg from height {from_height} to fork {floor} exceeds the supported depth ({max_reorg})"
         )));
       }
-      let segment: Vec<(HyDbHash, i32)> = segment.into_iter().take(MAX_SEGMENT_BLOCKS).collect();
+      let segment: Vec<(HyDbHash, i32)> = segment.into_iter().take(max_advance_blocks()).collect();
       if let Some(last) = segment.last() {
         chain::ensure_partitions_for_range(pool, floor.max(0), last.1).await?;
       }
@@ -323,7 +343,7 @@ async fn plan_advance(
   // our canonical tip. One range read, no per-block walk. Any ambiguity or
   // linkage failure (including a same-height fork hiding below) falls back to
   // the bounded SQL walk from the node tip.
-  let seg_hi = node_height.min(t.saturating_add(MAX_SEGMENT_BLOCKS as i32));
+  let seg_hi = node_height.min(t.saturating_add(max_advance_blocks() as i32));
   let rows = chain::ser_rows_in_range(pool, t + 1, seg_hi).await?;
   let expected_len = (seg_hi - t) as usize;
   let mut ok = rows.len() == expected_len;
@@ -355,10 +375,12 @@ async fn plan_advance(
 
 /// The general path: bounded parent walk from the node tip down to the fork.
 async fn walk_plan(pool: &PgPool, node_tip: &HyDbHash) -> HyDbResult<Plan> {
-  match chain::walk_to_fork(pool, node_tip, MAX_REORG_DEPTH + MAX_SEGMENT_BLOCKS as i64).await? {
+  match chain::walk_to_fork(pool, node_tip, walk_bound()).await? {
     chain::WalkOutcome::AlreadyCanonical | chain::WalkOutcome::MissingAncestor => Ok(Plan::Noop),
     chain::WalkOutcome::DepthExceeded => Err(HyDbError::Derive(format!(
-      "fork point deeper than the supported walk bound ({MAX_REORG_DEPTH} + {MAX_SEGMENT_BLOCKS})"
+      "fork point deeper than the supported walk bound ({} + {})",
+      max_reorg_depth(),
+      max_advance_blocks()
     ))),
     chain::WalkOutcome::Segment {
       fork_height,
@@ -381,7 +403,7 @@ async fn finish_advance(
     .map(|(h, _)| HyDbHeight::try_from_i32(h))
     .transpose()?;
   if let Some((tip, _)) = to_tip {
-    chain::prune_undo(pool, tip - UNDO_KEEP_DEPTH).await?;
+    chain::prune_undo(pool, tip - undo_keep_depth()).await?;
   }
   Ok(HyDbTipReport {
     from,
