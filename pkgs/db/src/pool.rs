@@ -77,6 +77,18 @@ impl fmt::Debug for HyDbPools {
   }
 }
 
+/// A one-connection pool for read-only diagnostics (`--show-layout`), which
+/// must work against a database this process is not otherwise opening — no
+/// migrations, no layout resolution, no ingest lock.
+///
+/// # Errors
+///
+/// [`HyDbError::Config`] if the URL is unparseable, [`HyDbError::Pg`] if the
+/// connection cannot be established.
+pub(crate) async fn diagnostic_pool(cfg: &HyDbConfig) -> Result<PgPool, HyDbError> {
+  named_pool(cfg, "diag", 1, ADMIN_POOL_ACQUIRE_TIMEOUT_SECS).await
+}
+
 async fn named_pool(
   cfg: &HyDbConfig,
   pool_name: &str,

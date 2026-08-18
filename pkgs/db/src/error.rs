@@ -27,6 +27,11 @@ pub enum HyDbError {
   },
   /// Schema migration failed to apply.
   Migrate(String),
+  /// The configured `[db.layout]` is invalid, or disagrees with the layout
+  /// recorded in `init_params` when this database was created. Always fatal:
+  /// the values are immutable for the life of the database, so retrying can
+  /// only produce the same answer.
+  Layout(String),
   /// A decoded row violated an invariant the type system could not encode
   /// (e.g. a hash column that did not hold 32 bytes).
   Decode(String),
@@ -46,6 +51,7 @@ impl HyDbError {
     match self {
       Self::Config(_) => Outcome::Fatal,
       Self::Migrate(_) => Outcome::Fatal,
+      Self::Layout(_) => Outcome::Fatal,
       Self::Pg { code, message } => classify_pg(code.as_deref(), message),
       Self::Decode(_) | Self::Derive(_) | Self::MockGap(_) | Self::Unimplemented(_) => {
         Outcome::Error
@@ -77,6 +83,7 @@ impl fmt::Display for HyDbError {
       Self::Config(msg) => write!(f, "db config error: {msg}"),
       Self::Pg { message, .. } => write!(f, "postgres error: {message}"),
       Self::Migrate(msg) => write!(f, "migration error: {msg}"),
+      Self::Layout(msg) => write!(f, "storage layout error: {msg}"),
       Self::Decode(msg) => write!(f, "row decode error: {msg}"),
       Self::Derive(msg) => write!(f, "derive error: {msg}"),
       Self::MockGap(name) => write!(f, "mock backend has no impl for `{name}`"),

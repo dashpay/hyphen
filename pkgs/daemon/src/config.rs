@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::DaemonError;
 use crate::rest::DEFAULT_API_BIND;
+use hyphen_db::layout::HyDbLayoutCfg;
 use hyphen_db::DEFAULT_POSTGRES_URL;
 
 // Postgres pool-tuning defaults, retained on `PostgresConfig` for config-file
@@ -35,6 +36,25 @@ pub struct Config {
   pub overlays: Option<OverlaysConfig>,
   #[serde(default)]
   pub chain: ChainConfig,
+  /// Everything about the storage engine: what the database *contains*
+  /// (`[db.layout]`) and how it is connected to (`[db.client]`).
+  #[serde(default)]
+  pub db: DbConfig,
+}
+
+/// The `[db]` tree. Two halves that must not be confused with each other:
+/// `[db.layout]` is immutable for the life of a database and is enforced
+/// against `init_params` at startup; `[db.client]` is pure connection
+/// configuration and may change on any restart.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct DbConfig {
+  /// Immutable storage-layout parameters. Deserialized straight into the
+  /// engine's own type rather than mirrored here: a mirror would be one more
+  /// place for the key set to drift out of step with the contract that
+  /// enforces it, and unlike the connection URL there is no secret to redact.
+  pub layout: HyDbLayoutCfg,
 }
 
 /// Connection settings for the node REST interface.
@@ -212,29 +232,29 @@ impl Default for ZmqConfig {
   }
 }
 
-/// Chain-specific parameters. Defaults target Dash mainnet.
+/// Chain-specific parameters that are *not* storage layout.
+///
+/// The address version bytes used to live here. They moved to `[db.layout]`,
+/// where they belong: every address string in the database was encoded with
+/// them, so they are a property of the stored data and are enforced as one.
+/// `block_time_secs` stays because it is applied at read time (hashrate is
+/// derived from `difficulty` on the way out) and changing it rewrites nothing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ChainConfig {
   pub block_time_secs: f64,
-  pub p2pkh_version: u8,
-  pub p2sh_version: u8,
 }
 
 impl Default for ChainConfig {
   fn default() -> Self {
     Self {
       block_time_secs: DEFAULT_BLOCK_TIME_SECS,
-      p2pkh_version: DEFAULT_P2PKH_VERSION,
-      p2sh_version: DEFAULT_P2SH_VERSION,
     }
   }
 }
 
 pub const DEFAULT_BLOCK_TIME_SECS: f64 = 150.0;
-pub const DEFAULT_P2PKH_VERSION: u8 = 0x4c;
-pub const DEFAULT_P2SH_VERSION: u8 = 0x10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -340,6 +360,25 @@ pub struct OverlaysConfig {
 }
 
 impl Config {
+  /// Build the storage engine's configuration from `[db]` (and, until T3
+  /// lands, `[postgres]`).
+  ///
+  /// One builder, used by both the serve path and `--show-layout`, so the
+  /// diagnostic can never report against a different database than the one
+  /// the daemon would open.
+  pub fn hydb_config(&self) -> hyphen_db::HyDbConfig {
+    hyphen_db::HyDbConfig {
+      url: self.postgres.url.clone(),
+      write_pool_size: self.postgres.write_pool_size,
+      query_pool_size: self.postgres.query_pool_size,
+      heavy_query_pool_size: self.postgres.heavy_query_pool_size,
+      admin_pool_size: self.postgres.admin_pool_size,
+      slow_query_ms: self.postgres.slow_query_ms,
+      layout: self.db.layout.clone(),
+      created_by: format!("hyphend/{}", env!("CARGO_PKG_VERSION")),
+    }
+  }
+
   /// Validate configuration that depends on multiple related settings.
   ///
   /// # Errors

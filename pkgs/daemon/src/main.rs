@@ -62,6 +62,14 @@ fn run() -> Result<(), DaemonError> {
   info!(open_file_limit, "process file-descriptor limit");
 
   let cfg = init::load_config(&dir)?;
+
+  // Before anything that takes a lock or migrates: `--show-layout` is a
+  // read-only diagnostic and must work against a database a running daemon
+  // already owns.
+  if args.show_layout {
+    return show_layout(&cfg);
+  }
+
   let options = Options::resolve(&args, &cfg)?;
 
   datadir::check_free_space(&dir)?;
@@ -96,6 +104,23 @@ fn run() -> Result<(), DaemonError> {
   drop(rt);
   info!("shutdown complete");
   lock.release()?;
+  Ok(())
+}
+
+/// `--show-layout`: print the recorded storage layout beside the configured
+/// one and exit. Read-only, lock-free, and migration-free by construction —
+/// its whole purpose is to explain a startup refusal, so it must not be able
+/// to hit the same refusal itself.
+fn show_layout(cfg: &config::Config) -> Result<(), DaemonError> {
+  let rt = tokio::runtime::Runtime::new().map_err(|e| DaemonError::Io {
+    context: "tokio runtime",
+    source: e,
+  })?;
+  let db_cfg = cfg.hydb_config();
+  let rendered = rt
+    .block_on(hyphen_db::show_layout(&db_cfg))
+    .map_err(|e| DaemonError::storage("show layout", e))?;
+  println!("{rendered}");
   Ok(())
 }
 

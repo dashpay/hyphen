@@ -52,7 +52,7 @@ const MAX_REORG_DEPTH: i64 = 1_000;
 ///
 /// This is a *floor*, not an exact figure: the prune drops whole height
 /// partitions rather than deleting rows (see [`chain::prune_undo`]), so up to
-/// one `UNDO_PARTITION_SPAN` of already-unreplayable undo survives below it.
+/// one `undo_span` of already-unreplayable undo survives below it.
 /// Raising the depth can only retain more — the drop rule is keyed on the
 /// cutoff this produces.
 ///

@@ -34,6 +34,14 @@ pub struct Args {
   /// Serve only the Swagger UI and OpenAPI document, then exit on shutdown.
   #[arg(long = "docs-only")]
   pub docs_only: bool,
+
+  /// Print the storage layout recorded in the database next to the configured
+  /// one, then exit. Diagnosing a layout refusal should not require a psql
+  /// session: this connects with `[db.client]`, reads `init_params`, and
+  /// shows every key's stored value, configured value, grade and what startup
+  /// would do with it. Read-only — it never writes or migrates.
+  #[arg(long = "show-layout")]
+  pub show_layout: bool,
 }
 
 impl Args {

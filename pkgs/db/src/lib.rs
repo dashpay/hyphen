@@ -62,6 +62,29 @@ pub use types::{
 
 use query::PgRead;
 
+/// Read the storage layout recorded in a database and render it against the
+/// configured one, for `hyphend --show-layout`.
+///
+/// Deliberately does everything the startup path does *except* act: no
+/// migration, no write to `init_params`, no advisory lock. An operator staring
+/// at a layout refusal can run this against the same database while the
+/// daemon is down and see exactly which key disagrees and what its remedy is.
+///
+/// # Errors
+///
+/// [`HyDbError::Config`] if the URL is unparseable, [`HyDbError::Pg`] if the
+/// database cannot be read.
+pub async fn show_layout(cfg: &HyDbConfig) -> HyDbResult<String> {
+  let pool = pool::diagnostic_pool(cfg).await?;
+  let mut layout_cfg = cfg.layout.clone();
+  layout_cfg
+    .schema_version
+    .get_or_insert(migrate::latest_version());
+  let rendered = layout::show(&pool, &layout_cfg).await;
+  pool.close().await;
+  rendered
+}
+
 /// Class/object key for the single-writer ingest advisory lock. Arbitrary but
 /// stable: ASCII "HyDbIngst" packed into an i64.
 const INGEST_ADVISORY_LOCK_KEY: i64 = 0x4879_4462_496e_6773;
@@ -98,10 +121,23 @@ impl HyphenDb {
   /// # Errors
   ///
   /// [`HyDbError::Config`] if the URL is unparseable, [`HyDbError::Pg`] if a
-  /// pool cannot connect, or [`HyDbError::Migrate`] if the schema fails to apply.
+  /// pool cannot connect, [`HyDbError::Migrate`] if the schema fails to apply,
+  /// or [`HyDbError::Layout`] if `[db.layout]` disagrees with the layout this
+  /// database was created with.
   pub async fn connect(cfg: HyDbConfig) -> HyDbResult<Self> {
     let pools = pool::HyDbPools::connect(&cfg).await?;
     migrate::apply(&pools.write).await?;
+
+    // Immediately after the migrator, and before anything can read or write a
+    // block: `init_params` is guaranteed to exist by migration 0002, and no
+    // other code path may run against a database whose layout has not been
+    // agreed.
+    let mut layout_cfg = cfg.layout.clone();
+    layout_cfg
+      .schema_version
+      .get_or_insert(migrate::latest_version());
+    let resolved = layout::verify(&pools.write, &layout_cfg, &cfg.created_by).await?;
+    layout::install(resolved)?;
 
     let read = PgRead {
       query: pools.query.clone(),

@@ -7,7 +7,7 @@
 //! Rich-list side-table (`address_rich`) maintenance across connect and
 //! disconnect. `address_stats` carries no balance-ordered index — that index
 //! made every ingest update non-HOT — so the ranked read is served from a
-//! side table holding only addresses at or above `layout::RICH_LIST_FLOOR`,
+//! side table holding only addresses at or above `layout::rich_list_floor()`,
 //! maintained inside the same block transaction.
 //!
 //! The failure this file exists to catch is asymmetry: a connect path that
@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use common::TempDb;
-use hyphen_db::layout::RICH_LIST_FLOOR;
+use hyphen_db::layout::rich_list_floor;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
   HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
@@ -188,7 +188,7 @@ async fn assert_consistent(pool: &PgPool, at: &str) -> TestResult {
            ON a.address = r.address
         WHERE r.address IS NULL OR a.address IS NULL OR r.balance <> a.balance"#,
   )
-  .bind(RICH_LIST_FLOOR)
+  .bind(rich_list_floor())
   .fetch_all(pool)
   .await?;
   assert!(
@@ -211,7 +211,7 @@ async fn rich_list_side_table_tracks_the_floor_in_both_directions() -> TestResul
 async fn run(tmp: &TempDb) -> TestResult {
   let db = tmp.open().await?;
   let pool = tmp.seed_pool().await?;
-  let f = RICH_LIST_FLOOR;
+  let f = rich_list_floor();
 
   let mut src = Src::default();
   // h0: the whale is born above the floor. Its coinbase output is the one the

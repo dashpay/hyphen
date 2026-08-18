@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use common::TempDb;
-use hyphen_db::layout::UNDO_PARTITION_SPAN;
+use hyphen_db::layout::undo_span;
 use hyphen_db::query::HyDbSearchKind;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
@@ -385,7 +385,7 @@ async fn run_prune(tmp: &TempDb) -> TestResult {
 
   let pool = tmp.seed_pool().await?;
   let cutoff = tip_h - KEEP_DEPTH;
-  let span = UNDO_PARTITION_SPAN;
+  let span = undo_span();
 
   // Every undo parent is pruned the same way, and pruned to the same place:
   // partitions whose highest possible height is at or below the cutoff are
@@ -490,7 +490,7 @@ async fn run_deep_reorg(tmp: &TempDb) -> TestResult {
   // Two prunes have fired by now — the test is only worth anything if the
   // drop path has actually run more than once.
   let pool = tmp.seed_pool().await?;
-  let ever_created = tip_h / UNDO_PARTITION_SPAN + 1;
+  let ever_created = tip_h / undo_span() + 1;
   let dropped = ever_created - partitions_of(&pool, "undo_address_stats").await?.len() as i32;
   assert!(
     dropped >= 2,

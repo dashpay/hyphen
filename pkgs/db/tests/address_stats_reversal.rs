@@ -53,7 +53,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use common::TempDb;
-use hyphen_db::layout::RICH_LIST_FLOOR;
+use hyphen_db::layout::rich_list_floor;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
   HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
@@ -390,7 +390,7 @@ async fn assert_projections_agree(pool: &PgPool, at: &str) -> TestResult {
       WHERE r.balance IS DISTINCT FROM s.balance
       ORDER BY 1",
   )
-  .bind(RICH_LIST_FLOOR)
+  .bind(rich_list_floor())
   .fetch_all(pool)
   .await?;
   assert!(
@@ -451,7 +451,7 @@ async fn assert_identical(
 // ===========================================================================
 
 fn chain() -> Src {
-  let f = RICH_LIST_FLOOR;
+  let f = rich_list_floor();
   let mut src = Src::default();
 
   // h0: the miner is paid, and the whale is funded above the floor.

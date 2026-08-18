@@ -21,7 +21,7 @@
 //! chain below crosses zero in both directions, reorgs across the crossings,
 //! and then re-connects the original branch.
 //!
-//! Every value here sits far below `layout::RICH_LIST_FLOOR`, so nothing this
+//! Every value here sits far below `layout::rich_list_floor()`, so nothing this
 //! test asserts depends on the rich-list side table.
 
 mod common;

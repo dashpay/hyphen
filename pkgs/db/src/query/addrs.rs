@@ -442,7 +442,7 @@ impl HyDbAddrIdx for PgAddrIdx {
     };
 
     // Served from `address_rich`, the maintained side table of addresses at or
-    // above `layout::RICH_LIST_FLOOR`; `address_stats` deliberately carries no
+    // above `layout::rich_list_floor()`; `address_stats` deliberately carries no
     // balance-ordered index (it would make every ingest update non-HOT). The
     // ranked scan is over `address_rich`, then a PK join back to
     // `address_stats` for the page's other columns — the two agree on

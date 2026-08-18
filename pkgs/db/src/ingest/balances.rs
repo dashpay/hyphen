@@ -73,7 +73,7 @@ use async_trait::async_trait;
 
 use super::pipeline::IngestStage;
 use super::scratch::{HyDbStageError, Scratch};
-use crate::layout::RICH_LIST_FLOOR;
+use crate::layout::rich_list_floor;
 use crate::records::PgTx;
 
 /// The `address_stats` accumulation stage.
@@ -179,10 +179,10 @@ impl IngestStage for BalancesStage {
 
       let prior_balance = p.map_or(0, |p| p.balance);
       let new_balance = prior_balance.saturating_add(delta);
-      if new_balance >= RICH_LIST_FLOOR {
+      if new_balance >= rich_list_floor() {
         r_addr.push(addr.clone());
         r_balance.push(new_balance);
-      } else if prior_balance >= RICH_LIST_FLOOR {
+      } else if prior_balance >= rich_list_floor() {
         r_drop.push(addr.clone());
       }
       positive_delta += i64::from(new_balance > 0) - i64::from(prior_balance > 0);
@@ -479,10 +479,10 @@ impl IngestStage for BalancesStage {
       // pair the connect path branched on — with the roles swapped. A row the
       // block created ends up absent, which is neither rich nor positive.
       let restored = if u.existed { prior_balance } else { 0 };
-      if u.existed && restored >= RICH_LIST_FLOOR {
+      if u.existed && restored >= rich_list_floor() {
         r_addr.push(u.address.clone());
         r_balance.push(restored);
-      } else if cur_balance >= RICH_LIST_FLOOR {
+      } else if cur_balance >= rich_list_floor() {
         r_drop.push(u.address.clone());
       }
       positive_delta += i64::from(restored > 0) - i64::from(cur_balance > 0);

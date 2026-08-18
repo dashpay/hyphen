@@ -17,6 +17,7 @@ use core::fmt;
 use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::layout::HyDbLayoutCfg;
 use crate::util::redact_url;
 
 pub const DEFAULT_POSTGRES_URL: &str = "postgresql://hyphen:hyphen@127.0.0.1:5432/hyphen";
@@ -40,6 +41,14 @@ pub struct HyDbConfig {
   pub admin_pool_size: usize,
   /// Log statements slower than this threshold (milliseconds).
   pub slow_query_ms: u64,
+  /// `[db.layout]` — the immutable storage-layout contract. Compared against
+  /// `init_params` on connect; see [`crate::layout`].
+  #[serde(default)]
+  pub layout: HyDbLayoutCfg,
+  /// Identifier recorded in `init_params.created_by` when this process writes
+  /// a layout key. Set by the daemon to its own version; not a config key.
+  #[serde(skip)]
+  pub created_by: String,
 }
 
 impl Default for HyDbConfig {
@@ -51,6 +60,8 @@ impl Default for HyDbConfig {
       heavy_query_pool_size: DEFAULT_HEAVY_QUERY_POOL_SIZE,
       admin_pool_size: DEFAULT_ADMIN_POOL_SIZE,
       slow_query_ms: DEFAULT_SLOW_QUERY_MS,
+      layout: HyDbLayoutCfg::default(),
+      created_by: format!("hyphen-db/{}", env!("CARGO_PKG_VERSION")),
     }
   }
 }
@@ -66,6 +77,8 @@ impl fmt::Debug for HyDbConfig {
       .field("heavy_query_pool_size", &self.heavy_query_pool_size)
       .field("admin_pool_size", &self.admin_pool_size)
       .field("slow_query_ms", &self.slow_query_ms)
+      .field("layout", &self.layout)
+      .field("created_by", &self.created_by)
       .finish()
   }
 }
@@ -75,13 +88,14 @@ impl fmt::Debug for HyDbConfig {
 // value from the config file — the asymmetry is deliberate.)
 impl Serialize for HyDbConfig {
   fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-    let mut s = serializer.serialize_struct("HyDbConfig", 6)?;
+    let mut s = serializer.serialize_struct("HyDbConfig", 7)?;
     s.serialize_field("url", &redact_url(&self.url))?;
     s.serialize_field("write_pool_size", &self.write_pool_size)?;
     s.serialize_field("query_pool_size", &self.query_pool_size)?;
     s.serialize_field("heavy_query_pool_size", &self.heavy_query_pool_size)?;
     s.serialize_field("admin_pool_size", &self.admin_pool_size)?;
     s.serialize_field("slow_query_ms", &self.slow_query_ms)?;
+    s.serialize_field("created_by", &self.created_by)?;
     s.end()
   }
 }

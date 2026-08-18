@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::broadcast;
 
-use hyphen_db::{HyDbConfig, HyphenDb};
+use hyphen_db::HyphenDb;
 use tracing::{info, warn};
 
 use crate::api_metrics::ApiServerMetrics;
@@ -187,14 +187,7 @@ impl ServeRuntime {
     // Pass the operator's pool sizing through verbatim — what the settings
     // page displays as effective must actually be in effect. `HyDbConfig`'s
     // Debug impl redacts the URL's password.
-    let db_cfg = HyDbConfig {
-      url: cfg.postgres.url.clone(),
-      write_pool_size: cfg.postgres.write_pool_size,
-      query_pool_size: cfg.postgres.query_pool_size,
-      heavy_query_pool_size: cfg.postgres.heavy_query_pool_size,
-      admin_pool_size: cfg.postgres.admin_pool_size,
-      slow_query_ms: cfg.postgres.slow_query_ms,
-    };
+    let db_cfg = cfg.hydb_config();
     info!(config = ?db_cfg, "connecting to storage engine");
     let db = await_storage("connect storage engine", || {
       HyphenDb::connect(db_cfg.clone())
@@ -202,8 +195,25 @@ impl ServeRuntime {
     .await?;
     info!("storage engine ready, schema migrated");
 
+    // From here on the layout is whatever the *database* says it is, not
+    // whatever the config file said. They can only differ in the one direction
+    // `verify` permits — a key the operator dropped from `[db.layout]`, which
+    // falls back to the stored value — and the address encoding must follow
+    // the data, never the config.
+    let layout = hyphen_db::layout::resolved();
+    info!(
+      network = %layout.network,
+      partition_span = layout.partition_span,
+      p2pkh_version = layout.p2pkh_version,
+      p2sh_version = layout.p2sh_version,
+      rich_list_floor = layout.rich_list_floor,
+      undo_span = layout.undo_span,
+      schema_version = layout.schema_version,
+      "storage layout in effect"
+    );
+
     let data_src: Arc<dyn hyphen_db::HyDbDataSrc> = Arc::new(
-      crate::ingest::datasrc::HyDbBlockSource::new(cfg.chain.p2pkh_version, cfg.chain.p2sh_version),
+      crate::ingest::datasrc::HyDbBlockSource::new(layout.p2pkh_version, layout.p2sh_version),
     );
     let ingest_handle = await_storage("start ingest", || db.ingest(Arc::clone(&data_src))).await?;
     let ingest = crate::ingest::IngestVisor::new(
@@ -225,8 +235,8 @@ impl ServeRuntime {
         zmq: zmq_source.clone(),
         lifecycle: Arc::clone(&lifecycle),
         overlay_plan,
-        p2pkh_version: cfg.chain.p2pkh_version,
-        p2sh_version: cfg.chain.p2sh_version,
+        p2pkh_version: layout.p2pkh_version,
+        p2sh_version: layout.p2sh_version,
       },
       &runtime_options,
     ));
@@ -240,8 +250,8 @@ impl ServeRuntime {
         .ok_or_else(|| DaemonError::Config("api enabled without api.bind".to_owned()))?;
       Some(super::rest::RestVisor::new(super::rest::RestVisorConfig {
         hydb: db.clone(),
-        p2pkh_version: cfg.chain.p2pkh_version,
-        p2sh_version: cfg.chain.p2sh_version,
+        p2pkh_version: layout.p2pkh_version,
+        p2sh_version: layout.p2sh_version,
         block_time_secs: cfg.chain.block_time_secs,
         indices: rest::IndexCapabilities {
           address: runtime_options.indices.address,

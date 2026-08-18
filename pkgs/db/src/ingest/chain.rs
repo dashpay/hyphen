@@ -14,12 +14,11 @@ use sqlx::PgPool;
 
 use super::HyDbBlockSeen;
 use crate::error::{HyDbError, HyDbResult};
-use crate::layout::UNDO_PARTITION_SPAN;
+use crate::layout::{partition_span, undo_span};
 use crate::records::HyDbDataSrc;
 use crate::types::HyDbHash;
 
 pub(super) const GENESIS_PREV: [u8; 32] = [0u8; 32];
-pub(super) const PARTITION_SPAN: i32 = 100_000;
 
 /// The height-partitioned base tables, created ahead of the tip.
 const PARTITIONED_TABLES: [&str; 5] = [
@@ -101,11 +100,11 @@ pub(super) async fn absorb(
 /// a partition boundary now and then: a per-name probe would put three extra
 /// queries on the per-block path to answer "nothing to do" almost every time.
 pub(super) async fn ensure_partitions_for_range(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
-  let lo_idx = lo.max(0) / PARTITION_SPAN;
-  let hi_idx = hi.max(0) / PARTITION_SPAN;
+  let lo_idx = lo.max(0) / partition_span();
+  let hi_idx = hi.max(0) / partition_span();
   for idx in lo_idx..=hi_idx {
-    let range_lo = idx * PARTITION_SPAN;
-    let range_hi = range_lo + PARTITION_SPAN;
+    let range_lo = idx * partition_span();
+    let range_hi = range_lo + partition_span();
     for parent in PARTITIONED_TABLES {
       let name = format!("{parent}_p{idx}");
       let exists = sqlx::query_scalar!(r#"SELECT to_regclass($1) IS NOT NULL AS "exists!""#, &name)
@@ -129,8 +128,8 @@ pub(super) async fn ensure_partitions_for_range(pool: &PgPool, lo: i32, hi: i32)
 
 /// Create the undo partitions covering `[lo, hi]` that do not yet exist.
 async fn ensure_undo_partitions(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
-  let lo_idx = lo.max(0) / UNDO_PARTITION_SPAN;
-  let hi_idx = hi.max(0) / UNDO_PARTITION_SPAN;
+  let lo_idx = lo.max(0) / undo_span();
+  let hi_idx = hi.max(0) / undo_span();
   let wanted: Vec<String> = (lo_idx..=hi_idx)
     .flat_map(|idx| UNDO_TABLES.map(move |parent| format!("{parent}_p{idx}")))
     .collect();
@@ -149,8 +148,8 @@ async fn ensure_undo_partitions(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<(
   }
 
   for idx in lo_idx..=hi_idx {
-    let range_lo = idx * UNDO_PARTITION_SPAN;
-    let range_hi = range_lo + UNDO_PARTITION_SPAN;
+    let range_lo = idx * undo_span();
+    let range_hi = range_lo + undo_span();
     for parent in UNDO_TABLES {
       let name = format!("{parent}_p{idx}");
       if present.contains(&name) {
@@ -384,7 +383,7 @@ pub(super) async fn prune_undo(pool: &PgPool, cutoff: i32) -> HyDbResult<()> {
       // Not one of ours: leave it alone rather than guess its range.
       continue;
     };
-    let highest = (idx + 1) * i64::from(UNDO_PARTITION_SPAN) - 1;
+    let highest = (idx + 1) * i64::from(undo_span()) - 1;
     if highest > i64::from(cutoff) {
       continue;
     }

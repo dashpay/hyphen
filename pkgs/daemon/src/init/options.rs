@@ -328,6 +328,7 @@ mod tests {
       loglevel: 2,
       logconsole: false,
       docs_only: false,
+      show_layout: false,
     }
   }
 
