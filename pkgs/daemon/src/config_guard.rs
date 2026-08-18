@@ -263,18 +263,8 @@ mod tests {
     consumed("HyDbIngestCfg", "vacuum_analyze_factor"),
     consumed("HyDbIngestCfg", "vacuum_cost_delay"),
     consumed("HyDbIngestCfg", "fillfactor"),
-    pending(
-      "HyDbIngestCfg", "stepped_sync", "A3",
-      "stepped sync mode does not exist; the flag is what will turn it on, and \
-       the mode's hysteresis is specified in the task",
-    ),
-    pending(
-      "HyDbIngestCfg", "stepped_sync_gap", "A3",
-      "the gap at which stepped mode engages. Load-time validation against \
-       partition_span reads it, but validation lives in the defining module \
-       and deliberately does not count as a read site — a key that only \
-       validates itself is still inert",
-    ),
+    consumed("HyDbIngestCfg", "stepped_sync"),
+    consumed("HyDbIngestCfg", "stepped_sync_gap"),
     pending(
       "HyDbIngestCfg", "prefetch_blocks", "A4",
       "the prefetch pipeline does not exist. This is the same key name that \

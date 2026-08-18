@@ -91,18 +91,16 @@ pub enum HyDbTuningProfile {
   /// Follow the ingest mode: `sync` while stepped sync is engaged, `steady`
   /// otherwise.
   ///
-  /// Stepped mode does not exist yet (task A3), so `auto` resolves to
-  /// `steady` today — which is the safe direction, since `steady` is exactly
-  /// what the schema already carries and therefore emits nothing.
+  /// `steady` is what a database that has never been in stepped mode runs,
+  /// and it is exactly what the schema already carries, so it emits nothing.
+  /// [`crate::stepped`] is what moves it: every mode transition re-applies
+  /// the plan for the mode now in force.
   #[default]
   Auto,
 }
 
 impl HyDbTuningProfile {
   /// The profile actually in force, given whether stepped sync is engaged.
-  ///
-  /// `stepped` is `false` at every call site today; A3 is what will ever pass
-  /// `true`.
   pub const fn effective(self, stepped: bool) -> Self {
     match self {
       Self::Auto if stepped => Self::Sync,
@@ -425,7 +423,24 @@ pub fn storage_plan(cfg: &HyDbIngestCfg, stepped: bool) -> Vec<StorageChange> {
 ///
 /// [`HyDbError::Pg`] if a statement fails.
 pub(crate) async fn apply_storage(pool: &PgPool, cfg: &HyDbIngestCfg) -> HyDbResult<usize> {
-  let plan = storage_plan(cfg, false);
+  apply_storage_for(pool, cfg, false).await
+}
+
+/// [`apply_storage`], for a known stepped-sync state.
+///
+/// Called again on every mode transition, which is what makes
+/// `tuning_profile = auto` mean anything: the vacuum settings that suit a
+/// cold sync are not the ones that suit the tip.
+///
+/// # Errors
+///
+/// [`HyDbError::Pg`] if a statement fails.
+pub(crate) async fn apply_storage_for(
+  pool: &PgPool,
+  cfg: &HyDbIngestCfg,
+  stepped: bool,
+) -> HyDbResult<usize> {
+  let plan = storage_plan(cfg, stepped);
   for change in &plan {
     pool
       .execute(change.sql.as_str())
@@ -486,6 +501,18 @@ pub fn resolved() -> &'static HyDbIngestCfg {
 /// Blocks connected per `advance` call.
 pub fn max_advance_blocks() -> usize {
   resolved().max_advance_blocks
+}
+
+/// Whether stepped sync may engage at all (task A3).
+pub fn stepped_sync() -> bool {
+  resolved().stepped_sync
+}
+
+/// Gap to the node tip at which stepped sync engages (task A3). The gap it
+/// *disengages* at is derived from this one rather than configured
+/// separately — see [`crate::stepped::SteppedSync::with_params`].
+pub fn stepped_sync_gap() -> i64 {
+  resolved().stepped_sync_gap
 }
 
 /// Deepest reorg the pipeline will unwind.

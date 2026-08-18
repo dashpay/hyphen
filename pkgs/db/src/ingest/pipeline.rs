@@ -35,6 +35,7 @@ use super::{balances, base, chain, stats, validators};
 use super::{HyDbBlockSeen, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport};
 use crate::error::{HyDbError, HyDbResult};
 use crate::records::{HyDbDataSrc, PgTx};
+use crate::stepped::{HyDbSyncMode, SteppedSync};
 use crate::tuning;
 use crate::types::{HyDbHash, HyDbHeight};
 
@@ -162,6 +163,7 @@ pub(super) async fn advance(
   data_src: &dyn HyDbDataSrc,
   node_tip: HyDbHash,
   progress: &watch::Sender<HyDbProgress>,
+  stepped: &SteppedSync,
 ) -> HyDbResult<HyDbTipReport> {
   let from_tip = chain::canonical_tip(pool).await?;
   let from = from_tip
@@ -176,9 +178,23 @@ pub(super) async fn advance(
       to: from,
       target: None,
       reorg: None,
+      mode: stepped.mode(),
     });
   };
   let target = Some(HyDbHeight::try_from_i32(node_height)?);
+
+  // One observation per advance: this is the "N consecutive advances" the
+  // hysteresis counts, and the point at which the gap to the node is known
+  // for certain.
+  if let Some(transition) = stepped.observe(from_tip.map(|(h, _)| h), node_height) {
+    stepped.apply(transition).await?;
+    tuning::apply_storage_for(
+      stepped.admin(),
+      tuning::resolved(),
+      transition.to == HyDbSyncMode::Stepped,
+    )
+    .await?;
+  }
 
   let plan = plan_advance(pool, &from_tip, &node_tip, node_height).await?;
 
@@ -188,6 +204,7 @@ pub(super) async fn advance(
       to: from,
       target,
       reorg: None,
+      mode: stepped.mode(),
     }),
     Plan::Forward(segment) => {
       let publish = |height: i32, stage: HyDbStage| {
@@ -195,10 +212,14 @@ pub(super) async fn advance(
           stage,
           height: HyDbHeight::try_from_i32(height).ok(),
           target,
+          mode: stepped.mode(),
         });
       };
       if let (Some(first), Some(last)) = (segment.first(), segment.last()) {
         chain::ensure_partitions_for_range(pool, first.1, last.1).await?;
+        // Reconcile before writing a block into the partition, so a freshly
+        // created one is never written to under the wrong regime.
+        stepped.ensure_settled(first.1).await?;
       }
       let mut connected_to: Option<i32> = None;
       for (hash, height) in &segment {
@@ -219,7 +240,12 @@ pub(super) async fn advance(
         connected_to = Some(*height);
         publish(*height, HyDbStage::Accumulate);
       }
-      finish_advance(pool, from, target).await
+      // ...and again after, which is where a partition the tip has just moved
+      // past gets its deferred indexes built.
+      if let Some(reached) = connected_to {
+        stepped.ensure_settled(reached).await?;
+      }
+      finish_advance(pool, from, target, stepped).await
     }
     Plan::Reorg {
       fork_height,
@@ -233,6 +259,16 @@ pub(super) async fn advance(
           "reorg from height {from_height} to fork {floor} exceeds the supported depth ({max_reorg})"
         )));
       }
+      // A disconnect runs the UTXO-restore join on `idx_tx_outputs_outpoint`,
+      // which stepped mode has taken off the open partition. Stepped mode is
+      // predicated on a reversal being unreachable from this far behind the
+      // tip; a reorg says that premise no longer holds, so leave the mode and
+      // put the index back before unwinding anything.
+      if stepped.force_realtime("a reorg was planned").is_some() {
+        tuning::apply_storage_for(stepped.admin(), tuning::resolved(), false).await?;
+      }
+      stepped.ensure_settled(from_height.max(0)).await?;
+
       let segment: Vec<(HyDbHash, i32)> = segment.into_iter().take(max_advance_blocks()).collect();
       if let Some(last) = segment.last() {
         chain::ensure_partitions_for_range(pool, floor.max(0), last.1).await?;
@@ -266,7 +302,7 @@ pub(super) async fn advance(
         disconnected,
         full_rederive: false,
       });
-      let mut report = finish_advance(pool, from, target).await?;
+      let mut report = finish_advance(pool, from, target, stepped).await?;
       report.reorg = reorg;
       Ok(report)
     }
@@ -275,12 +311,28 @@ pub(super) async fn advance(
 
 /// Operator-initiated rewind: disconnect canonical blocks, tip-first, until
 /// the tip is at `target`.
-pub(super) async fn rewind(pool: &PgPool, target: HyDbHeight) -> HyDbResult<HyDbTipReport> {
+pub(super) async fn rewind(
+  pool: &PgPool,
+  target: HyDbHeight,
+  stepped: &SteppedSync,
+) -> HyDbResult<HyDbTipReport> {
   let from_tip = chain::canonical_tip(pool).await?;
   let from = from_tip
     .map(|(h, _)| HyDbHeight::try_from_i32(h))
     .transpose()?;
   let floor = target.0 as i32;
+
+  // Same argument as the reorg path: a rewind disconnects, and a disconnect
+  // needs the index stepped mode is holding back.
+  if stepped
+    .force_realtime("an operator rewind was requested")
+    .is_some()
+  {
+    tuning::apply_storage_for(stepped.admin(), tuning::resolved(), false).await?;
+  }
+  if let Some((tip, _)) = from_tip {
+    stepped.ensure_settled(tip).await?;
+  }
 
   let mut disconnected: Vec<HyDbHash> = Vec::new();
   let mut h = from_tip.map(|(h, _)| h).unwrap_or(-1);
@@ -311,6 +363,7 @@ pub(super) async fn rewind(pool: &PgPool, target: HyDbHeight) -> HyDbResult<HyDb
     to,
     target: Some(target),
     reorg,
+    mode: stepped.mode(),
   })
 }
 
@@ -397,6 +450,7 @@ async fn finish_advance(
   pool: &PgPool,
   from: Option<HyDbHeight>,
   target: Option<HyDbHeight>,
+  stepped: &SteppedSync,
 ) -> HyDbResult<HyDbTipReport> {
   let to_tip = chain::canonical_tip(pool).await?;
   let to = to_tip
@@ -410,6 +464,7 @@ async fn finish_advance(
     to,
     target,
     reorg: None,
+    mode: stepped.mode(),
   })
 }
 

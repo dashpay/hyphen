@@ -32,6 +32,7 @@ mod migrate;
 mod pool;
 pub mod query;
 mod records;
+pub mod stepped;
 pub mod tuning;
 pub mod types;
 mod util;
@@ -52,6 +53,7 @@ pub use records::{
   HyDbBlock, HyDbBlockId, HyDbCbFields, HyDbDataSrc, HyDbHeader, HyDbPayload, HyDbTx, HyDbTxIn,
   HyDbTxOut, HyDbVlEvent, HyDbVlRegister, HyDbVlRevoke, HyDbVlUpdRegistrar, HyDbVlUpdService,
 };
+pub use stepped::{HyDbSyncMode, SteppedSync};
 pub use tuning::{HyDbIngestCfg, HyDbTuningProfile};
 // The query surface is broad; rather than mirror every row type at the crate
 // root, consumers reach them through `hyphen_db::query::*` (re-exported by
@@ -237,7 +239,14 @@ impl HyphenDb {
         "another process already holds the ingest advisory lock on this database".to_owned(),
       ));
     }
-    Ok(HyDbIngest::new(data_src, write.clone(), lock_conn))
+    // DDL — the deferred index builds stepped sync runs at partition close —
+    // goes on the admin pool, which is where `[db.client.admin] maint_work_mem`
+    // is set and therefore what decides how fast a build runs.
+    let admin = self
+      .pools
+      .as_ref()
+      .map_or_else(|| write.clone(), |pools| pools.admin.clone());
+    Ok(HyDbIngest::new(data_src, write.clone(), admin, lock_conn))
   }
 
   /// Per-pool utilization for diagnostics (empty on a mock facade).

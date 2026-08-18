@@ -28,6 +28,7 @@ use tokio::sync::watch;
 
 use crate::error::HyDbResult;
 use crate::records::HyDbDataSrc;
+use crate::stepped::{HyDbSyncMode, SteppedSync};
 use crate::types::{HyDbHash, HyDbHeight};
 
 /// Outcome of absorbing a single block announcement.
@@ -57,6 +58,11 @@ pub struct HyDbIngest {
   /// vs. an operator-initiated `rewind_to`); the advisory lock only guards
   /// cross-process exclusivity.
   op_lock: tokio::sync::Mutex<()>,
+  /// Stepped-sync state machine and the per-partition index maintenance it
+  /// drives. Owned here rather than kept process-wide because the ingest
+  /// advisory lock already makes this handle the single writer, and a mode is
+  /// only meaningful relative to one write path.
+  stepped: Arc<SteppedSync>,
   _lock_conn: sqlx::PgConnection,
 }
 
@@ -85,12 +91,14 @@ impl HyDbIngest {
       self.data_src.as_ref(),
       node_tip,
       &self.progress_tx,
+      &self.stepped,
     )
     .await?;
     self.publish(HyDbProgress {
       stage: HyDbStage::Idle,
       height: report.to,
       target: report.target,
+      mode: self.stepped.mode(),
     });
     Ok(report)
   }
@@ -101,11 +109,12 @@ impl HyDbIngest {
   /// reconnects them.
   pub async fn rewind_to(&self, target: HyDbHeight) -> HyDbResult<HyDbTipReport> {
     let _op = self.op_lock.lock().await;
-    let report = pipeline::rewind(&self.write, target).await?;
+    let report = pipeline::rewind(&self.write, target, &self.stepped).await?;
     self.publish(HyDbProgress {
       stage: HyDbStage::Idle,
       height: report.to,
       target: report.target,
+      mode: self.stepped.mode(),
     });
     Ok(report)
   }
@@ -115,9 +124,22 @@ impl HyDbIngest {
     self.progress_rx.clone()
   }
 
+  /// The index-maintenance regime in force. Surfaced by `/api/v1/status` and
+  /// the TUI, so an operator can see that a sync is deferring index builds
+  /// rather than inferring it from throughput.
+  pub fn sync_mode(&self) -> HyDbSyncMode {
+    self.stepped.mode()
+  }
+
+  /// Watch the mode, for callers that would otherwise poll it.
+  pub fn sync_mode_watch(&self) -> watch::Receiver<HyDbSyncMode> {
+    self.stepped.subscribe()
+  }
+
   pub(crate) fn new(
     data_src: Arc<dyn HyDbDataSrc>,
     write: PgPool,
+    admin: PgPool,
     lock_conn: sqlx::PgConnection,
   ) -> Self {
     let (progress_tx, progress_rx) = watch::channel(HyDbProgress::default());
@@ -127,6 +149,7 @@ impl HyDbIngest {
       progress_tx,
       progress_rx,
       op_lock: tokio::sync::Mutex::new(()),
+      stepped: Arc::new(SteppedSync::from_config(admin)),
       _lock_conn: lock_conn,
     }
   }
@@ -155,6 +178,8 @@ pub struct HyDbProgress {
   pub height: Option<HyDbHeight>,
   /// Height the node reports as its tip (the target).
   pub target: Option<HyDbHeight>,
+  /// Index-maintenance regime the write path is in.
+  pub mode: HyDbSyncMode,
 }
 
 impl Default for HyDbProgress {
@@ -163,6 +188,7 @@ impl Default for HyDbProgress {
       stage: HyDbStage::Idle,
       height: None,
       target: None,
+      mode: HyDbSyncMode::Realtime,
     }
   }
 }
@@ -205,4 +231,6 @@ pub struct HyDbTipReport {
   pub target: Option<HyDbHeight>,
   /// Present when the advance replaced part of the canonical chain.
   pub reorg: Option<HyDbReorg>,
+  /// Index-maintenance regime in force at the end of the advance.
+  pub mode: HyDbSyncMode,
 }
