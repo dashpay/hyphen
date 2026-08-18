@@ -363,7 +363,42 @@ CREATE TABLE utxo_set (
   value         BIGINT  NOT NULL,
   block_height  INTEGER NOT NULL,
   script_pubkey bytea   NOT NULL
-) WITH (fillfactor = 70, autovacuum_vacuum_scale_factor = 0.02);
+) WITH (
+  fillfactor = 70,
+  autovacuum_vacuum_scale_factor = 0.02,
+  -- Not a throttle to be gentle with, a throttle to be got through. The
+  -- global default (cost_limit 200, cost_delay 2ms) paces a vacuum of this
+  -- table so slowly that it is never not running: on the 967k-block mainnet
+  -- sync `utxo_set` took 23.1M inserts and 90 autovacuum passes, and a worker
+  -- was on it in 40 of 40 consecutive pg_stat_activity samples, competing with
+  -- ingest continuously. Raising the limit 10x keeps the yield point but lets
+  -- each pass finish and get out of the way.
+  --
+  -- Replayed real mainnet heights 860,000-869,999 against the real UTXO set as
+  -- of 859,999 (3,324,916 rows; 826,410 inserts and 702,375 deletes, one
+  -- transaction per block, paced at ~33 blocks/s, autovacuum live):
+  --
+  --   setting                          worker present   passes  heap   catch-up
+  --   default cost                     20.5% / 22.9%    10      693MB  1.77s
+  --   cost_limit 2000, delay 2ms        11.1% /  9.2%   11      689MB  0.36s
+  --   cost_limit 2000, delay 0          16.9%           11      693MB  0.52s
+  --   scale_factor 0.2, default cost    15.6%            7      707MB  3.15s
+  --   scale_factor 0.1 + limit 2000/0   14.4%            7      705MB  3.27s
+  --   autovacuum off                     0.0%            0      811MB  5.04s
+  --
+  -- Halving the worker's presence costs nothing: ingest wall time was flat
+  -- across every variant (the run is paced), and the table came out smaller,
+  -- not larger. The other direction loses — vacuuming less often trades a
+  -- couple of points of presence for real bloat and a catch-up bill that keeps
+  -- growing, and turning it off entirely produced both the largest heap and
+  -- the slowest run. So the frequency stays at 0.02; only the pacing changes.
+  -- Delay stays at 2ms rather than 0: unthrottled measured worse than this on
+  -- every axis, and 0 removes the yield point a shared server wants.
+  --
+  -- These are static defaults. B1 will override them per sync mode.
+  autovacuum_vacuum_cost_limit = 2000,
+  autovacuum_vacuum_cost_delay = 2
+);
 -- Keyset pagination of an address's UTXOs, newest-first. `outpoint` packs
 -- txid||vout big-endian, so DESC on it orders by txid then vout, matching the
 -- historical (block_height, txid, vout) ordering.
