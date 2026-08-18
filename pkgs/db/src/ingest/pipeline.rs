@@ -273,6 +273,11 @@ pub(super) async fn advance(
         connected_to = Some(height);
         publish(height, HyDbStage::Accumulate);
       }
+      // The segment is written; the look-ahead has nothing left to feed. Drop
+      // it before the index maintenance below rather than leaving it in scope
+      // across DDL — it is drained by construction at this point, and saying
+      // so is cheaper than requiring the next reader to prove it.
+      drop(queue);
       // ...and again after, which is where a partition the tip has just moved
       // past gets its deferred indexes built.
       if let Some(reached) = connected_to {
