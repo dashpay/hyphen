@@ -28,6 +28,7 @@ mod config;
 mod error;
 mod ingest;
 pub mod layout;
+pub mod lead;
 mod migrate;
 mod pool;
 pub mod query;
