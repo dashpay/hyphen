@@ -260,42 +260,69 @@ mod tests {
     }
   }
 
+  type T = Result<(), DaemonError>;
+
+  fn locked<X: Clone>(m: &Mutex<Vec<X>>) -> Vec<X> {
+    m.lock().unwrap_or_else(|e| e.into_inner()).clone()
+  }
+
+  /// Drain a queue into the heights it delivered, stopping at the first
+  /// failure and handing it back.
+  async fn drain(q: &mut FetchQueue) -> (Vec<u32>, Option<DaemonError>) {
+    let mut seen = Vec::new();
+    while let Some(item) = q.next().await {
+      match item {
+        Ok(b) => seen.push(b.height),
+        Err(e) => return (seen, Some(e)),
+      }
+    }
+    (seen, None)
+  }
+
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn concurrent_fetch_still_arrives_in_height_order() {
+  async fn concurrent_fetch_still_arrives_in_height_order() -> T {
     let src = Arc::new(FakeRest {
       reverse_latency: true,
       ..FakeRest::new(64)
     });
     let mut q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 8, 1, 8);
-    let mut seen = Vec::new();
-    while let Some(item) = q.next().await {
-      seen.push(item.expect("fetched").height);
+    let (seen, failure) = drain(&mut q).await;
+    if let Some(e) = failure {
+      return Err(e);
     }
     assert_eq!(seen, (1..=8).collect::<Vec<_>>());
-
-    let completed = src.order.lock().unwrap().clone();
     assert_ne!(
-      completed,
+      locked(&src.order),
       (1..=8).collect::<Vec<_>>(),
       "the fake must actually complete out of order, or this proves nothing"
     );
+    Ok(())
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn a_fetch_failure_surfaces_at_its_height_instead_of_stalling() {
+  async fn a_fetch_failure_surfaces_at_its_height_instead_of_stalling() -> T {
     let src = Arc::new(FakeRest {
       missing: vec![5],
       ..FakeRest::new(64)
     });
     let mut q = FetchQueue::spawn(src as Arc<dyn RestSource>, 8, 1, 10);
-    for expected in 1..=4 {
-      assert_eq!(q.next().await.unwrap().unwrap().height, expected);
-    }
-    let err = q.next().await.unwrap().expect_err("height 5 is missing");
+    let (seen, failure) = drain(&mut q).await;
+    assert_eq!(
+      seen,
+      vec![1, 2, 3, 4],
+      "everything below the missing height must still be delivered, in order"
+    );
+    let Some(err) = failure else {
+      return Err(DaemonError::RestSource {
+        message: "height 5 is missing and must have been refused".to_owned(),
+        kind: RestErrorKind::Other,
+      });
+    };
     assert!(
       err.to_string().contains("404"),
-      "the refusal must name the failure: {err}"
+      "the refusal must name the failure rather than stall: {err}"
     );
+    Ok(())
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -321,37 +348,40 @@ mod tests {
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn the_lead_bound_bounds_the_fetch_queue() {
+  async fn the_lead_bound_bounds_the_fetch_queue() -> T {
+    // 1 MiB blocks: the count bound alone would authorise the whole range.
     let src = Arc::new(FakeRest {
       size: 1024 * 1024,
       ..FakeRest::new(4_000)
     });
     let mut q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 8, 1, 400);
     let gauge = Arc::clone(&q.gauge);
-    let mut count = 0;
-    while let Some(item) = q.next().await {
-      item.expect("fetched");
-      count += 1;
-      if count % 40 == 0 {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-      }
+    let (seen, failure) = drain(&mut q).await;
+    if let Some(e) = failure {
+      return Err(e);
     }
-    assert_eq!(count, 400);
+    assert_eq!(seen.len(), 400);
+
     let budget = byte_budget(hyphen_db::tuning::max_lead_blocks().max(1));
     assert!(
       gauge.peak_bytes() <= budget,
       "the fetch look-ahead charged {} bytes against a budget of {budget}",
       gauge.peak_bytes()
     );
-    assert_eq!(gauge.in_flight_blocks(), 0);
+    assert_eq!(
+      gauge.in_flight_blocks(),
+      0,
+      "every lease must be released once the absorb has consumed the block"
+    );
 
     let mut counts: HashMap<u32, usize> = HashMap::new();
-    for h in src.order.lock().unwrap().iter() {
-      *counts.entry(*h).or_default() += 1;
+    for h in locked(&src.order) {
+      *counts.entry(h).or_default() += 1;
     }
     assert!(
       counts.values().all(|c| *c == 1),
       "the look-ahead must fetch each height exactly once"
     );
+    Ok(())
   }
 }

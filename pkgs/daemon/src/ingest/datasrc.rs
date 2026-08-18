@@ -352,10 +352,8 @@ mod tests {
   /// against a synthetic encoding that shares its assumptions.
   const MAINNET_BLOCK_1: &str = "02000000b67a40f3cd5804437a108f105533739c37e6229bc1adcab385140b59fd0f0000a71c1aade44bf8425bec0deb611c20b16da3442818ef20489ca1e2512be43eef814cdb52f0ff0f1edbf701000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0a510101062f503253482fffffffff0100743ba40b000000232103a69850243c993c0645a6e8b38c774174174cc766cd3ec2140afd24d831b84c41ac00000000";
 
-  fn raw() -> Vec<u8> {
-    (0..MAINNET_BLOCK_1.len() / 2)
-      .map(|i| u8::from_str_radix(&MAINNET_BLOCK_1[i * 2..i * 2 + 2], 16).expect("hex"))
-      .collect()
+  fn raw() -> HyDbResult<Vec<u8>> {
+    hex::decode(MAINNET_BLOCK_1).map_err(HyDbError::from)
   }
 
   fn src() -> HyDbBlockSource {
@@ -363,10 +361,10 @@ mod tests {
   }
 
   #[test]
-  fn header_only_identity_agrees_with_the_full_decode() {
-    let raw = raw();
-    let id = src().identify(&raw).expect("identify");
-    let decoded = src().decode(&raw).expect("decode");
+  fn header_only_identity_agrees_with_the_full_decode() -> HyDbResult<()> {
+    let raw = raw()?;
+    let id = src().identify(&raw)?;
+    let decoded = src().decode(&raw)?;
     assert_eq!(
       id.hash, decoded.header.hash,
       "the header hash must be the block hash the decoder reports"
@@ -376,11 +374,12 @@ mod tests {
       "reading prev_hash out of the header bytes must give what decoding the \
        whole block gives — this is the assumption the fast path rests on"
     );
+    Ok(())
   }
 
   #[test]
-  fn identity_is_the_parent_link_the_chain_expects() {
-    let id = src().identify(&raw()).expect("identify");
+  fn identity_is_the_parent_link_the_chain_expects() -> HyDbResult<()> {
+    let id = src().identify(&raw()?)?;
     let mut display = id.prev_hash.0;
     display.reverse();
     assert_eq!(
@@ -388,13 +387,19 @@ mod tests {
       "00000ffd590b1485b3caadc19b22e6379c733355108f107a430458cdf3407ab6",
       "block 1's parent is the mainnet genesis block"
     );
+    Ok(())
   }
 
   #[test]
-  fn a_truncated_header_is_refused_rather_than_indexed() {
-    let err = src()
-      .identify(&[0u8; 40])
-      .expect_err("40 bytes is not a header");
-    assert!(err.to_string().contains("too short"), "{err}");
+  fn a_truncated_header_is_refused_rather_than_indexed() -> HyDbResult<()> {
+    match src().identify(&[0u8; 40]) {
+      Ok(_) => Err(HyDbError::Derive(
+        "40 bytes is not a header and must not identify".to_owned(),
+      )),
+      Err(e) => {
+        assert!(e.to_string().contains("too short"), "{e}");
+        Ok(())
+      }
+    }
   }
 }
