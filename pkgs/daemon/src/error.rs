@@ -5,8 +5,16 @@
 //
 
 //! Central error type with transient/permanent classification.
+//!
+//! Storage failures cross this seam as the typed [`HyDbError`] they were born
+//! as — never as a formatted string. `DaemonError::Storage` holds the source
+//! error itself, so `std::error::Error::source()` walks the causal chain back
+//! to the SQLSTATE and [`classify`](DaemonError::classify) can ask the storage
+//! crate for its verdict instead of re-deriving one from a message.
 
 use core::fmt;
+
+use hyphen_db::{HyDbError, Outcome as HyDbOutcome};
 
 /// Classification of the underlying REST transport failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,16 +38,18 @@ pub enum DaemonError {
     context: &'static str,
     source: std::io::Error,
   },
-  Db(String),
+  /// A storage-engine failure. `context` names the operation that failed;
+  /// `source` is the storage crate's own typed error, kept intact so its
+  /// SQLSTATE and classification survive the hop.
+  Storage {
+    context: &'static str,
+    source: HyDbError,
+  },
   RestSource {
     message: String,
     kind: RestErrorKind,
   },
   Config(String),
-  Pg {
-    message: String,
-    code: Option<String>,
-  },
   Index(String),
 }
 
@@ -58,10 +68,9 @@ impl fmt::Display for DaemonError {
         )
       }
       Self::Io { context, source } => write!(f, "I/O error ({context}): {source}"),
-      Self::Db(msg) => write!(f, "database error: {msg}"),
+      Self::Storage { context, source } => write!(f, "storage error ({context}): {source}"),
       Self::RestSource { message, .. } => write!(f, "data source error: {message}"),
       Self::Config(msg) => write!(f, "config error: {msg}"),
-      Self::Pg { message, .. } => write!(f, "postgres error: {message}"),
       Self::Index(msg) => write!(f, "index error: {msg}"),
     }
   }
@@ -71,6 +80,7 @@ impl std::error::Error for DaemonError {
   fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
     match self {
       Self::Io { source, .. } => Some(source),
+      Self::Storage { source, .. } => Some(source),
       _ => None,
     }
   }
@@ -102,7 +112,9 @@ impl DaemonError {
       | Self::InsufficientDisk { .. }
       | Self::Config(_) => Outcome::Fatal,
 
-      Self::Pg { code, message } => classify_pg(code.as_deref(), message),
+      // Delegate rather than re-derive: the storage crate owns the
+      // SQLSTATE policy and is the only place it is written down.
+      Self::Storage { source, .. } => Outcome::from(source.classify()),
 
       Self::RestSource { kind, .. } => match kind {
         RestErrorKind::Connect | RestErrorKind::Timeout => Outcome::Warning,
@@ -110,7 +122,7 @@ impl DaemonError {
         _ => Outcome::Error,
       },
 
-      Self::Io { .. } | Self::Db(_) | Self::Index(_) => Outcome::Error,
+      Self::Io { .. } | Self::Index(_) => Outcome::Error,
     }
   }
 
@@ -120,39 +132,47 @@ impl DaemonError {
   }
 }
 
-/// SQLSTATE-first, message-fallback classification for Postgres errors.
-fn classify_pg(code: Option<&str>, message: &str) -> Outcome {
-  if let Some(sqlstate) = code {
-    return match sqlstate {
-      _ if sqlstate.starts_with("08") => Outcome::Warning, // Connection Exception
-      _ if sqlstate.starts_with("40") => Outcome::Warning, // Transaction Rollback (deadlock, serialization)
-      _ if sqlstate.starts_with("53") => Outcome::Warning, // Insufficient Resources
-      _ if sqlstate.starts_with("57") => Outcome::Warning, // Operator Intervention (admin shutdown)
-      "55006" => Outcome::Warning,                         // database in recovery
-      _ if sqlstate.starts_with("23") => Outcome::Error,   // Integrity Constraint Violation
-      _ if sqlstate.starts_with("42") => Outcome::Error,   // Syntax/Access Rule Violation
-      _ => Outcome::Error,
-    };
+impl DaemonError {
+  /// Wrap a storage-engine failure, tagging it with the operation that failed.
+  ///
+  /// This is the only sanctioned way for a `HyDbError` to become a
+  /// `DaemonError`: it moves the error in whole, so nothing downstream has to
+  /// parse a message to learn what happened.
+  pub fn storage(context: &'static str, source: HyDbError) -> Self {
+    Self::Storage { context, source }
   }
-  // Pool-level errors have no SQLSTATE (never reached the DB engine)
-  let lower = message.to_ascii_lowercase();
-  if [
-    "pool closed",
-    "pool timed out",
-    "failed to acquire connection",
-    "connection refused",
-    "connection reset",
-    "broken pipe",
-    "the database system is shutting down",
-    "the database system is starting up",
-    "could not connect to server",
-  ]
-  .iter()
-  .any(|p| lower.contains(p))
-  {
-    Outcome::Warning
-  } else {
-    Outcome::Error
+
+  /// The storage error underneath, when this failure came from `hyphen-db`.
+  ///
+  /// Callers that need the SQLSTATE (telemetry, status mapping) match on this
+  /// rather than reading [`Display`](fmt::Display) output.
+  pub fn storage_source(&self) -> Option<&HyDbError> {
+    match self {
+      Self::Storage { source, .. } => Some(source),
+      _ => None,
+    }
+  }
+}
+
+impl From<HyDbError> for DaemonError {
+  /// `?` shorthand for call sites with no more specific context to add.
+  fn from(source: HyDbError) -> Self {
+    Self::Storage {
+      context: "storage engine",
+      source,
+    }
+  }
+}
+
+impl From<HyDbOutcome> for Outcome {
+  /// The two severity ladders are the same ladder; this is the only place
+  /// they are allowed to disagree, and they do not.
+  fn from(outcome: HyDbOutcome) -> Self {
+    match outcome {
+      HyDbOutcome::Warning => Self::Warning,
+      HyDbOutcome::Error => Self::Error,
+      HyDbOutcome::Fatal => Self::Fatal,
+    }
   }
 }
 
@@ -178,74 +198,118 @@ mod tests {
     );
   }
 
-  #[test]
-  fn classify_pg_transient_by_sqlstate() {
-    // 40P01 = deadlock
-    let err = DaemonError::Pg {
-      message: "deadlock detected".to_owned(),
-      code: Some("40P01".to_owned()),
-    };
-    assert_eq!(err.classify(), Outcome::Warning);
-    // 08006 = connection failure
-    let err = DaemonError::Pg {
-      message: "connection failure".to_owned(),
-      code: Some("08006".to_owned()),
-    };
-    assert_eq!(err.classify(), Outcome::Warning);
-    // 57P01 = admin shutdown
-    let err = DaemonError::Pg {
-      message: "admin shutdown".to_owned(),
-      code: Some("57P01".to_owned()),
-    };
-    assert_eq!(err.classify(), Outcome::Warning);
-    // 53300 = too many connections
-    let err = DaemonError::Pg {
-      message: "too many connections".to_owned(),
-      code: Some("53300".to_owned()),
-    };
-    assert_eq!(err.classify(), Outcome::Warning);
+  fn pg(code: Option<&str>, message: &str) -> HyDbError {
+    HyDbError::Pg {
+      message: message.to_owned(),
+      code: code.map(str::to_owned),
+    }
   }
 
+  /// A transient SQLSTATE must survive the whole `sqlx -> HyDbError ->
+  /// DaemonError` chain with its classification intact. This is the
+  /// regression guard for E2.2: flatten the storage error into a string
+  /// anywhere along the way and the code is gone, so these fail.
   #[test]
-  fn classify_pg_permanent_by_sqlstate() {
-    // 23505 = unique violation
-    let err = DaemonError::Pg {
-      message: "unique constraint".to_owned(),
-      code: Some("23505".to_owned()),
-    };
-    assert_eq!(err.classify(), Outcome::Error);
-    // 42P01 = undefined table
-    let err = DaemonError::Pg {
-      message: "missing table".to_owned(),
-      code: Some("42P01".to_owned()),
-    };
-    assert_eq!(err.classify(), Outcome::Error);
+  fn storage_sqlstate_survives_conversion() {
+    let cases: &[(&str, Outcome)] = &[
+      ("08006", Outcome::Warning), // connection failure
+      ("40P01", Outcome::Warning), // deadlock detected
+      ("40001", Outcome::Warning), // serialization failure
+      ("53300", Outcome::Warning), // too many connections
+      ("57P01", Outcome::Warning), // admin shutdown
+      ("57P03", Outcome::Warning), // database system is starting up
+      ("55006", Outcome::Warning), // database in recovery
+      ("23505", Outcome::Error),   // unique violation — permanent
+      ("42P01", Outcome::Error),   // undefined table — permanent
+    ];
+    for (code, want) in cases {
+      let source = pg(Some(code), "irrelevant");
+      let graded_by_storage = Outcome::from(source.classify());
+      let err = DaemonError::storage("ingest", source);
+
+      assert_eq!(err.classify(), *want, "sqlstate {code} graded wrongly");
+      assert_eq!(err.is_transient(), *want == Outcome::Warning);
+      // The daemon holds no opinion of its own: it reports whatever the
+      // storage crate decided.
+      assert_eq!(err.classify(), graded_by_storage);
+
+      // The SQLSTATE is still there to be read, not rendered away.
+      let kept = match err.storage_source() {
+        Some(HyDbError::Pg {
+          code: Some(kept), ..
+        }) => Some(kept.as_str()),
+        _ => None,
+      };
+      assert_eq!(
+        kept,
+        Some(*code),
+        "storage source lost its SQLSTATE: {err:?}"
+      );
+    }
   }
 
+  /// `source()` walks to the storage error, so the causal chain stays intact
+  /// for anything that reports errors by traversing it.
   #[test]
-  fn classify_pg_fallback_pool_errors() {
-    let err = DaemonError::Pg {
-      message: "pool closed".to_owned(),
-      code: None,
-    };
-    assert_eq!(err.classify(), Outcome::Warning);
-    assert!(err.is_transient());
-
-    let err = DaemonError::Pg {
-      message: "pool timed out waiting for connection".to_owned(),
-      code: None,
-    };
-    assert_eq!(err.classify(), Outcome::Warning);
+  fn storage_error_exposes_its_source() {
+    use std::error::Error as _;
+    let err = DaemonError::storage("read canonical tip", pg(Some("40P01"), "deadlock detected"));
+    let carried = err
+      .source()
+      .and_then(|source| source.downcast_ref::<HyDbError>());
+    assert!(
+      carried.is_some(),
+      "storage error must expose its hyphen-db source: {err:?}"
+    );
+    assert!(
+      err
+        .to_string()
+        .starts_with("storage error (read canonical tip)"),
+      "unexpected rendering: {err}"
+    );
   }
 
+  /// Pool-level failures never reach the engine and so carry no SQLSTATE;
+  /// they must still classify as transient after conversion.
   #[test]
-  fn classify_pg_permanent_no_code() {
-    let err = DaemonError::Pg {
-      message: "constraint violation on insert".to_owned(),
-      code: None,
-    };
-    assert_eq!(err.classify(), Outcome::Error);
-    assert!(!err.is_transient());
+  fn storage_message_fallback_survives_conversion() {
+    let cases: &[(&str, Outcome)] = &[
+      (
+        "pool timed out while waiting for a connection",
+        Outcome::Warning,
+      ),
+      ("the database system is starting up", Outcome::Warning),
+      ("constraint violation on insert", Outcome::Error),
+    ];
+    for (message, want) in cases {
+      let err = DaemonError::storage("connect", pg(None, message));
+      assert_eq!(err.classify(), *want, "message {message:?} graded wrongly");
+    }
+  }
+
+  /// Non-Postgres storage variants keep their own grades across the seam: a
+  /// bad config or a failed migration is still fatal, a bad row is not.
+  #[test]
+  fn storage_non_pg_variants_keep_their_grade() {
+    let cases: Vec<(HyDbError, Outcome)> = vec![
+      (HyDbError::Config("bad url".to_owned()), Outcome::Fatal),
+      (HyDbError::Migrate("schema".to_owned()), Outcome::Fatal),
+      (HyDbError::Decode("short hash".to_owned()), Outcome::Error),
+      (HyDbError::Derive("bad block".to_owned()), Outcome::Error),
+    ];
+    for (source, want) in cases {
+      let graded_by_storage = Outcome::from(source.classify());
+      let err = DaemonError::storage("ctx", source);
+      assert_eq!(err.classify(), want);
+      assert_eq!(err.classify(), graded_by_storage);
+    }
+  }
+
+  /// The bare `From` shorthand grades identically to the tagged constructor.
+  #[test]
+  fn from_impl_matches_tagged_constructor() {
+    let err: DaemonError = pg(Some("40P01"), "deadlock").into();
+    assert_eq!(err.classify(), Outcome::Warning);
   }
 
   #[test]
@@ -291,11 +355,7 @@ mod tests {
   }
 
   #[test]
-  fn classify_db_io_index_as_error() {
-    assert_eq!(
-      DaemonError::Db("corruption".to_owned()).classify(),
-      Outcome::Error
-    );
+  fn classify_io_index_as_error() {
     assert_eq!(
       DaemonError::Io {
         context: "read",

@@ -20,9 +20,13 @@ pub(crate) fn hydb_height(height: i32) -> hyphen_db::HyDbHeight {
   hyphen_db::HyDbHeight(height.max(0) as u32)
 }
 
-/// Map a storage-engine error onto an internal API error with context.
-pub(crate) fn hydb_err(err: hyphen_db::HyDbError, ctx: &str) -> ApiError {
-  ApiError::internal(format!("{ctx}: {err}"))
+/// Map a storage-engine error onto an API error, preserving its class.
+///
+/// The typed `HyDbError` is carried into `DaemonError::Storage` rather than
+/// formatted away, so `from_daemon` can grade it: transient storage failures
+/// become a retriable `503` instead of an indistinguishable `500`.
+pub(crate) fn hydb_err(err: hyphen_db::HyDbError, ctx: &'static str) -> ApiError {
+  ApiError::from_daemon(crate::error::DaemonError::storage(ctx, err), ctx)
 }
 
 /// Public string label for a stored transaction type — matches the `tx_type`

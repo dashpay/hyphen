@@ -1035,11 +1035,15 @@ mod tests {
           fenced: Arc::new(AtomicBool::new(false)),
         },
         async {
-          // Pg with SQLSTATE 23505 (unique violation) classifies as Error, not Fatal
-          Err(DaemonError::Pg {
-            message: "constraint violation".to_owned(),
-            code: Some("23505".to_owned()),
-          })
+          // A storage error carrying SQLSTATE 23505 (unique violation)
+          // classifies as Error, not Fatal.
+          Err(DaemonError::storage(
+            "test",
+            hyphen_db::HyDbError::Pg {
+              message: "constraint violation".to_owned(),
+              code: Some("23505".to_owned()),
+            },
+          ))
         },
       ),
       || {

@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, Outcome};
 
 /// One API error response paired with its HTTP status code.
 pub struct ApiError {
@@ -102,13 +102,20 @@ impl ApiError {
   }
 
   /// Map one daemon query error into a public REST error response.
+  ///
+  /// The status comes from the error's own classification, not from reading
+  /// its message: anything the storage crate grades transient (a deadlock, an
+  /// exhausted pool, a Postgres still coming up) is a retriable `503`, and
+  /// everything else is a `500`. Grading by structure is what makes this path
+  /// reachable at all — the previous substring test only fired for one
+  /// spelling of one pool error.
   pub fn from_daemon(err: DaemonError, context: &str) -> Self {
-    match err {
-      DaemonError::Pg { message, .. } if pg_pool_timeout(&message) => {
-        tracing::warn!(context, detail = %message, "postgres query pool exhausted");
-        Self::service_unavailable("query capacity is temporarily exhausted")
+    match err.classify() {
+      Outcome::Warning => {
+        tracing::warn!(context, detail = %err, "storage temporarily unavailable");
+        Self::service_unavailable("service is temporarily unavailable, retry shortly")
       }
-      other => Self::internal(format!("{context}: {other}")),
+      Outcome::Error | Outcome::Fatal => Self::internal(format!("{context}: {err}")),
     }
   }
 }
@@ -126,9 +133,76 @@ impl IntoResponse for ApiError {
   }
 }
 
-fn pg_pool_timeout(message: &str) -> bool {
-  let lowered = message.to_ascii_lowercase();
-  lowered.contains("timed out while waiting for an open connection")
-    || lowered.contains("pool timed out")
-    || lowered.contains("acquire timeout")
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use hyphen_db::HyDbError;
+
+  fn pg(code: &str) -> HyDbError {
+    HyDbError::Pg {
+      message: "irrelevant".to_owned(),
+      code: Some(code.to_owned()),
+    }
+  }
+
+  /// The retriable path is reachable for every transient SQLSTATE, not just
+  /// for one spelling of "pool timed out". Before the storage seam carried the
+  /// typed error this branch could never fire from a real query failure.
+  #[test]
+  fn transient_storage_failures_are_retriable_503() {
+    for code in ["40P01", "53300", "57P03", "08006", "55006"] {
+      let err = ApiError::from_daemon(DaemonError::storage("block by hash", pg(code)), "block");
+      assert_eq!(
+        err.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "sqlstate {code} should be retriable"
+      );
+      assert_eq!(err.code, "ServiceUnavailable");
+    }
+  }
+
+  /// A permanent storage failure must not advertise itself as retriable.
+  #[test]
+  fn permanent_storage_failures_are_500() {
+    for code in ["23505", "42P01"] {
+      let err = ApiError::from_daemon(DaemonError::storage("block by hash", pg(code)), "block");
+      assert_eq!(
+        err.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "sqlstate {code} should not be retriable"
+      );
+    }
+  }
+
+  /// The whole chain, as a handler sees it: a `hyphen-db` error goes into
+  /// `hydb_err` and comes out as a 503 because its SQLSTATE survived.
+  #[test]
+  fn hydb_err_preserves_retriability_end_to_end() {
+    let err = crate::rest::hydb::hydb_err(pg("40P01"), "block by hash");
+    assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let err = crate::rest::hydb::hydb_err(pg("42P01"), "block by hash");
+    assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+  }
+
+  /// A pool failure never reaches the engine and so has no SQLSTATE; the
+  /// message fallback in the storage crate must still make it retriable.
+  #[test]
+  fn pool_exhaustion_without_sqlstate_is_still_503() {
+    let err = crate::rest::hydb::hydb_err(
+      HyDbError::Pg {
+        message: "pool timed out while waiting for an open connection".to_owned(),
+        code: None,
+      },
+      "list blocks",
+    );
+    assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+  }
+
+  /// Non-storage errors keep their previous 500 behaviour.
+  #[test]
+  fn non_storage_errors_stay_500() {
+    let err = ApiError::from_daemon(DaemonError::Index("stale".to_owned()), "ctx");
+    assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+  }
 }
