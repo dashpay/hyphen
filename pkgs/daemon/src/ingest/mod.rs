@@ -406,6 +406,32 @@ async fn absorb_upto(
   lo: u32,
   hi: u32,
 ) -> Result<Absorbed, DaemonError> {
+  absorb_upto_with(
+    queue,
+    |raw| absorb_one(ingest, source, raw),
+    status,
+    lifecycle,
+    lo,
+    hi,
+  )
+  .await
+}
+
+/// [`absorb_upto`] over a caller-supplied absorb step, so the discard policy
+/// can be tested without a storage engine behind it. The step answers "did an
+/// ancestor walk run", which is the only thing this loop reacts to.
+async fn absorb_upto_with<F, Fut>(
+  queue: &mut prefetch::FetchQueue,
+  absorb: F,
+  status: &IngestStatus,
+  lifecycle: &Lifecycle,
+  lo: u32,
+  hi: u32,
+) -> Result<Absorbed, DaemonError>
+where
+  F: Fn(Vec<u8>) -> Fut,
+  Fut: std::future::Future<Output = Result<bool, DaemonError>>,
+{
   // Seeded at `lo`, not at `hi + 1`: a queue that runs dry before the chunk
   // end has absorbed nothing further, and the caller must not step over the
   // heights it did not get.
@@ -428,7 +454,7 @@ async fn absorb_upto(
       out.chunk_tip = Some(block_hash(&block.raw)?);
     }
     out.next = height.saturating_add(1);
-    if absorb_one(ingest, source, block.raw).await? {
+    if absorb(block.raw).await? {
       out.discarded = true;
       return Ok(out);
     }
@@ -559,4 +585,177 @@ fn block_hash(raw: &[u8]) -> Result<HyDbHash, DaemonError> {
   // The inner error is already a `DaemonError`; re-formatting it into a new
   // one would flatten a typed failure into a sentence for no gain.
   crate::consensus::block_hash(raw).map(|h| HyDbHash(h.to_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use async_trait::async_trait;
+  use std::sync::atomic::AtomicUsize;
+  use std::sync::Mutex;
+
+  /// A REST source serving synthetic blocks, recording the heights it served.
+  #[derive(Debug, Default)]
+  struct CountingRest {
+    served: Mutex<Vec<u32>>,
+    calls: AtomicUsize,
+  }
+
+  #[async_trait]
+  impl RestSource for CountingRest {
+    async fn block_count(&self) -> Result<u32, DaemonError> {
+      Ok(100_000)
+    }
+
+    async fn block_hash(&self, height: u32) -> Result<String, DaemonError> {
+      Ok(format!("{height:064x}"))
+    }
+
+    async fn raw_block(&self, hash: &str) -> Result<Vec<u8>, DaemonError> {
+      let height = u32::from_str_radix(hash.trim_start_matches('0'), 16).unwrap_or(0);
+      self.calls.fetch_add(1, Ordering::Relaxed);
+      self
+        .served
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(height);
+      // 80 bytes so `block_hash` on the absorbed bytes is satisfiable.
+      let mut raw = vec![0u8; 96];
+      raw[..4].copy_from_slice(&height.to_le_bytes());
+      Ok(raw)
+    }
+
+    async fn fetch_blocks_batch(
+      &self,
+      heights: &[u32],
+    ) -> Result<Vec<(String, Vec<u8>)>, DaemonError> {
+      let mut out = Vec::new();
+      for h in heights {
+        let hash = self.block_hash(*h).await?;
+        out.push((hash.clone(), self.raw_block(&hash).await?));
+      }
+      Ok(out)
+    }
+  }
+
+  fn height_of(raw: &[u8]) -> u32 {
+    u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn a_missing_parent_stops_the_absorb_and_reports_where_to_refill() -> Result<(), DaemonError>
+  {
+    let src = Arc::new(CountingRest::default()) as Arc<dyn RestSource>;
+    let status = IngestStatus::new();
+    let lifecycle = Lifecycle::start();
+    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(&src), 8, 1, 5_000);
+
+    // The engine accepts everything up to 40, then reports a missing parent —
+    // the seam a competing branch arrives through.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let absorbed = {
+      let seen = Arc::clone(&seen);
+      absorb_upto_with(
+        &mut queue,
+        move |raw: Vec<u8>| {
+          let seen = Arc::clone(&seen);
+          async move {
+            let h = height_of(&raw);
+            seen.lock().unwrap_or_else(|e| e.into_inner()).push(h);
+            Ok(h == 40)
+          }
+        },
+        &status,
+        &lifecycle,
+        1,
+        512,
+      )
+      .await?
+    };
+
+    assert!(absorbed.discarded, "a missing parent must stop the absorb");
+    assert_eq!(
+      absorbed.next, 41,
+      "the caller refills from the height after the one that walked, not from \
+       the chunk start and not from the queue's own position"
+    );
+    assert!(
+      absorbed.chunk_tip.is_none(),
+      "the chunk end was never reached, so there is no tip to connect toward"
+    );
+    let seen = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(
+      seen,
+      (1..=40).collect::<Vec<_>>(),
+      "the absorb must have consumed 1..=40 in order and stopped dead at 40"
+    );
+    Ok(())
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn a_clean_chunk_reports_its_tip_and_the_next_height() -> Result<(), DaemonError> {
+    let src = Arc::new(CountingRest::default()) as Arc<dyn RestSource>;
+    let status = IngestStatus::new();
+    let lifecycle = Lifecycle::start();
+    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(&src), 8, 1, 5_000);
+
+    let absorbed = absorb_upto_with(
+      &mut queue,
+      |_raw| async { Ok(false) },
+      &status,
+      &lifecycle,
+      1,
+      512,
+    )
+    .await?;
+    assert!(!absorbed.discarded);
+    assert_eq!(absorbed.next, 513);
+    assert!(
+      absorbed.chunk_tip.is_some(),
+      "reaching the chunk end must yield the tip the engine is asked to \
+       connect toward"
+    );
+
+    // The same queue keeps serving the next chunk — it spans the run, so the
+    // fetch carries on while the engine writes.
+    let more = absorb_upto_with(
+      &mut queue,
+      |_raw| async { Ok(false) },
+      &status,
+      &lifecycle,
+      513,
+      1024,
+    )
+    .await?;
+    assert_eq!(more.next, 1025);
+    assert!(!more.discarded);
+    Ok(())
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn a_stopped_lifecycle_absorbs_nothing_further() -> Result<(), DaemonError> {
+    let src = Arc::new(CountingRest::default()) as Arc<dyn RestSource>;
+    let status = IngestStatus::new();
+    let lifecycle = Lifecycle::start();
+    lifecycle.stop();
+    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(&src), 8, 1, 5_000);
+    let absorbed = absorb_upto_with(
+      &mut queue,
+      |_raw| async { Ok(false) },
+      &status,
+      &lifecycle,
+      1,
+      512,
+    )
+    .await?;
+    assert!(
+      absorbed.chunk_tip.is_none(),
+      "a shutdown must not hand back a tip to connect toward"
+    );
+    assert_eq!(
+      absorbed.next, 1,
+      "and must not claim progress the caller can step over"
+    );
+    Ok(())
+  }
 }
