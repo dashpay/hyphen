@@ -220,6 +220,9 @@ pub(crate) struct IngestVisor {
   lifecycle: Arc<Lifecycle>,
   status: Arc<IngestStatus>,
   poll_secs: u64,
+  /// `[core] rest_concurrency`: outstanding REST requests the fetch
+  /// look-ahead may have against the node at once.
+  rest_concurrency: usize,
   task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -236,6 +239,7 @@ impl IngestVisor {
     source: Arc<dyn RestSource>,
     lifecycle: Arc<Lifecycle>,
     poll_secs: u64,
+    rest_concurrency: usize,
   ) -> Self {
     Self {
       db,
@@ -244,6 +248,7 @@ impl IngestVisor {
       lifecycle,
       status: Arc::new(IngestStatus::new()),
       poll_secs: poll_secs.max(1),
+      rest_concurrency: rest_concurrency.max(1),
       task: None,
     }
   }
@@ -272,10 +277,11 @@ impl IngestVisor {
     let lifecycle = Arc::clone(&self.lifecycle);
     let status = Arc::clone(&self.status);
     let poll = Duration::from_secs(self.poll_secs);
+    let concurrency = self.rest_concurrency;
     self.task = Some(tokio::spawn(async move {
       info!("ingest loop started");
       while lifecycle.running() {
-        match ingest_once(&db, &ingest, &source, &status, &lifecycle).await {
+        match ingest_once(&db, &ingest, &source, concurrency, &status, &lifecycle).await {
           Ok(()) => status.set_state(STATE_IDLE),
           Err(error) => {
             warn!(%error, "ingest cycle failed");
@@ -304,6 +310,7 @@ async fn ingest_once(
   db: &HyphenDb,
   ingest: &HyDbIngest,
   source: &Arc<dyn RestSource>,
+  concurrency: usize,
   status: &IngestStatus,
   lifecycle: &Lifecycle,
 ) -> Result<(), DaemonError> {
@@ -336,7 +343,16 @@ async fn ingest_once(
       .saturating_add(ABSORB_CHUNK_BLOCKS - 1)
       .min(node_height);
     status.set_state(STATE_FETCHING);
-    let chunk_tip = absorb_chunk(ingest, source, status, lifecycle, height, chunk_end).await?;
+    let chunk_tip = absorb_chunk(
+      ingest,
+      source,
+      concurrency,
+      status,
+      lifecycle,
+      height,
+      chunk_end,
+    )
+    .await?;
     if let Some(tip) = chunk_tip {
       status.set_state(STATE_COMMITTING);
       advance_until_settled(db, ingest, status, tip).await?;
@@ -358,6 +374,7 @@ async fn ingest_once(
 async fn absorb_chunk(
   ingest: &HyDbIngest,
   source: &Arc<dyn RestSource>,
+  concurrency: usize,
   status: &IngestStatus,
   lifecycle: &Lifecycle,
   lo: u32,
@@ -366,7 +383,7 @@ async fn absorb_chunk(
   let mut next = lo;
   let mut chunk_tip: Option<HyDbHash> = None;
   while next <= hi {
-    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(source), next, hi);
+    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(source), concurrency, next, hi);
     let mut discarded = false;
     while let Some(item) = queue.next().await {
       if !lifecycle.running() {

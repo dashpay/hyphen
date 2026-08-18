@@ -232,7 +232,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn admission_blocks_until_the_consumer_releases() {
+  async fn admission_blocks_until_the_consumer_releases() -> Result<(), tokio::task::JoinError> {
     // Budget for exactly the floor: four reservations.
     let g = LeadGauge::new(64, MIN_LEAD_RESERVATIONS * BLOCK_RESERVATION_BYTES);
     let mut held = Vec::new();
@@ -246,7 +246,8 @@ mod tests {
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert!(!fifth.is_finished(), "admission must wait for space");
     held.pop();
-    fifth.await.expect("admitted once space freed");
+    fifth.await?;
+    Ok(())
   }
 
   #[tokio::test]

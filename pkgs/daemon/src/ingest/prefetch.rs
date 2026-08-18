@@ -34,7 +34,7 @@
 use std::sync::Arc;
 
 use hyphen_db::lead::{byte_budget, LeadGauge};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::error::{DaemonError, RestErrorKind};
@@ -61,13 +61,22 @@ pub(crate) struct FetchQueue {
 }
 
 impl FetchQueue {
-  /// Fetch `lo..=hi` ahead of the caller, `prefetch_blocks` deep.
-  pub(crate) fn spawn(source: Arc<dyn RestSource>, lo: u32, hi: u32) -> Self {
+  /// Fetch `lo..=hi` ahead of the caller, `[db.ingest] prefetch_blocks` deep,
+  /// with at most `concurrency` requests outstanding against the node.
+  ///
+  /// Depth and concurrency are separate on purpose. The depth is what hides
+  /// the writer's latency and wants to be large; the concurrency is what the
+  /// node is asked to do at once and does not — `[core] rest_concurrency`
+  /// already exists to say how many REST requests this daemon considers
+  /// polite, and 8 of them at 2.24 ms each is two orders of magnitude more
+  /// fetch capacity than the writer consumes.
+  pub(crate) fn spawn(source: Arc<dyn RestSource>, concurrency: usize, lo: u32, hi: u32) -> Self {
     let prefetch = hyphen_db::tuning::prefetch_blocks().max(1);
     let lead = hyphen_db::tuning::max_lead_blocks().max(1);
     let gauge = LeadGauge::new(lead, byte_budget(lead));
     let (tx, rx) = mpsc::channel::<Slot>(prefetch.min(lead));
     let sched_gauge = Arc::clone(&gauge);
+    let inflight = Arc::new(Semaphore::new(concurrency.max(1)));
 
     let scheduler = tokio::spawn(async move {
       for height in lo..=hi {
@@ -79,8 +88,19 @@ impl FetchQueue {
         slot.send(waiting);
 
         let source = Arc::clone(&source);
+        let inflight = Arc::clone(&inflight);
         tokio::spawn(async move {
           let outcome = async {
+            // Released when the fetch finishes, never waiting on the consumer,
+            // so out-of-order acquisition here cannot stall the ordered
+            // admission above.
+            let _permit = inflight
+              .acquire()
+              .await
+              .map_err(|_| DaemonError::RestSource {
+                message: "prefetch: fetch pool closed".to_owned(),
+                kind: RestErrorKind::Other,
+              })?;
             let hash = source.block_hash(height).await?;
             let raw = source.raw_block(&hash).await?;
             lease.correct_to(raw.len());
@@ -246,7 +266,7 @@ mod tests {
       reverse_latency: true,
       ..FakeRest::new(64)
     });
-    let mut q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 1, 8);
+    let mut q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 8, 1, 8);
     let mut seen = Vec::new();
     while let Some(item) = q.next().await {
       seen.push(item.expect("fetched").height);
@@ -267,7 +287,7 @@ mod tests {
       missing: vec![5],
       ..FakeRest::new(64)
     });
-    let mut q = FetchQueue::spawn(src as Arc<dyn RestSource>, 1, 10);
+    let mut q = FetchQueue::spawn(src as Arc<dyn RestSource>, 8, 1, 10);
     for expected in 1..=4 {
       assert_eq!(q.next().await.unwrap().unwrap().height, expected);
     }
@@ -284,7 +304,7 @@ mod tests {
       reverse_latency: true,
       ..FakeRest::new(100_000)
     });
-    let q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 1, 100_000);
+    let q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 8, 1, 100_000);
     tokio::time::sleep(Duration::from_millis(60)).await;
     drop(q);
     let after_drop = src.fetched.load(Ordering::Relaxed);
@@ -306,7 +326,7 @@ mod tests {
       size: 1024 * 1024,
       ..FakeRest::new(4_000)
     });
-    let mut q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 1, 400);
+    let mut q = FetchQueue::spawn(Arc::clone(&src) as Arc<dyn RestSource>, 8, 1, 400);
     let gauge = Arc::clone(&q.gauge);
     let mut count = 0;
     while let Some(item) = q.next().await {

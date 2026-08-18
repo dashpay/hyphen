@@ -58,7 +58,10 @@ use crate::types::HyDbHash;
 pub(super) struct PrefetchCfg {
   /// `[db.ingest] prefetch_blocks`: slots the scheduler may run ahead by.
   pub prefetch_blocks: usize,
-  /// `[db.ingest] decode_workers`: concurrent decodes.
+  /// `[db.ingest] decode_workers`: how many blocks may be read and decoded at
+  /// once. It caps connection use as well as CPU: the reads run on the write
+  /// pool, and a look-ahead free to open a connection per queued block would
+  /// take the pool the writer needs to begin its next transaction.
   pub decode_workers: usize,
   /// `[db.ingest] max_lead_blocks`: hard bound on read-or-decoded blocks that
   /// the writer has not yet consumed.
@@ -168,7 +171,7 @@ impl DecodeQueue {
     F: Future<Output = HyDbResult<(Arc<dyn HyDbDataSrc>, Vec<u8>)>> + Send + 'static,
   {
     let (tx, rx) = mpsc::channel::<Slot>(cfg.slots());
-    let decoding = Arc::new(Semaphore::new(cfg.workers()));
+    let workers = Arc::new(Semaphore::new(cfg.workers()));
     let expect = segment.first().map(|(_, h)| *h);
     let read = Arc::new(read);
     let sched_gauge = Arc::clone(&gauge);
@@ -187,21 +190,22 @@ impl DecodeQueue {
         let pool = pool.clone();
         let src = Arc::clone(&data_src);
         let read = Arc::clone(&read);
-        let decoding = Arc::clone(&decoding);
+        let workers = Arc::clone(&workers);
         tokio::spawn(async move {
           let outcome = async {
+            // One permit covers the read and the decode. It is released when
+            // the work finishes and never waits on the writer, so workers
+            // taking it out of height order cannot deadlock the ordered
+            // admission above.
+            let _permit = workers
+              .acquire()
+              .await
+              .map_err(|_| HyDbError::Derive("prefetch: worker pool closed".to_owned()))?;
             let (src, raw) = read(pool, src, hash).await?;
             let raw_len = raw.len();
             // The reservation was an over-estimate; hand the surplus back so
             // the queue can run further ahead.
             lease.correct_to(raw_len);
-            // Decode is synchronous CPU work; `decode_workers` caps how much
-            // of it runs at once so the look-ahead cannot swamp the runtime
-            // the writer also needs.
-            let _permit = decoding
-              .acquire()
-              .await
-              .map_err(|_| HyDbError::Derive("prefetch: decode pool closed".to_owned()))?;
             let block = tokio::task::spawn_blocking(move || src.decode(&raw))
               .await
               .map_err(|e| HyDbError::Derive(format!("prefetch: decode task failed: {e}")))??;
@@ -287,7 +291,6 @@ impl Drop for DecodeQueue {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::lead::LEAD_BYTES_PER_BLOCK;
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::time::Duration;
 
@@ -337,8 +340,9 @@ mod tests {
 
   /// A pool value is needed for the real reader's signature but never
   /// connected to in these tests; `PgPool::connect_lazy` does no I/O.
-  fn lazy_pool() -> PgPool {
-    PgPool::connect_lazy("postgresql://postgres@127.0.0.1:5432/postgres").expect("lazy pool")
+  fn lazy_pool() -> HyDbResult<PgPool> {
+    PgPool::connect_lazy("postgresql://postgres@127.0.0.1:5432/postgres")
+      .map_err(|e| HyDbError::pg("test: lazy pool", e))
   }
 
   fn queue_over(
@@ -346,10 +350,10 @@ mod tests {
     cfg: PrefetchCfg,
     src: Arc<dyn HyDbDataSrc>,
     hold: Option<Arc<Semaphore>>,
-  ) -> DecodeQueue {
+  ) -> HyDbResult<DecodeQueue> {
     let gauge = LeadGauge::new(cfg.lead_blocks(), cfg.lead_bytes());
-    DecodeQueue::spawn_with(
-      lazy_pool(),
+    Ok(DecodeQueue::spawn_with(
+      lazy_pool()?,
       src,
       segment,
       cfg,
@@ -365,7 +369,7 @@ mod tests {
           Ok((src, raw_for(i32::from(hash.0[0]))))
         }
       },
-    )
+    ))
   }
 
   fn cfg(prefetch: usize, workers: usize, lead: usize) -> PrefetchCfg {
@@ -376,73 +380,116 @@ mod tests {
     }
   }
 
-  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn concurrent_decode_still_arrives_in_height_order() {
-    let src = Arc::new(SlowSrc {
-      delay_by_tag: true,
+  fn slow_src(delay_by_tag: bool) -> Arc<dyn HyDbDataSrc> {
+    Arc::new(SlowSrc {
+      delay_by_tag,
       decodes: AtomicUsize::new(0),
-    });
-    let mut q = queue_over(segment(1, 8), cfg(8, 8, 8), src, None);
-
-    let mut seen = Vec::new();
-    while let Some(item) = q.next().await {
-      seen.push(item.expect("decoded").height);
-    }
-    assert_eq!(
-      seen,
-      (1..=8).collect::<Vec<_>>(),
-      "eight blocks decoded concurrently, with later heights deliberately \
-       finishing first, must still be delivered 1..=8"
-    );
+    })
   }
 
-  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn the_lead_bound_bounds_blocks_and_bytes() {
-    let src = Arc::new(SlowSrc {
-      delay_by_tag: false,
-      decodes: AtomicUsize::new(0),
-    });
-    // 200 blocks offered, a lead bound of 3. The writer is deliberately slow.
-    let mut q = queue_over(segment(1, 200), cfg(64, 8, 3), src, None);
-    let gauge = Arc::clone(q.gauge());
-
-    let mut count = 0;
+  /// Drain a queue, returning the heights delivered in the order they were
+  /// delivered. Stops at the first failure and returns it.
+  async fn drain(q: &mut DecodeQueue, pause_every: usize) -> HyDbResult<Vec<i32>> {
+    let mut seen = Vec::new();
     while let Some(item) = q.next().await {
-      item.expect("decoded");
-      count += 1;
-      if count % 20 == 0 {
+      seen.push(item?.height);
+      if pause_every > 0 && seen.len() % pause_every == 0 {
         tokio::time::sleep(Duration::from_millis(5)).await;
       }
     }
-    assert_eq!(count, 200);
+    Ok(seen)
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn concurrent_decode_still_arrives_in_height_order() -> HyDbResult<()> {
+    // Later heights are deliberately made to finish first.
+    let mut q = queue_over(segment(1, 8), cfg(8, 8, 8), slow_src(true), None)?;
+    assert_eq!(
+      drain(&mut q, 0).await?,
+      (1..=8).collect::<Vec<_>>(),
+      "eight blocks decoded concurrently, with later heights finishing first, \
+       must still be delivered 1..=8"
+    );
+    Ok(())
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn the_lead_bound_bounds_blocks_and_bytes() -> HyDbResult<()> {
+    // 200 blocks offered, a lead bound of 3, and a writer that dawdles.
+    let sizing = cfg(64, 8, 3);
+    let mut q = queue_over(segment(1, 200), sizing, slow_src(false), None)?;
+    let gauge = Arc::clone(q.gauge());
+
+    assert_eq!(drain(&mut q, 20).await?.len(), 200);
     assert!(
       gauge.peak_blocks() <= 3,
       "look-ahead peaked at {} blocks against a bound of 3",
       gauge.peak_blocks()
     );
     assert!(
-      gauge.peak_bytes() <= cfg(64, 8, 3).lead_bytes(),
+      gauge.peak_bytes() <= sizing.lead_bytes(),
       "look-ahead peaked at {} bytes against a budget of {}",
       gauge.peak_bytes(),
-      cfg(64, 8, 3).lead_bytes()
+      sizing.lead_bytes()
     );
     assert_eq!(
       gauge.in_flight_blocks(),
       0,
       "every lease must be released once the writer has consumed the block"
     );
+    Ok(())
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn a_read_failure_surfaces_at_its_height_instead_of_stalling() {
-    let src: Arc<dyn HyDbDataSrc> = Arc::new(SlowSrc {
-      delay_by_tag: false,
-      decodes: AtomicUsize::new(0),
-    });
-    let gauge = LeadGauge::new(16, 16 * LEAD_BYTES_PER_BLOCK);
+  async fn big_blocks_shorten_the_queue_instead_of_filling_memory() -> HyDbResult<()> {
+    // The count bound is generous; the blocks are not. If only the count were
+    // enforced this queue would be entitled to 512 x 1 MiB resident at once.
+    let sizing = cfg(512, 4, 512);
+    let budget = sizing.lead_bytes();
+    let gauge = LeadGauge::new(sizing.lead_blocks(), budget);
     let mut q = DecodeQueue::spawn_with(
-      lazy_pool(),
-      src,
+      lazy_pool()?,
+      slow_src(false),
+      segment(1, 250),
+      sizing,
+      Arc::clone(&gauge),
+      |_pool, src, hash| async move {
+        let mut raw = vec![0u8; 1024 * 1024];
+        raw[0] = hash.0[0];
+        raw[32] = hash.0[0].saturating_sub(1);
+        Ok((src, raw))
+      },
+    );
+
+    assert_eq!(drain(&mut q, 25).await?.len(), 250);
+    assert!(
+      gauge.peak_bytes() <= budget,
+      "charged {} bytes against a budget of {budget}",
+      gauge.peak_bytes()
+    );
+    // The point of the byte bound: it, not the count, is what stopped the
+    // queue. A count-only bound would have allowed all 512.
+    assert!(
+      gauge.peak_blocks() < sizing.lead_blocks(),
+      "the byte budget should have bound before the count bound of {}, but the \
+       queue reached {} blocks",
+      sizing.lead_blocks(),
+      gauge.peak_blocks()
+    );
+    assert!(
+      gauge.peak_blocks() * 1024 * 1024 <= budget,
+      "{} blocks of 1 MiB exceeds the {budget}-byte budget",
+      gauge.peak_blocks()
+    );
+    Ok(())
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn a_read_failure_surfaces_at_its_height_instead_of_stalling() -> HyDbResult<()> {
+    let gauge = LeadGauge::new(16, byte_budget(16));
+    let mut q = DecodeQueue::spawn_with(
+      lazy_pool()?,
+      slow_src(false),
       segment(1, 6),
       cfg(6, 4, 16),
       gauge,
@@ -454,79 +501,39 @@ mod tests {
       },
     );
 
-    assert_eq!(q.next().await.unwrap().unwrap().height, 1);
-    assert_eq!(q.next().await.unwrap().unwrap().height, 2);
-    assert_eq!(q.next().await.unwrap().unwrap().height, 3);
-    let err = q.next().await.unwrap().expect_err("height 4 must fail");
-    assert!(
-      err.to_string().contains("ser_blocks read refused"),
-      "the failure must name itself, not degrade into a stall: {err}"
-    );
-  }
-
-  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn big_blocks_shorten_the_queue_instead_of_filling_memory() {
-    // The count bound is generous; the blocks are not. If only the count were
-    // enforced this queue would be entitled to 512 x 1 MiB in memory at once.
-    let cfg = cfg(512, 4, 512);
-    let budget = cfg.lead_bytes();
-    let src: Arc<dyn HyDbDataSrc> = Arc::new(SlowSrc {
-      delay_by_tag: false,
-      decodes: AtomicUsize::new(0),
-    });
-    let gauge = LeadGauge::new(cfg.lead_blocks(), budget);
-    let mut q = DecodeQueue::spawn_with(
-      lazy_pool(),
-      src,
-      segment(1, 250),
-      cfg,
-      Arc::clone(&gauge),
-      |_pool, src, hash| async move {
-        let mut raw = vec![0u8; 1024 * 1024];
-        raw[0] = hash.0[0];
-        raw[32] = hash.0[0].saturating_sub(1);
-        Ok((src, raw))
-      },
-    );
-
-    let mut count = 0;
+    let mut delivered = Vec::new();
+    let mut failure = None;
     while let Some(item) = q.next().await {
-      item.expect("decoded");
-      count += 1;
-      if count % 25 == 0 {
-        tokio::time::sleep(Duration::from_millis(5)).await;
+      match item {
+        Ok(block) => delivered.push(block.height),
+        Err(e) => {
+          failure = Some(e);
+          break;
+        }
       }
     }
-    assert_eq!(count, 250, "every block must still be delivered");
-    assert!(
-      gauge.peak_bytes() <= budget,
-      "charged {} bytes against a budget of {budget}",
-      gauge.peak_bytes()
+    assert_eq!(
+      delivered,
+      vec![1, 2, 3],
+      "everything below the failure must still be delivered, in order"
     );
-    // The point of the byte bound: it, not the count, is what stopped the
-    // queue. A count-only bound would have allowed all 512.
+    let failure = failure.ok_or_else(|| HyDbError::Derive("height 4 must fail".to_owned()))?;
     assert!(
-      gauge.peak_blocks() < cfg.lead_blocks(),
-      "the byte budget should have bound before the count bound of {}, but \
-       the queue reached {} blocks",
-      cfg.lead_blocks(),
-      gauge.peak_blocks()
+      failure.to_string().contains("ser_blocks read refused"),
+      "the failure must name itself rather than degrade into a stall: {failure}"
     );
-    assert!(
-      gauge.peak_blocks() as u64 * 1024 * 1024 <= budget as u64,
-      "{} blocks of 1 MiB exceeds the {budget}-byte budget",
-      gauge.peak_blocks()
-    );
+    Ok(())
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn discarding_the_queue_releases_every_lease() {
-    let src = Arc::new(SlowSrc {
-      delay_by_tag: false,
-      decodes: AtomicUsize::new(0),
-    });
+  async fn discarding_the_queue_releases_every_lease() -> HyDbResult<()> {
     let hold = Arc::new(Semaphore::new(0));
-    let q = queue_over(segment(1, 64), cfg(16, 4, 16), src, Some(Arc::clone(&hold)));
+    let q = queue_over(
+      segment(1, 64),
+      cfg(16, 4, 16),
+      slow_src(false),
+      Some(Arc::clone(&hold)),
+    )?;
     let gauge = Arc::clone(q.gauge());
     // Let the scheduler fill its admission window against blocked reads.
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -535,24 +542,24 @@ mod tests {
     drop(q);
     hold.close();
     // The abandoned workers release their leases as they unwind.
+    let mut charged = gauge.in_flight_blocks();
     for _ in 0..200 {
-      if gauge.in_flight_blocks() == 0 {
-        return;
+      if charged == 0 {
+        break;
       }
       tokio::time::sleep(Duration::from_millis(5)).await;
+      charged = gauge.in_flight_blocks();
     }
-    panic!(
-      "discarding the queue left {} blocks charged",
-      gauge.in_flight_blocks()
-    );
+    assert_eq!(charged, 0, "discarding the queue left blocks charged");
+    Ok(())
   }
 
   #[tokio::test]
-  async fn an_out_of_order_delivery_is_refused_by_name() {
+  async fn an_out_of_order_delivery_is_refused_by_name() -> HyDbResult<()> {
     // The slot channel makes this unreachable in the real queue, so the guard
     // is exercised directly: it is the backstop that turns a future ordering
     // bug into a refusal rather than a misapplied chain.
-    let gauge = LeadGauge::new(4, 4 * LEAD_BYTES_PER_BLOCK);
+    let gauge = LeadGauge::new(4, byte_budget(4));
     let (_tx, rx) = mpsc::channel::<Slot>(1);
     let mut q = DecodeQueue {
       rx,
@@ -560,16 +567,18 @@ mod tests {
       gauge: Arc::clone(&gauge),
       expect: Some(100),
     };
-    let lease = gauge.admit().await;
     let out_of_turn = Prefetched {
       height: 101,
       raw_len: 0,
-      block: crate::tests::mock::MockDataSrc
-        .decode(&raw_for(101))
-        .expect("mock decode"),
-      _lease: lease,
+      block: crate::tests::mock::MockDataSrc.decode(&raw_for(101))?,
+      _lease: gauge.admit().await,
     };
-    let err = q.check_order(out_of_turn).expect_err("101 is not 100");
+    let refused = q.check_order(out_of_turn);
+    let err = match refused {
+      Ok(_) => return Err(HyDbError::Derive("101 was accepted for 100".to_owned())),
+      Err(e) => e,
+    };
     assert!(err.to_string().contains("out of order"), "{err}");
+    Ok(())
   }
 }
