@@ -211,7 +211,26 @@ CREATE TABLE address_stats (
   utxo_count         INTEGER NOT NULL DEFAULT 0,
   first_seen_height  INTEGER,
   last_seen_height   INTEGER
-);
+) WITH (fillfactor = 80);
+-- The fillfactor is the other half of the no-balance-index decision below:
+-- dropping the index makes a HOT update legal, but HOT also needs free space
+-- on the tuple's own page, and a page packed to fillfactor 100 has none until
+-- a VACUUM has been through. Swept against a replay of real mainnet heights
+-- 860,000-869,999 (1,320,908 address updates over 10,000 blocks) on the full
+-- 18.9M-row table, measuring the cold pass over a freshly packed table and
+-- the steady-state pass after it:
+--
+--   ff   heap    cold HOT / WAL     steady HOT / WAL
+--   100  1826MB   0.41% / 2296MB    45.47% / 338MB
+--    90  2026MB  29.24% / 1875MB    55.59% / 305MB
+--    80  2276MB  48.82% /  330MB    61.48% / 275MB
+--    70  2595MB  63.53% /  272MB    66.67% / 256MB
+--
+-- 80 is the knee. It takes the cold pass from 0.41% to 48.82% HOT and its WAL
+-- from 2296 MB to 330 MB, which is what an initial sync sees since nothing has
+-- been vacuumed yet; 70 buys a further 5.2 points of steady-state HOT for
+-- another 14% of table size (+319 MB here, and this table is 3 GB on mainnet),
+-- which is not worth it. The +25% over fillfactor 100 is the price paid.
 -- NOTE: no balance-ordered index lives here, deliberately. A HOT update
 -- requires that no indexed column change, and `balance` changes on almost
 -- every update of this table, so any index over it makes HOT impossible by
@@ -240,6 +259,10 @@ CREATE TABLE address_rich (
   balance  BIGINT NOT NULL
 );
 CREATE INDEX idx_address_rich_rank ON address_rich (balance DESC, address ASC);
+-- No fillfactor here, unlike `address_stats`: the rank index covers `balance`
+-- and every update of this table changes it, so no update can ever be HOT and
+-- same-page free space would buy nothing. The volume is a rounding error
+-- besides — only addresses at or above the rich-list floor are written.
 
 -- The number of addresses with a positive balance, maintained in the block
 -- transaction by the same stage that writes `address_stats`, from the same
@@ -259,6 +282,11 @@ CREATE INDEX idx_address_rich_rank ON address_rich (balance DESC, address ASC);
 -- Folding it into `supply_summary` would put two stages on the same row in the
 -- same block transaction and would make the stats stage's undo capture depend
 -- on the balance stage having already run.
+-- The three singleton summary tables below take no fillfactor either. A
+-- one-row table's page is empty regardless of fillfactor, which applies to
+-- inserts and not to the free space a HOT update looks for: measured 200,000
+-- updates of a singleton at 99.46% HOT, and fillfactor 90 returned the same
+-- 99.46%. They are already HOT-updating as well as they can.
 CREATE TABLE address_summary (
   singleton              BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
   positive_balance_count BIGINT  NOT NULL DEFAULT 0 CHECK (positive_balance_count >= 0)
