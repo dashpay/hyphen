@@ -14,16 +14,6 @@ use crate::error::DaemonError;
 use crate::rest::DEFAULT_API_BIND;
 use hyphen_db::DEFAULT_POSTGRES_URL;
 
-// Batch-tuning defaults. The legacy forward-index batch pipeline that owned
-// these is gone; the values are retained so existing config files keep parsing.
-pub const DEFAULT_COMMIT_BATCH_BLOCKS: u32 = 2000;
-pub const DEFAULT_INGESTION_BATCH_SIZE: u32 = 100;
-pub const DEFAULT_MAX_BATCH_SIZE: u32 = 50_000;
-pub const DEFAULT_MIN_BATCH_SIZE: u32 = 100;
-pub const DEFAULT_PREFETCH_BLOCKS: u32 = 64;
-pub const DEFAULT_TARGET_BATCH_MS: u64 = 1_000;
-pub const DEFAULT_MAX_INGEST_LEAD_BLOCKS: u32 = 10_000;
-
 // Postgres pool-tuning defaults, retained on `PostgresConfig` for config-file
 // compatibility. The storage engine now owns pool sizing via `HyDbConfig`.
 pub const DEFAULT_ADMIN_POOL_SIZE: usize = 4;
@@ -41,19 +31,8 @@ pub struct Config {
   pub postgres: PostgresConfig,
   pub api: Option<ApiConfig>,
   pub indices: Option<IndicesConfig>,
-  /// Deprecated: the RocksDB-era batching knobs. Parsed for config-file
-  /// compatibility, has no effect — the storage engine owns its batching.
-  pub performance: Option<PerformanceConfig>,
   pub live: Option<LiveConfig>,
   pub overlays: Option<OverlaysConfig>,
-  /// Deprecated: the RocksDB-era read caches. Parsed for config-file
-  /// compatibility, has no effect.
-  pub cache: Option<CacheConfig>,
-  /// Deprecated: the removed RocksDB store's tuning section. Accepted (and
-  /// ignored) so an existing `hyphen.conf` carrying `[rocksdb]` still boots
-  /// under `deny_unknown_fields`; a warning is logged when present.
-  #[serde(default, skip_serializing)]
-  pub rocksdb: Option<toml::Value>,
   #[serde(default)]
   pub chain: ChainConfig,
 }
@@ -257,11 +236,6 @@ pub const DEFAULT_BLOCK_TIME_SECS: f64 = 150.0;
 pub const DEFAULT_P2PKH_VERSION: u8 = 0x4c;
 pub const DEFAULT_P2SH_VERSION: u8 = 0x10;
 
-pub const DEFAULT_ADDRESS_CACHE_BUDGET: &str = "256M";
-pub const DEFAULT_READINESS_CACHE_BUDGET: &str = "16K";
-pub const DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD: i32 = 10_000;
-pub const DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG: i32 = 10_000;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -318,33 +292,6 @@ pub struct IndicesConfig {
   pub metrics: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct PerformanceConfig {
-  pub ingestion_batch_size: u32,
-  pub max_ingestion_lead_blocks: u32,
-  pub prefetch_blocks: u32,
-  pub commit_batch_blocks: u32,
-  pub min_batch_size: u32,
-  pub max_batch_size: u32,
-  pub target_batch_ms: u64,
-}
-
-impl Default for PerformanceConfig {
-  fn default() -> Self {
-    Self {
-      ingestion_batch_size: DEFAULT_INGESTION_BATCH_SIZE,
-      max_ingestion_lead_blocks: DEFAULT_MAX_INGEST_LEAD_BLOCKS,
-      prefetch_blocks: DEFAULT_PREFETCH_BLOCKS,
-      commit_batch_blocks: DEFAULT_COMMIT_BATCH_BLOCKS,
-      min_batch_size: DEFAULT_MIN_BATCH_SIZE,
-      max_batch_size: DEFAULT_MAX_BATCH_SIZE,
-      target_batch_ms: DEFAULT_TARGET_BATCH_MS,
-    }
-  }
-}
-
 /// Optional live capability and cache settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -390,109 +337,6 @@ impl Default for LiveConfig {
 pub struct OverlaysConfig {
   pub enable_protx: bool,
   pub enable_chainlock: bool,
-}
-
-/// Optional read-cache settings for query-heavy API paths.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct CacheConfig {
-  pub enabled: bool,
-  pub address: AddressCacheConfig,
-  pub readiness: ReadinessCacheConfig,
-}
-
-/// Cache settings for address summary and address transaction queries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct AddressCacheConfig {
-  pub enabled: bool,
-  pub budget: String,
-  pub hot_threshold: i32,
-  pub summary_catchup_lag: i32,
-}
-
-impl Default for AddressCacheConfig {
-  fn default() -> Self {
-    Self {
-      enabled: true,
-      budget: DEFAULT_ADDRESS_CACHE_BUDGET.to_owned(),
-      hot_threshold: DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-      summary_catchup_lag: DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG,
-    }
-  }
-}
-
-/// Cache settings for shared `sync_state` readiness lookups.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct ReadinessCacheConfig {
-  pub enabled: bool,
-  pub budget: String,
-}
-
-impl Default for ReadinessCacheConfig {
-  fn default() -> Self {
-    Self {
-      enabled: true,
-      budget: DEFAULT_READINESS_CACHE_BUDGET.to_owned(),
-    }
-  }
-}
-
-/// Parse a Postgres-style memory budget such as `256M` or `1GB`.
-///
-/// # Errors
-///
-/// Returns `DaemonError::Config` when the string is empty, uses an
-/// unsupported unit, contains a non-integer quantity, or resolves to zero.
-pub fn parse_memory_budget(raw: &str) -> Result<usize, DaemonError> {
-  let trimmed = raw.trim();
-  if trimmed.is_empty() {
-    return Err(DaemonError::Config(
-      "memory budget cannot be empty".to_owned(),
-    ));
-  }
-
-  let digits_end = trimmed
-    .find(|ch: char| !ch.is_ascii_digit())
-    .unwrap_or(trimmed.len());
-  if digits_end == 0 || digits_end == trimmed.len() {
-    return Err(DaemonError::Config(format!(
-      "memory budget must use an integer with unit suffix: {trimmed}"
-    )));
-  }
-
-  let amount: u128 = trimmed[..digits_end]
-    .parse()
-    .map_err(|_| DaemonError::Config(format!("invalid memory budget amount: {trimmed}")))?;
-  let unit = trimmed[digits_end..].trim().to_ascii_lowercase();
-  let multiplier: u128 = match unit.as_str() {
-    "k" | "kb" => 1024,
-    "m" | "mb" => 1024_u128.pow(2),
-    "g" | "gb" => 1024_u128.pow(3),
-    "t" | "tb" => 1024_u128.pow(4),
-    _ => {
-      return Err(DaemonError::Config(format!(
-        "unsupported memory budget unit: {trimmed}"
-      )));
-    }
-  };
-  let bytes = amount
-    .checked_mul(multiplier)
-    .ok_or_else(|| DaemonError::Config(format!("memory budget is too large: {trimmed}")))?;
-  if bytes == 0 {
-    return Err(DaemonError::Config(
-      "memory budget must be greater than zero".to_owned(),
-    ));
-  }
-  usize::try_from(bytes).map_err(|_| {
-    DaemonError::Config(format!(
-      "memory budget exceeds platform usize range: {trimmed}"
-    ))
-  })
 }
 
 impl Config {
@@ -554,26 +398,6 @@ impl Config {
         "chainlock live/overlay requires live.chainlock_start_block".to_owned(),
       ));
     }
-    if let Some(cache) = &self.cache {
-      if cache.enabled {
-        if cache.address.enabled {
-          let _ = parse_memory_budget(&cache.address.budget)?;
-          if cache.address.hot_threshold < 1 {
-            return Err(DaemonError::Config(
-              "cache.address.hot_threshold must be at least 1".to_owned(),
-            ));
-          }
-          if cache.address.summary_catchup_lag < 0 {
-            return Err(DaemonError::Config(
-              "cache.address.summary_catchup_lag must be at least 0".to_owned(),
-            ));
-          }
-        }
-        if cache.readiness.enabled {
-          let _ = parse_memory_budget(&cache.readiness.budget)?;
-        }
-      }
-    }
     Ok(())
   }
 }
@@ -583,8 +407,7 @@ mod tests {
   use std::path::PathBuf;
 
   use super::{
-    parse_memory_budget, CacheConfig, Config, CoreConfig, LiveConfig, ResolvedRpcAuth, RpcAuth,
-    RpcConfig, ZmqConfig, ZmqTopic,
+    Config, CoreConfig, LiveConfig, ResolvedRpcAuth, RpcAuth, RpcConfig, ZmqConfig, ZmqTopic,
   };
 
   #[test]
@@ -723,66 +546,5 @@ mod tests {
     };
 
     assert!(cfg.validate().is_ok());
-  }
-
-  #[test]
-  fn parse_memory_budget_accepts_postgres_style_units() {
-    assert_eq!(
-      parse_memory_budget("256M").expect("budget"),
-      256 * 1024 * 1024
-    );
-    assert_eq!(
-      parse_memory_budget("1GB").expect("budget"),
-      1024 * 1024 * 1024
-    );
-    assert_eq!(parse_memory_budget("16kB").expect("budget"), 16 * 1024);
-  }
-
-  #[test]
-  fn parse_memory_budget_rejects_missing_or_invalid_units() {
-    for raw in ["", "256", "1.5G", "10P", "0M"] {
-      assert!(parse_memory_budget(raw).is_err(), "{raw} should fail");
-    }
-  }
-
-  #[test]
-  fn config_validates_enabled_cache_budgets() {
-    let cfg = Config {
-      cache: Some(CacheConfig {
-        enabled: true,
-        address: super::AddressCacheConfig {
-          enabled: true,
-          budget: "64M".to_owned(),
-          hot_threshold: super::DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-          summary_catchup_lag: super::DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG,
-        },
-        readiness: super::ReadinessCacheConfig {
-          enabled: true,
-          budget: "16K".to_owned(),
-        },
-      }),
-      ..Config::default()
-    };
-
-    assert!(cfg.validate().is_ok());
-  }
-
-  #[test]
-  fn config_rejects_invalid_enabled_cache_budget() {
-    let cfg = Config {
-      cache: Some(CacheConfig {
-        enabled: true,
-        address: super::AddressCacheConfig {
-          enabled: true,
-          budget: "abc".to_owned(),
-          hot_threshold: super::DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-          summary_catchup_lag: super::DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG,
-        },
-        readiness: super::ReadinessCacheConfig::default(),
-      }),
-      ..Config::default()
-    };
-
-    assert!(cfg.validate().is_err());
   }
 }

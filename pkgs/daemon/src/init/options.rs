@@ -7,9 +7,8 @@
 //! Derived runtime options resolved from CLI args and config.
 
 use crate::config::{
-  self, ApiConfig, Config, DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-  DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG, DEFAULT_CHAINLOCK_REFRESH_SECS,
-  DEFAULT_GOVERNANCE_REFRESH_SECS, DEFAULT_NETWORK_REFRESH_SECS, DEFAULT_PROTX_REFRESH_SECS,
+  self, ApiConfig, Config, DEFAULT_CHAINLOCK_REFRESH_SECS, DEFAULT_GOVERNANCE_REFRESH_SECS,
+  DEFAULT_NETWORK_REFRESH_SECS, DEFAULT_PROTX_REFRESH_SECS,
 };
 use crate::error::DaemonError;
 use crate::init::args::Args;
@@ -48,19 +47,6 @@ pub struct OverlayOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheOptions {
-  pub enabled: bool,
-  pub address_enabled: bool,
-  pub address_budget: String,
-  pub address_budget_bytes: usize,
-  pub address_hot_cache_threshold: i32,
-  pub address_summary_catchup_lag: i32,
-  pub readiness_enabled: bool,
-  pub readiness_budget: String,
-  pub readiness_budget_bytes: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiOptions {
   pub enabled: bool,
   pub bind: Option<String>,
@@ -73,7 +59,6 @@ pub struct Options {
   pub indices: IndexOptions,
   pub live: LiveOptions,
   pub overlays: OverlayOptions,
-  pub cache: CacheOptions,
   pub api: ApiOptions,
   pub recent_mempool_txs: usize,
   pub stream_client_buffer: usize,
@@ -100,7 +85,6 @@ impl Options {
 
     let live_cfg = cfg.live.clone().unwrap_or_default();
     let overlay_cfg = cfg.overlays.clone().unwrap_or_default();
-    let cache_cfg = cfg.cache.clone().unwrap_or_default();
     if startup_mode != StartupMode::DocsOnly {
       let rpc_enabled = cfg.core.rpc.as_ref().is_some_and(|rpc| rpc.enabled);
       let zmq_enabled = cfg.core.zmq.as_ref().is_some_and(|zmq| zmq.enabled);
@@ -153,25 +137,6 @@ impl Options {
       }
     }
 
-    // The [cache] section is inert (the storage engine owns caching); a bad
-    // budget value must not refuse boot over a knob that affects nothing.
-    let address_budget_bytes = if cache_cfg.enabled && cache_cfg.address.enabled {
-      config::parse_memory_budget(&cache_cfg.address.budget).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "ignoring invalid [cache].address.budget (section is inert)");
-        0
-      })
-    } else {
-      1
-    };
-    let readiness_budget_bytes = if cache_cfg.enabled && cache_cfg.readiness.enabled {
-      config::parse_memory_budget(&cache_cfg.readiness.budget).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "ignoring invalid [cache].readiness.budget (section is inert)");
-        0
-      })
-    } else {
-      1
-    };
-
     Ok(Self {
       startup_mode,
       indices: IndexOptions {
@@ -190,25 +155,6 @@ impl Options {
       overlays: OverlayOptions {
         protx: overlay_cfg.enable_protx,
         chainlock: overlay_cfg.enable_chainlock,
-      },
-      cache: CacheOptions {
-        enabled: cache_cfg.enabled,
-        address_enabled: cache_cfg.enabled && cache_cfg.address.enabled,
-        address_budget: cache_cfg.address.budget,
-        address_budget_bytes,
-        address_hot_cache_threshold: if cache_cfg.enabled {
-          cache_cfg.address.hot_threshold
-        } else {
-          DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD
-        },
-        address_summary_catchup_lag: if cache_cfg.enabled {
-          cache_cfg.address.summary_catchup_lag
-        } else {
-          DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG
-        },
-        readiness_enabled: cache_cfg.enabled && cache_cfg.readiness.enabled,
-        readiness_budget: cache_cfg.readiness.budget,
-        readiness_budget_bytes,
       },
       api: ApiOptions {
         enabled: cfg.api.is_some(),

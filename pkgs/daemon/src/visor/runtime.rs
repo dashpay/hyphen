@@ -308,7 +308,7 @@ impl ServeRuntime {
 mod tests {
   use super::{runtime_options_with_available_sources, SourceAvailability};
   use crate::init::options::{
-    ApiOptions, CacheOptions, IndexOptions, LiveOptions, Options, OverlayOptions, StartupMode,
+    ApiOptions, IndexOptions, LiveOptions, Options, OverlayOptions, StartupMode,
   };
 
   fn test_options() -> Options {
@@ -330,17 +330,6 @@ mod tests {
       overlays: OverlayOptions {
         protx: true,
         chainlock: true,
-      },
-      cache: CacheOptions {
-        enabled: false,
-        address_enabled: false,
-        address_budget: "1MiB".to_owned(),
-        address_budget_bytes: 1,
-        address_hot_cache_threshold: 0,
-        address_summary_catchup_lag: 0,
-        readiness_enabled: false,
-        readiness_budget: "1MiB".to_owned(),
-        readiness_budget_bytes: 1,
       },
       api: ApiOptions {
         enabled: true,

@@ -25,10 +25,11 @@ mod tests {
   ];
 
   // Crate-level references to the retired storage backends. The daemon owns no
-  // SQL or RocksDB storage anymore — all chain data lives behind `hyphen-db` —
-  // so these crates must not reappear in daemon source. The pattern strings are
-  // assembled with `concat!` so this guard file does not itself contain the
-  // literal crate names (keeping repo-wide substring greps clean).
+  // storage of its own anymore: all chain data lives behind `hyphen-db`, so
+  // neither a direct SQL driver nor an embedded key-value store may reappear in
+  // daemon source. The pattern strings are assembled with `concat!` so this
+  // guard file does not itself contain the literal crate names (keeping
+  // repo-wide substring greps clean).
   const RETIRED_STORAGE_PATTERNS: &[&str] = &[
     concat!("use sq", "lx"),
     concat!("sq", "lx::"),
@@ -78,7 +79,7 @@ mod tests {
 
     assert!(
       offenders.is_empty(),
-      "the retired SQL and RocksDB backends are gone; all storage must go through hyphen-db: {}",
+      "the retired storage backends are gone; all chain storage must go through hyphen-db, with no direct SQL-driver or embedded key-value store usage in the daemon: {}",
       offenders.join(", ")
     );
   }

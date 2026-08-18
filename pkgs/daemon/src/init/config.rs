@@ -34,12 +34,6 @@ pub fn load_config(datadir: &Path) -> Result<Config, DaemonError> {
     source: e,
   })?;
   let cfg: Config = toml::from_str(&text).map_err(|e| DaemonError::Config(e.to_string()))?;
-  if cfg.rocksdb.is_some() {
-    tracing::warn!(
-      "hyphen.conf contains a [rocksdb] section; RocksDB was removed and the \
-       section is ignored — chain storage is PostgreSQL-only"
-    );
-  }
   cfg.validate()?;
   tracing::info!(path = %path.display(), "hyphen.conf loaded");
   Ok(cfg)
