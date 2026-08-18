@@ -26,6 +26,7 @@ mod api_metrics;
 mod architecture;
 #[cfg(feature = "daemon")]
 mod config;
+mod config_guard;
 #[cfg(feature = "daemon")]
 pub(crate) mod consensus;
 #[cfg(feature = "daemon")]
