@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE validators SET status = 'revoked', last_updated_height = $2\n         WHERE protx_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4cd51b61057352e07fe3187753b8cab031cf4d5d8d551aae2ef9e33f5314d71f"
+}

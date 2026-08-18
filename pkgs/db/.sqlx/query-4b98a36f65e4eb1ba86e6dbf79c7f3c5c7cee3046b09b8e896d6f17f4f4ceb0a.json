@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT display_hex(txid) AS \"hex!\" FROM transactions\n          WHERE display_hex(txid) LIKE $1 ESCAPE '\\'\n          ORDER BY block_height DESC, block_pos DESC, txid ASC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hex!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4b98a36f65e4eb1ba86e6dbf79c7f3c5c7cee3046b09b8e896d6f17f4f4ceb0a"
+}

@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tx_outputs\n             (block_height, txid, vout_index, value, script_pubkey, address, address_type)\n           SELECT $1, t.txid, t.vout_index, t.value, t.script_pubkey, t.address, t.address_type\n             FROM UNNEST($2::bytea[], $3::int4[], $4::int8[], $5::bytea[], $6::text[],\n                         $7::address_type[])\n               AS t(txid, vout_index, value, script_pubkey, address, address_type)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "ByteaArray",
+        "Int4Array",
+        "Int8Array",
+        "ByteaArray",
+        "TextArray",
+        {
+          "Custom": {
+            "name": "address_type[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "address_type",
+                  "kind": {
+                    "Enum": [
+                      "p2pkh",
+                      "p2sh",
+                      "p2pk",
+                      "unknown"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2dfc99ea874415fe632f6617e82328be1bf86d4a5e7c877844535391f440b04b"
+}

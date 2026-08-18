@@ -1,0 +1,49 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO transactions\n           (txid, block_height, block_pos, version, tx_type, lock_time, size, value_out,\n            input_count, output_count, fee)\n         SELECT t.txid, $1, t.block_pos, t.version, t.tx_type, t.lock_time, t.size, t.value_out,\n                t.input_count, t.output_count, t.fee\n           FROM UNNEST($2::bytea[], $3::int4[], $4::int4[], $5::tx_type[], $6::int8[],\n                       $7::int4[], $8::int8[], $9::int4[], $10::int4[], $11::int8[])\n             AS t(txid, block_pos, version, tx_type, lock_time, size, value_out,\n                  input_count, output_count, fee)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "ByteaArray",
+        "Int4Array",
+        "Int4Array",
+        {
+          "Custom": {
+            "name": "tx_type[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "tx_type",
+                  "kind": {
+                    "Enum": [
+                      "normal",
+                      "provider_register",
+                      "provider_update_service",
+                      "provider_update_registrar",
+                      "provider_update_revoke",
+                      "coinbase",
+                      "quorum_commitment",
+                      "asset_lock",
+                      "asset_unlock",
+                      "mnhf"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Int8Array",
+        "Int4Array",
+        "Int8Array",
+        "Int4Array",
+        "Int4Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b4a8dbf0b1712e7d30f937aba379dff7007f9cb647663e8eca5cf4c94fa896c"
+}

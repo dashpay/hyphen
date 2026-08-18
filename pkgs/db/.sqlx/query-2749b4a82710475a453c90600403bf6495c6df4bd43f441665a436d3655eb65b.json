@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO utxo_set (outpoint, address, value, block_height, script_pubkey)\n         SELECT o.outpoint, o.address, o.value, o.block_height, o.script_pubkey\n           FROM spends s JOIN tx_outputs o ON o.outpoint = s.outpoint\n          WHERE s.spend_height = $1\n         ON CONFLICT (outpoint) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2749b4a82710475a453c90600403bf6495c6df4bd43f441665a436d3655eb65b"
+}

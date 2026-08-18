@@ -10,20 +10,27 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::{
-  DEFAULT_MAX_BACKGROUND_JOBS, DEFAULT_MAX_OPEN_FILES, DEFAULT_WRITE_BUFFER_SIZE_MB,
-};
 use crate::error::DaemonError;
-use crate::index::batch::{
-  DEFAULT_COMMIT_BATCH_BLOCKS, DEFAULT_INGESTION_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
-  DEFAULT_MIN_BATCH_SIZE, DEFAULT_PREFETCH_BLOCKS, DEFAULT_TARGET_BATCH_MS,
-};
-use crate::ingest::DEFAULT_MAX_INGEST_LEAD_BLOCKS;
 use crate::rest::DEFAULT_API_BIND;
-use crate::sql::{
-  DEFAULT_ADMIN_POOL_SIZE, DEFAULT_HEAVY_QUERY_POOL_SIZE, DEFAULT_POSTGRES_URL,
-  DEFAULT_QUERY_POOL_SIZE, DEFAULT_SLOW_QUERY_MS, DEFAULT_WRITE_POOL_SIZE,
-};
+use hyphen_db::DEFAULT_POSTGRES_URL;
+
+// Batch-tuning defaults. The legacy forward-index batch pipeline that owned
+// these is gone; the values are retained so existing config files keep parsing.
+pub const DEFAULT_COMMIT_BATCH_BLOCKS: u32 = 2000;
+pub const DEFAULT_INGESTION_BATCH_SIZE: u32 = 100;
+pub const DEFAULT_MAX_BATCH_SIZE: u32 = 50_000;
+pub const DEFAULT_MIN_BATCH_SIZE: u32 = 100;
+pub const DEFAULT_PREFETCH_BLOCKS: u32 = 64;
+pub const DEFAULT_TARGET_BATCH_MS: u64 = 1_000;
+pub const DEFAULT_MAX_INGEST_LEAD_BLOCKS: u32 = 10_000;
+
+// Postgres pool-tuning defaults, retained on `PostgresConfig` for config-file
+// compatibility. The storage engine now owns pool sizing via `HyDbConfig`.
+pub const DEFAULT_ADMIN_POOL_SIZE: usize = 4;
+pub const DEFAULT_HEAVY_QUERY_POOL_SIZE: usize = 4;
+pub const DEFAULT_QUERY_POOL_SIZE: usize = 8;
+pub const DEFAULT_SLOW_QUERY_MS: u64 = 500;
+pub const DEFAULT_WRITE_POOL_SIZE: usize = 20;
 
 /// Top-level daemon configuration loaded from `hyphen.conf`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -34,11 +41,19 @@ pub struct Config {
   pub postgres: PostgresConfig,
   pub api: Option<ApiConfig>,
   pub indices: Option<IndicesConfig>,
-  pub rocksdb: Option<RocksdbConfig>,
+  /// Deprecated: the RocksDB-era batching knobs. Parsed for config-file
+  /// compatibility, has no effect — the storage engine owns its batching.
   pub performance: Option<PerformanceConfig>,
   pub live: Option<LiveConfig>,
   pub overlays: Option<OverlaysConfig>,
+  /// Deprecated: the RocksDB-era read caches. Parsed for config-file
+  /// compatibility, has no effect.
   pub cache: Option<CacheConfig>,
+  /// Deprecated: the removed RocksDB store's tuning section. Accepted (and
+  /// ignored) so an existing `hyphen.conf` carrying `[rocksdb]` still boots
+  /// under `deny_unknown_fields`; a warning is logged when present.
+  #[serde(default, skip_serializing)]
+  pub rocksdb: Option<toml::Value>,
   #[serde(default)]
   pub chain: ChainConfig,
 }
@@ -301,25 +316,6 @@ pub struct IndicesConfig {
   pub validator: bool,
   #[serde(default)]
   pub metrics: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct RocksdbConfig {
-  pub write_buffer_size_mb: usize,
-  pub max_background_jobs: i32,
-  pub max_open_files: i32,
-}
-
-impl Default for RocksdbConfig {
-  fn default() -> Self {
-    Self {
-      write_buffer_size_mb: DEFAULT_WRITE_BUFFER_SIZE_MB,
-      max_background_jobs: DEFAULT_MAX_BACKGROUND_JOBS,
-      max_open_files: DEFAULT_MAX_OPEN_FILES,
-    }
-  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -12,22 +12,16 @@ use crate::config::{
   DEFAULT_GOVERNANCE_REFRESH_SECS, DEFAULT_NETWORK_REFRESH_SECS, DEFAULT_PROTX_REFRESH_SECS,
 };
 use crate::error::DaemonError;
-use crate::init::args::{Args, IndexTarget, StoreTarget as StoreTargetArg};
+use crate::init::args::Args;
 use hyphend::wire::msg::{
-  ConfigApiSnapshot, ConfigCacheSnapshot, ConfigIndexSnapshot, ConfigLiveSnapshot,
-  ConfigOverlaySnapshot, ConfigPerformanceSnapshot, ConfigSnapshot, ConfigSourcesSnapshot,
+  ConfigApiSnapshot, ConfigIndexSnapshot, ConfigLiveSnapshot, ConfigOverlaySnapshot,
+  ConfigPostgresSnapshot, ConfigSnapshot, ConfigSourcesSnapshot,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupMode {
   Serve,
   DocsOnly,
-  RebuildIndex(IndexTarget),
-  RebuildStore(crate::store::StoreTarget),
-  VerifyIndex(IndexTarget),
-  VerifyStore(crate::store::StoreTarget),
-  CompactStore(crate::store::StoreTarget),
-  RewindAll { target_height: Option<u32> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,17 +85,6 @@ pub struct Options {
   pub protx_refresh_secs: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConfigSnapshotParams {
-  pub ingestion_batch_size: u32,
-  pub max_ingestion_lead_blocks: u32,
-  pub prefetch_blocks: u32,
-  pub commit_batch_blocks: u32,
-  pub min_batch_size: u32,
-  pub max_batch_size: u32,
-  pub target_batch_ms: u64,
-}
-
 impl Options {
   /// Resolve runtime options from parsed args and validated config.
   ///
@@ -111,18 +94,6 @@ impl Options {
   pub fn resolve(args: &Args, cfg: &Config) -> Result<Self, DaemonError> {
     let startup_mode = if args.docs_only {
       StartupMode::DocsOnly
-    } else if let Some(target) = args.rebuild_index {
-      StartupMode::RebuildIndex(target)
-    } else if let Some(target) = args.rebuild_store {
-      StartupMode::RebuildStore(store_target(target))
-    } else if let Some(target) = args.verify_index {
-      StartupMode::VerifyIndex(target)
-    } else if let Some(target) = args.verify_store {
-      StartupMode::VerifyStore(store_target(target))
-    } else if let Some(target) = args.compact_store {
-      StartupMode::CompactStore(store_target(target))
-    } else if let Some(target_height) = args.rewind_all {
-      StartupMode::RewindAll { target_height }
     } else {
       StartupMode::Serve
     };
@@ -182,13 +153,21 @@ impl Options {
       }
     }
 
+    // The [cache] section is inert (the storage engine owns caching); a bad
+    // budget value must not refuse boot over a knob that affects nothing.
     let address_budget_bytes = if cache_cfg.enabled && cache_cfg.address.enabled {
-      config::parse_memory_budget(&cache_cfg.address.budget)?
+      config::parse_memory_budget(&cache_cfg.address.budget).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "ignoring invalid [cache].address.budget (section is inert)");
+        0
+      })
     } else {
       1
     };
     let readiness_budget_bytes = if cache_cfg.enabled && cache_cfg.readiness.enabled {
-      config::parse_memory_budget(&cache_cfg.readiness.budget)?
+      config::parse_memory_budget(&cache_cfg.readiness.budget).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "ignoring invalid [cache].readiness.budget (section is inert)");
+        0
+      })
     } else {
       1
     };
@@ -273,11 +252,7 @@ impl Options {
   ///
   /// Returns `DaemonError::Config` when one configured RPC auth mode cannot be
   /// resolved for snapshot diagnostics.
-  pub fn config_snapshot(
-    &self,
-    cfg: &Config,
-    params: ConfigSnapshotParams,
-  ) -> Result<ConfigSnapshot, DaemonError> {
+  pub fn config_snapshot(&self, cfg: &Config) -> Result<ConfigSnapshot, DaemonError> {
     Ok(ConfigSnapshot {
       sources: ConfigSourcesSnapshot {
         rest_url: cfg.core.url.clone(),
@@ -324,7 +299,7 @@ impl Options {
               .collect()
           })
           .unwrap_or_default(),
-        postgres_url: Some(crate::ipc::snapshot::redact_pg_url(&cfg.postgres.url)),
+        postgres_url: Some(redact_pg_url(&cfg.postgres.url)),
       },
       api: ConfigApiSnapshot {
         enabled: self.api.enabled,
@@ -352,38 +327,33 @@ impl Options {
         protx: self.overlays.protx,
         chainlock: self.overlays.chainlock,
       },
-      performance: ConfigPerformanceSnapshot {
-        ingestion_batch_size: Some(params.ingestion_batch_size),
-        max_ingestion_lead_blocks: Some(params.max_ingestion_lead_blocks),
-        prefetch_blocks: Some(params.prefetch_blocks),
-        commit_batch_blocks: Some(params.commit_batch_blocks),
-        min_batch_size: Some(params.min_batch_size),
-        max_batch_size: Some(params.max_batch_size),
-        target_batch_ms: Some(params.target_batch_ms),
-      },
-      cache: ConfigCacheSnapshot {
-        enabled: self.cache.enabled,
-        address_enabled: self.cache.address_enabled,
-        address_budget: self
-          .cache
-          .enabled
-          .then(|| self.cache.address_budget.clone()),
-        readiness_enabled: self.cache.readiness_enabled,
-        readiness_budget: self
-          .cache
-          .enabled
-          .then(|| self.cache.readiness_budget.clone()),
+      postgres: ConfigPostgresSnapshot {
+        url_redacted: Some(redact_pg_url(&cfg.postgres.url)),
+        write_pool_size: Some(cfg.postgres.write_pool_size),
+        query_pool_size: Some(cfg.postgres.query_pool_size),
+        heavy_query_pool_size: Some(cfg.postgres.heavy_query_pool_size),
+        admin_pool_size: Some(cfg.postgres.admin_pool_size),
+        slow_query_ms: Some(cfg.postgres.slow_query_ms),
       },
     })
   }
 }
 
-fn store_target(arg: StoreTargetArg) -> crate::store::StoreTarget {
-  match arg {
-    StoreTargetArg::All => crate::store::StoreTarget::All,
-    StoreTargetArg::Address => crate::store::StoreTarget::AddressHistory,
-    StoreTargetArg::Prevout => crate::store::StoreTarget::PrevoutLookup,
+/// Redact credentials from a Postgres URL for diagnostic snapshots.
+///
+/// Splits the authority at the LAST `@` (a password may itself contain `@`)
+/// and handles schemeless URLs too — `user:secret@host/db` without `://` must
+/// not pass through verbatim.
+fn redact_pg_url(url: &str) -> String {
+  let (proto, rest) = match url.find("://") {
+    Some(proto_end) => (&url[..proto_end + 3], &url[proto_end + 3..]),
+    None => ("", url),
+  };
+  let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
+  if let Some(at_pos) = rest[..authority_end].rfind('@') {
+    return format!("{proto}***:***{}", &rest[at_pos..]);
   }
+  url.to_owned()
 }
 
 impl Default for ApiOptions {
@@ -405,7 +375,6 @@ impl ApiOptions {
 #[cfg(test)]
 mod tests {
   use super::{Options, StartupMode};
-  use crate::init::args::{IndexTarget, StoreTarget};
 
   fn default_args() -> crate::init::Args {
     crate::init::Args {
@@ -413,41 +382,7 @@ mod tests {
       loglevel: 2,
       logconsole: false,
       docs_only: false,
-      rebuild_index: None,
-      rebuild_store: None,
-      verify_index: None,
-      verify_store: None,
-      compact_store: None,
-      rewind_all: None,
     }
-  }
-
-  #[test]
-  fn options_resolve_rebuild_index_all_mode() {
-    let args = crate::init::Args {
-      rebuild_index: Some(IndexTarget::All),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RebuildIndex(IndexTarget::All)
-    );
-  }
-
-  #[test]
-  fn options_resolve_rebuild_index_block_mode() {
-    let args = crate::init::Args {
-      rebuild_index: Some(IndexTarget::Block),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RebuildIndex(IndexTarget::Block)
-    );
   }
 
   #[test]
@@ -465,80 +400,6 @@ mod tests {
       crate::error::DaemonError::Config(message)
       if message.contains("overlays.enable_protx requires core.rpc.enabled")
     ));
-  }
-
-  #[test]
-  fn options_resolve_rebuild_store_mode() {
-    let args = crate::init::Args {
-      rebuild_store: Some(StoreTarget::All),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RebuildStore(crate::store::StoreTarget::All)
-    );
-  }
-
-  #[test]
-  fn options_resolve_verify_store_mode() {
-    let args = crate::init::Args {
-      verify_store: Some(StoreTarget::Prevout),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::VerifyStore(crate::store::StoreTarget::PrevoutLookup)
-    );
-  }
-
-  #[test]
-  fn options_resolve_compact_store_mode() {
-    let args = crate::init::Args {
-      compact_store: Some(StoreTarget::Address),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::CompactStore(crate::store::StoreTarget::AddressHistory)
-    );
-  }
-
-  #[test]
-  fn options_resolve_rewind_all_auto_detect() {
-    let args = crate::init::Args {
-      rewind_all: Some(None),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RewindAll {
-        target_height: None
-      }
-    );
-  }
-
-  #[test]
-  fn options_resolve_rewind_all_explicit_height() {
-    let args = crate::init::Args {
-      rewind_all: Some(Some(1000)),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RewindAll {
-        target_height: Some(1000)
-      }
-    );
   }
 
   #[test]

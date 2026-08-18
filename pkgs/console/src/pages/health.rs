@@ -20,9 +20,9 @@ use crate::theme;
 
 /// Render the health and diagnostics page.
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-  let [rocksdb, postgres, services, status] = health_panel_areas(area);
+  let [storage, postgres, services, status] = health_panel_areas(area);
 
-  draw_rocksdb(frame, rocksdb, state);
+  draw_storage(frame, storage, state);
   draw_postgres(frame, postgres, state);
   draw_services(frame, services, state);
   draw_live_sources(frame, status, state);
@@ -30,11 +30,11 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 /// Compute the current per-panel health scroll limits for the given render area.
 pub fn scroll_limits(area: Rect, state: &AppState) -> [u16; 4] {
-  let [rocksdb, postgres, services, status] = health_panel_areas(area);
+  let [storage, postgres, services, status] = health_panel_areas(area);
   [
     panel_scroll_limit(
-      panel_inner(rocksdb),
-      build_rocksdb_lines(panel_inner(rocksdb), state),
+      panel_inner(storage),
+      build_storage_lines(panel_inner(storage), state),
       false,
     ),
     panel_scroll_limit(
@@ -55,17 +55,17 @@ pub fn scroll_limits(area: Rect, state: &AppState) -> [u16; 4] {
   ]
 }
 
-fn draw_rocksdb(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn draw_storage(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
   let block = Block::default()
-    .title(Span::styled(" RocksDB ", theme::title()))
+    .title(Span::styled(" Storage ", theme::title()))
     .borders(Borders::ALL)
-    .border_style(panel_border_style(state, HealthPanel::RocksDb))
+    .border_style(panel_border_style(state, HealthPanel::Storage))
     .style(theme::normal());
   let inner = block.inner(area);
   frame.render_widget(block, area);
-  let lines = build_rocksdb_lines(inner, state);
+  let lines = build_storage_lines(inner, state);
 
-  render_panel(frame, inner, lines, state, HealthPanel::RocksDb, false);
+  render_panel(frame, inner, lines, state, HealthPanel::Storage, false);
 }
 
 fn draw_postgres(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -107,62 +107,50 @@ fn draw_live_sources(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
   render_panel(frame, inner, lines, state, HealthPanel::Status, false);
 }
 
-fn build_rocksdb_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
+fn build_storage_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
   let content_width = panel_text_width(inner) as usize;
   let mut lines: Vec<Line> = Vec::new();
   if let Some(snap) = state.snapshot.as_ref() {
-    let rocks = &snap.rocksdb_diag;
+    let storage = &snap.storage_diag;
     kv(
       &mut lines,
-      "Disk (total)",
-      &rocks
-        .actual_disk_bytes
+      "Database",
+      &storage
+        .database_bytes
         .map(format_bytes)
         .unwrap_or_else(|| "--".into()),
       content_width,
     );
     kv(
       &mut lines,
-      "Live SST",
-      &rocks
-        .live_sst_bytes
+      "WAL Written",
+      &storage
+        .wal_bytes
         .map(format_bytes)
         .unwrap_or_else(|| "--".into()),
       content_width,
     );
-    kv(
-      &mut lines,
-      "MemTable",
-      &rocks
-        .mem_table_bytes
-        .map(format_bytes)
-        .unwrap_or_else(|| "--".into()),
-      content_width,
-    );
-    let cache_str = match (rocks.block_cache_usage, rocks.block_cache_capacity) {
-      (Some(used), Some(cap)) => format!("{} / {}", format_bytes(used), format_bytes(cap)),
-      (Some(used), None) => format_bytes(used),
+    let conn_str = match (storage.connections, storage.max_connections) {
+      (Some(open), Some(max)) => format!("{open} / {max}"),
+      (Some(open), None) => open.to_string(),
       _ => "--".into(),
     };
-    kv(&mut lines, "Block Cache", &cache_str, content_width);
+    kv(&mut lines, "Connections", &conn_str, content_width);
+    let vacuum_str = match storage.autovacuum_running {
+      Some(n) if n > 0 => format!("Running ({n})"),
+      Some(_) => "Idle".to_string(),
+      None => "--".to_string(),
+    };
+    kv(&mut lines, "Autovacuum", &vacuum_str, content_width);
     kv(
       &mut lines,
-      "Est. Keys",
-      &rocks
-        .estimate_num_keys
-        .map(theme::fmt_num)
+      "Undo Window",
+      &storage
+        .undo_span
+        .map(|(lo, hi)| format!("{}..{}", theme::fmt_num(lo), theme::fmt_num(hi)))
         .unwrap_or_else(|| "--".into()),
       content_width,
     );
-    let compaction_str = match rocks.num_running_compactions {
-      Some(n) if n > 0 => format!("Running ({n})"),
-      _ => match rocks.compaction_pending {
-        Some(true) => "Pending".to_string(),
-        Some(false) => "Idle".to_string(),
-        None => "--".to_string(),
-      },
-    };
-    kv(&mut lines, "Compaction", &compaction_str, content_width);
     let activity = match snap.ingestion_diag.activity {
       IngestionActivity::Active => "Active".to_string(),
       IngestionActivity::Idle => "Idle".to_string(),
@@ -180,31 +168,15 @@ fn build_rocksdb_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
     if snap.ingestion_diag.stalled {
       kv(&mut lines, "Watchdog", "Stalled", content_width);
     }
-    kv(
-      &mut lines,
-      "Lead",
-      &snap
-        .ingestion_diag
-        .lead_blocks
-        .map(theme::fmt_num)
-        .unwrap_or_else(|| "--".into()),
-      content_width,
-    );
-    if let (Some(start), Some(end)) = (
-      snap.ingestion_diag.current_batch_start,
-      snap.ingestion_diag.current_batch_end,
-    ) {
-      kv(
-        &mut lines,
-        "Batch",
-        &format!("{}..{}", theme::fmt_num(start), theme::fmt_num(end)),
-        content_width,
-      );
-    }
-    if !rocks.cf_sizes.is_empty() {
-      lines.push(Line::from(Span::styled("  Stores:", theme::info())));
-      for (cf, bytes) in &rocks.cf_sizes {
-        lines.push(storage_line(content_width, 4, cf, &format_bytes(*bytes)));
+    if !storage.pool_stats.is_empty() {
+      lines.push(Line::from(Span::styled("  Pools:", theme::info())));
+      for (name, size, idle) in &storage.pool_stats {
+        lines.push(storage_line(
+          content_width,
+          4,
+          name,
+          &format!("{} open / {idle} idle", size),
+        ));
       }
     }
   } else {
@@ -367,10 +339,10 @@ fn build_services_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
     );
     kv(
       &mut lines,
-      "Raw Data",
+      "Database Size",
       &snap
-        .rocksdb_diag
-        .live_sst_bytes
+        .storage_diag
+        .database_bytes
         .map(format_bytes)
         .unwrap_or_else(|| "--".into()),
       content_width,
@@ -776,7 +748,7 @@ fn panel_border_style(state: &AppState, panel: HealthPanel) -> ratatui::style::S
 
 fn health_scroll(state: &AppState, panel: HealthPanel) -> u16 {
   match panel {
-    HealthPanel::RocksDb => state.health_scrolls[0],
+    HealthPanel::Storage => state.health_scrolls[0],
     HealthPanel::Postgres => state.health_scrolls[1],
     HealthPanel::Services => state.health_scrolls[2],
     HealthPanel::Status => state.health_scrolls[3],

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO validator_counts (status, validator_type, total)\n         SELECT status, validator_type, COUNT(*)::bigint FROM validators\n          GROUP BY status, validator_type",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5bdf5c57b65178b96d67dd9825919627ae209b1f53ebc41e092f3a406481fa18"
+}

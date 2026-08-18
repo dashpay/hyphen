@@ -8,14 +8,13 @@
 
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
 use async_trait::async_trait;
 
 use crate::error::DaemonError;
-use crate::index::spent::cache::SpentQueryCache;
 use crate::index::visor::OverlayPlan;
 use crate::init::Options;
 use crate::lifecycle::Lifecycle;
+use crate::live::state::LiveState;
 use crate::live::StreamHub;
 use crate::sources::{CoreRpcClient, CoreZmqSource};
 use crate::visor::{
@@ -24,11 +23,10 @@ use crate::visor::{
 
 /// Inputs needed to construct the live supervisor.
 pub(crate) struct LiveVisorConfig {
-  pub pool: SqlPool,
+  pub hydb: hyphen_db::HyphenDb,
   pub rpc: Option<Arc<CoreRpcClient>>,
   pub zmq: Option<Arc<CoreZmqSource>>,
   pub lifecycle: Arc<Lifecycle>,
-  pub spent_cache: Arc<SpentQueryCache>,
   pub mempool_enabled: bool,
   pub islock_enabled: bool,
   pub network_enabled: bool,
@@ -55,11 +53,10 @@ impl std::fmt::Debug for LiveVisorConfig {
 
 /// Inputs needed to resolve one live supervisor config from startup options.
 pub(crate) struct LiveVisorOptionsInput {
-  pub pool: SqlPool,
+  pub hydb: hyphen_db::HyphenDb,
   pub rpc: Option<Arc<CoreRpcClient>>,
   pub zmq: Option<Arc<CoreZmqSource>>,
   pub lifecycle: Arc<Lifecycle>,
-  pub spent_cache: Arc<SpentQueryCache>,
   pub overlay_plan: OverlayPlan,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
@@ -76,6 +73,8 @@ impl std::fmt::Debug for LiveVisorOptionsInput {
 #[derive(Clone, Debug)]
 pub(crate) struct LiveHandles {
   pub stream_hub: Option<Arc<StreamHub>>,
+  /// In-RAM live state — written by the refresh workers, read by REST handlers.
+  pub live_state: Arc<LiveState>,
 }
 
 #[derive(Debug)]
@@ -161,11 +160,10 @@ impl LiveVisor {
     options: &Options,
   ) -> LiveVisorConfig {
     LiveVisorConfig {
-      pool: input.pool,
+      hydb: input.hydb,
       rpc: input.rpc,
       zmq: input.zmq,
       lifecycle: input.lifecycle,
-      spent_cache: input.spent_cache,
       mempool_enabled: options.live.mempool,
       islock_enabled: options.live.islock,
       network_enabled: options.live.network,
@@ -190,9 +188,13 @@ impl LiveVisor {
     let stream_hub = cfg
       .stream_enabled
       .then(|| Arc::new(StreamHub::new(cfg.stream_client_buffer)));
+    let live_state = Arc::new(LiveState::new());
     Self {
       cfg,
-      handles: LiveHandles { stream_hub },
+      handles: LiveHandles {
+        stream_hub,
+        live_state,
+      },
       tasks: LiveTasks::empty(),
       workers: LiveWorkers::empty(),
     }
@@ -253,7 +255,8 @@ impl Visor for LiveVisor {
       })?;
       let spec =
         crate::live::mempool_summary_supervised_task(crate::live::MempoolSummaryWorkerTaskConfig {
-          pool: self.cfg.pool.clone(),
+          db: self.cfg.hydb.clone(),
+          live_state: Arc::clone(&self.handles.live_state),
           rpc,
           lifecycle: Arc::clone(&self.cfg.lifecycle),
           recent_mempool_txs: self.cfg.recent_mempool_txs,
@@ -270,7 +273,7 @@ impl Visor for LiveVisor {
         DaemonError::Config("live.enable_network requires core.rpc.enabled".to_owned())
       })?;
       let spec = crate::live::network_supervised_task(crate::live::NetworkWorkerTaskConfig {
-        pool: self.cfg.pool.clone(),
+        live_state: Arc::clone(&self.handles.live_state),
         rpc,
         lifecycle: Arc::clone(&self.cfg.lifecycle),
         refresh_secs: self.cfg.network_refresh_secs,
@@ -289,7 +292,7 @@ impl Visor for LiveVisor {
         DaemonError::Config("chainlock live/overlay requires live.chainlock_start_block".to_owned())
       })?;
       let spec = crate::live::chainlock_supervised_task(crate::live::ChainlockWorkerTaskConfig {
-        pool: self.cfg.pool.clone(),
+        live_state: Arc::clone(&self.handles.live_state),
         rpc,
         lifecycle: Arc::clone(&self.cfg.lifecycle),
         refresh_secs: self.cfg.chainlock_refresh_secs,
@@ -306,7 +309,7 @@ impl Visor for LiveVisor {
         DaemonError::Config("overlays.enable_protx requires core.rpc.enabled".to_owned())
       })?;
       let spec = crate::live::protx_supervised_task(crate::live::ProtxWorkerTaskConfig {
-        pool: self.cfg.pool.clone(),
+        live_state: Arc::clone(&self.handles.live_state),
         rpc,
         lifecycle: Arc::clone(&self.cfg.lifecycle),
         refresh_secs: self.cfg.protx_refresh_secs,
@@ -321,7 +324,7 @@ impl Visor for LiveVisor {
         DaemonError::Config("live.enable_governance requires core.rpc.enabled".to_owned())
       })?;
       let spec = crate::live::governance_supervised_task(crate::live::GovernanceWorkerTaskConfig {
-        pool: self.cfg.pool.clone(),
+        live_state: Arc::clone(&self.handles.live_state),
         rpc,
         lifecycle: Arc::clone(&self.cfg.lifecycle),
         refresh_secs: self.cfg.governance_refresh_secs,
@@ -369,12 +372,12 @@ impl Visor for LiveVisor {
       })?;
       let spec = crate::live::mempool_recent_supervised_task(
         tx.clone(),
-        self.cfg.pool.clone(),
+        self.cfg.hydb.clone(),
+        Arc::clone(&self.handles.live_state),
         Arc::clone(&self.cfg.lifecycle),
         self.cfg.recent_mempool_txs,
         self.cfg.p2pkh_version,
         self.cfg.p2sh_version,
-        Arc::clone(&self.cfg.spent_cache),
       );
       let (task, worker) = spawn_live_supervised_task(Arc::clone(&self.cfg.lifecycle), spec);
       self.tasks.mempool_recent = Some(task);
@@ -387,7 +390,7 @@ impl Visor for LiveVisor {
       })?;
       let spec = crate::live::islock_supervised_task(
         tx.clone(),
-        self.cfg.pool.clone(),
+        Arc::clone(&self.handles.live_state),
         Arc::clone(&self.cfg.lifecycle),
       );
       let (task, worker) = spawn_live_supervised_task(Arc::clone(&self.cfg.lifecycle), spec);
@@ -404,7 +407,7 @@ impl Visor for LiveVisor {
       })?;
       let spec = crate::live::governance_zmq_supervised_task(
         tx.clone(),
-        self.cfg.pool.clone(),
+        Arc::clone(&self.handles.live_state),
         rpc,
         Arc::clone(&self.cfg.lifecycle),
         self.handles.stream_hub.clone(),

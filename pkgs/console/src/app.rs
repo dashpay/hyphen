@@ -699,20 +699,6 @@ fn handle_key(state: &mut AppState, code: KeyCode, modifiers: KeyModifiers) {
         }));
       }
     }
-    KeyCode::Char('c') => {
-      if state.focus == Focus::Main
-        && state.section == Section::Overview
-        && state.overview_sub == OverviewSubFocus::Stores
-        && state.connected
-        && state.store_cursor < STORE_TREE.len()
-      {
-        let (cf, name, _) = STORE_TREE[state.store_cursor];
-        state.prompt = Some(PromptState::Confirm(ControlAction::Compact {
-          cf: cf.to_owned(),
-          name: name.to_owned(),
-        }));
-      }
-    }
     KeyCode::Char('d') => {
       if state.focus == Focus::Main && state.section == Section::Overview && state.connected {
         state.prompt = Some(PromptState::Confirm(ControlAction::DisconnectTip));
@@ -828,17 +814,6 @@ fn issue_control_action(state: &mut AppState, action: ControlAction) {
         return;
       }
     }
-    ControlAction::Compact { cf, name } => {
-      if !issue_daemon_command(
-        state,
-        command_id,
-        DaemonCommand::ForceCompact { id: command_id, cf },
-        format!("compacting {name}"),
-        format!("Compacting {name}..."),
-      ) {
-        return;
-      }
-    }
     ControlAction::DisconnectTip => {
       let _ = issue_daemon_command(
         state,
@@ -894,7 +869,7 @@ fn cursor_to_browse_index(cursor: usize) -> Option<BrowseIndex> {
 fn on_section_enter(state: &mut AppState) {
   state.page_scroll = 0;
   if state.section == Section::Health {
-    state.health_panel = HealthPanel::RocksDb;
+    state.health_panel = HealthPanel::Storage;
     state.health_scrolls = [0; 4];
     state.health_scroll_limits = [0; 4];
   }
@@ -915,7 +890,7 @@ fn on_section_enter(state: &mut AppState) {
 
 fn scroll_health_panel(state: &mut AppState, delta: i16) {
   let idx = match state.health_panel {
-    HealthPanel::RocksDb => 0,
+    HealthPanel::Storage => 0,
     HealthPanel::Postgres => 1,
     HealthPanel::Services => 2,
     HealthPanel::Status => 3,

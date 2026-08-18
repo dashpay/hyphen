@@ -11,6 +11,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::rest::error::ApiError;
+use crate::rest::hydb::{hydb_err, hydb_hash, hydb_height, tx_type_str};
 use crate::rest::openapi::{
   BlockDetail, BlockListResponse, BlockSummary, BlockTxListResponse, CbTxFields, ErrorResponse,
   RawBlockResponse, SearchBlockResult, SearchResponse, TxSummary, TxTags,
@@ -68,23 +69,24 @@ pub async fn list_blocks(
   let as_of_height = cursor
     .as_ref()
     .map_or(stage.height, |cursor| cursor.as_of_height);
+  let before = cursor
+    .as_ref()
+    .map(|cursor| hyphen_db::HyDbCursor(cursor.height.to_string()));
 
-  let mut rows = super::sql::list_blocks(
-    &state.pool,
-    limit + 1,
-    cursor.as_ref().map(|cursor| cursor.height),
-  )
-  .await
-  .map_err(|e| ApiError::internal(format!("query: {e}")))?;
-  let has_more = rows.len() as i64 > limit;
-  rows.truncate(limit as usize);
-  let next_cursor = if has_more {
-    rows
+  let page = state
+    .hydb()?
+    .blocks()
+    .list(limit as u32, before)
+    .await
+    .map_err(|e| hydb_err(e, "list blocks"))?;
+  let next_cursor = if page.next_cursor.is_some() {
+    page
+      .items
       .last()
       .map(|row| {
         encode_cursor(&BlockCursor {
           as_of_height,
-          height: row.height,
+          height: row.height.0 as i32,
         })
       })
       .transpose()?
@@ -92,14 +94,15 @@ pub async fn list_blocks(
     None
   };
 
-  let chainlock_snapshot = super::overlay::fetch_chainlock_snapshot(&state).await?;
-  let value: Vec<BlockSummary> = rows
+  let chainlock_snapshot = super::overlay::fetch_chainlock_snapshot(&state);
+  let value: Vec<BlockSummary> = page
+    .items
     .iter()
     .map(|row| {
       Ok(BlockSummary {
-        height: row.height,
-        hash: utils::view_hex(&row.hash, HashEndian::Ser),
-        previousblockhash: utils::view_hex(&row.prev_hash, HashEndian::Ser),
+        height: row.height.0 as i32,
+        hash: utils::view_hex(row.hash.as_bytes(), HashEndian::Ser),
+        previousblockhash: utils::view_hex(row.prev_hash.as_bytes(), HashEndian::Ser),
         time: rfc3339_time(i64::from(row.time))?,
         bits: format!("{:08x}", row.bits as u32),
         nonce: row.nonce,
@@ -107,7 +110,10 @@ pub async fn list_blocks(
         size: row.size,
         tx_count: row.tx_count,
         tags: block_tags(false),
-        live: super::overlay::block_live_from_snapshot(chainlock_snapshot.as_ref(), &row.hash)?,
+        live: super::overlay::block_live_from_snapshot(
+          chainlock_snapshot.as_deref(),
+          row.hash.as_bytes(),
+        )?,
       })
     })
     .collect::<Result<Vec<_>, ApiError>>()?;
@@ -143,65 +149,89 @@ pub async fn get_block(
   Path(hash_or_height): Path<String>,
 ) -> Result<Json<BlockDetail>, ApiError> {
   let stage = state.stage_status_typed(crate::index::Stage::Block).await?;
-  let height_lookup = hash_or_height.parse::<i32>().ok();
-  let row = if let Some(height) = height_lookup {
+  let blocks = state.hydb()?.blocks();
+
+  if let Ok(height) = hash_or_height.parse::<i32>() {
     if height < 0 {
       return Err(ApiError::bad_request("block height must be non-negative"));
     }
-    super::sql::block_by_height(&state.pool, height).await
-  } else if hash_or_height.len() == HASH_HEX_LEN {
-    let hash_lookup = utils::HashLookup::from_hex(&hash_or_height)
-      .map_err(|_| ApiError::bad_request("invalid hash hex"))?;
-    let (primary_hash, secondary_hash) = hash_lookup.ordered_candidates(HashEndian::Ser);
-    match super::sql::block_by_hash(&state.pool, &primary_hash).await {
-      Ok(Some(row)) => Ok(Some(row)),
-      Ok(None) => match super::sql::orphan_block_by_hash(&state.pool, &primary_hash).await {
-        Ok(Some(row)) => Ok(Some(row)),
-        Ok(None) => {
-          if let Some(secondary_hash) = secondary_hash.as_ref() {
-            match super::sql::block_by_hash(&state.pool, secondary_hash).await {
-              Ok(Some(row)) => Ok(Some(row)),
-              Ok(None) => super::sql::orphan_block_by_hash(&state.pool, secondary_hash).await,
-              Err(err) => Err(err),
-            }
-          } else {
-            Ok(None)
-          }
-        }
-        Err(err) => Err(err),
-      },
-      Err(err) => Err(err),
-    }
-  } else {
+    let detail = blocks
+      .by_height(hydb_height(height))
+      .await
+      .map_err(|e| hydb_err(e, "block by height"))?
+      .ok_or_else(|| ApiError::not_found("block not found"))?;
+    return Ok(Json(canonical_block_detail(&state, stage.height, detail)?));
+  }
+
+  if hash_or_height.len() != HASH_HEX_LEN {
     return Err(ApiError::bad_request("invalid block identifier"));
   }
-  .map_err(|e| ApiError::internal(format!("query: {e}")))?;
+  let hash_lookup = utils::HashLookup::from_hex(&hash_or_height)
+    .map_err(|_| ApiError::bad_request("invalid hash hex"))?;
+  let (primary_hash, secondary_hash) = hash_lookup.ordered_candidates(HashEndian::Ser);
+  let candidates: Vec<Vec<u8>> = [Some(primary_hash), secondary_hash]
+    .into_iter()
+    .flatten()
+    .collect();
 
-  let row = row.ok_or_else(|| ApiError::not_found("block not found"))?;
-  let is_orphan = row.orphaned_at_epoch.is_some();
-  let chainlock_snapshot = super::overlay::fetch_chainlock_snapshot(&state).await?;
-  let live = super::overlay::block_live_from_snapshot(chainlock_snapshot.as_ref(), &row.hash)?;
+  // Canonical hit first.
+  for candidate in &candidates {
+    if let Some(detail) = blocks
+      .by_hash(hydb_hash(candidate)?)
+      .await
+      .map_err(|e| hydb_err(e, "block by hash"))?
+    {
+      return Ok(Json(canonical_block_detail(&state, stage.height, detail)?));
+    }
+  }
+  // Otherwise an orphan the node once relayed — decode detail from raw bytes.
+  for candidate in &candidates {
+    if let Some(topo) = blocks
+      .topology(hydb_hash(candidate)?)
+      .await
+      .map_err(|e| hydb_err(e, "block topology"))?
+    {
+      let raw = blocks
+        .raw_bytes(topo.hash)
+        .await
+        .map_err(|e| hydb_err(e, "raw orphan block"))?
+        .ok_or_else(|| ApiError::not_found("block not found"))?;
+      return Ok(Json(orphan_block_detail(
+        &state,
+        stage.height,
+        &topo,
+        &raw,
+      )?));
+    }
+  }
+  Err(ApiError::not_found("block not found"))
+}
 
-  Ok(Json(BlockDetail {
-    as_of_height: stage.height,
-    height: row.height,
-    hash: utils::view_hex(&row.hash, HashEndian::Ser),
-    previousblockhash: utils::view_hex(&row.prev_hash, HashEndian::Ser),
-    merkleroot: utils::view_hex(&row.merkle_root, HashEndian::Ser),
+/// Assemble the block-detail DTO for a canonical block.
+fn canonical_block_detail(
+  state: &AppState,
+  as_of_height: i32,
+  row: hyphen_db::query::HyDbQrBlockDetail,
+) -> Result<BlockDetail, ApiError> {
+  let chainlock_snapshot = super::overlay::fetch_chainlock_snapshot(state);
+  let live =
+    super::overlay::block_live_from_snapshot(chainlock_snapshot.as_deref(), row.hash.as_bytes())?;
+  Ok(BlockDetail {
+    as_of_height,
+    height: row.height.0 as i32,
+    hash: utils::view_hex(row.hash.as_bytes(), HashEndian::Ser),
+    previousblockhash: utils::view_hex(row.prev_hash.as_bytes(), HashEndian::Ser),
+    merkleroot: utils::view_hex(row.merkle_root.as_bytes(), HashEndian::Ser),
     time: rfc3339_time(i64::from(row.time))?,
     bits: format!("{:08x}", row.bits as u32),
     nonce: row.nonce,
     version: row.version,
     size: row.size,
     tx_count: row.tx_count,
-    status: if is_orphan {
-      "orphan".to_string()
-    } else {
-      "canonical".to_string()
-    },
-    tags: block_tags(is_orphan),
+    status: "canonical".to_string(),
+    tags: block_tags(false),
     live,
-    orphaned_at: row.orphaned_at_epoch.map(rfc3339_time).transpose()?,
+    orphaned_at: None,
     chainwork: row.chainwork,
     cb_tx: row.cb_height.map(|height| CbTxFields {
       height,
@@ -211,7 +241,55 @@ pub async fn get_block(
       best_cl_signature: row.cb_best_cl_sig.as_ref().map(hex::encode),
       credit_pool_balance: row.cb_credit_pool,
     }),
-  }))
+  })
+}
+
+/// Assemble the block-detail DTO for an orphan block by decoding its raw bytes.
+/// The new schema keeps no derived rows for orphans, so `orphaned_at` and
+/// `chainwork` are unavailable here.
+fn orphan_block_detail(
+  state: &AppState,
+  as_of_height: i32,
+  topo: &hyphen_db::query::HyDbQrBlockRef,
+  raw: &[u8],
+) -> Result<BlockDetail, ApiError> {
+  let ctx = crate::index::block_ctx::BlockCtx::from_raw(topo.height.0, raw.to_vec())
+    .map_err(|e| ApiError::internal(format!("decode orphan block: {e}")))?;
+  let block = ctx.block();
+  let header = &block.header;
+  let cb = crate::index::block::util::extract_cbtx_fields(block, topo.height.0);
+  let hash = ctx.block_hash();
+  let bits = i32::try_from(header.bits).map_err(|_| ApiError::internal("block bits exceed i32"))?;
+  let time =
+    i32::try_from(header.time).map_err(|_| ApiError::internal("block time exceeds i32"))?;
+  let chainlock_snapshot = super::overlay::fetch_chainlock_snapshot(state);
+  let live = super::overlay::block_live_from_snapshot(chainlock_snapshot.as_deref(), &hash)?;
+  Ok(BlockDetail {
+    as_of_height,
+    height: topo.height.0 as i32,
+    hash: utils::view_hex(&hash, HashEndian::Ser),
+    previousblockhash: utils::view_hex(&header.prev_hash.to_bytes(), HashEndian::Ser),
+    merkleroot: utils::view_hex(&header.merkle_root.to_bytes(), HashEndian::Ser),
+    time: rfc3339_time(i64::from(time))?,
+    bits: format!("{:08x}", bits as u32),
+    nonce: i64::from(header.nonce),
+    version: header.version,
+    size: raw.len() as i32,
+    tx_count: block.transactions.len() as i32,
+    status: "orphan".to_string(),
+    tags: block_tags(true),
+    live,
+    orphaned_at: None,
+    chainwork: None,
+    cb_tx: cb.height.map(|height| CbTxFields {
+      height,
+      merkle_root_mn_list: cb.merkle_root.as_ref().map(hex::encode),
+      merkle_flags: cb.merkle_flags,
+      best_cl_height: cb.best_cl_height,
+      best_cl_signature: cb.best_cl_sig.as_ref().map(hex::encode),
+      credit_pool_balance: cb.credit_pool,
+    }),
+  })
 }
 
 /// List transactions in a block.
@@ -244,7 +322,7 @@ pub async fn get_block_txs(
   let stage = state
     .stage_status_typed(crate::index::Stage::Transaction)
     .await?;
-  let height = resolve_block_height(&state.pool, &hash_or_height).await?;
+  let height = resolve_block_height(&state, &hash_or_height).await?;
   let params = params.validate(MAX_BLOCK_PAGE_LIMIT)?;
   let limit = params.limit;
   let cursor = decode_block_tx_cursor(params.cursor.as_deref(), stage.height, height)?;
@@ -252,24 +330,25 @@ pub async fn get_block_txs(
     .as_ref()
     .map_or(stage.height, |cursor| cursor.as_of_height);
   let after = decode_block_tx_cursor_key(cursor.as_ref())?;
-
-  let after_ref = after
+  let after_cursor = after
     .as_ref()
-    .map(|(block_pos, txid)| (*block_pos, txid.as_slice()));
-  let mut rows = super::sql::block_txs(&state.pool, height, limit + 1, after_ref)
+    .map(|(block_pos, txid)| hyphen_db::HyDbCursor(format!("{block_pos}:{}", hex::encode(txid))));
+
+  let blocks = state.hydb()?.blocks();
+  let page = blocks
+    .txs(hydb_height(height), limit as u32, after_cursor)
     .await
-    .map_err(|e| ApiError::internal(format!("query: {e}")))?;
-  let has_more = rows.len() as i64 > limit;
-  rows.truncate(limit as usize);
-  let next_cursor = if has_more {
-    rows
+    .map_err(|e| hydb_err(e, "block txs"))?;
+  let next_cursor = if page.next_cursor.is_some() {
+    page
+      .items
       .last()
       .map(|row| {
         encode_cursor(&BlockTxCursor {
           as_of_height,
           block_height: height,
           block_pos: row.block_pos,
-          txid: utils::view_hex(&row.txid, HashEndian::Ser),
+          txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
         })
       })
       .transpose()?
@@ -277,14 +356,15 @@ pub async fn get_block_txs(
     None
   };
 
-  let value: Vec<TxSummary> = rows
+  let value: Vec<TxSummary> = page
+    .items
     .iter()
     .map(|row| TxSummary {
-      txid: utils::view_hex(&row.txid, HashEndian::Ser),
+      txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
       block_height: height,
       block_pos: row.block_pos,
       version: row.version as i16,
-      tx_type: row.tx_type.to_string(),
+      tx_type: tx_type_str(row.tx_type).to_owned(),
       lock_time: row.lock_time,
       size: row.size,
       value_out: row.value_out,
@@ -297,9 +377,10 @@ pub async fn get_block_txs(
     })
     .collect();
   let total_count = i64::from(
-    super::sql::block_by_height(&state.pool, height)
+    blocks
+      .by_height(hydb_height(height))
       .await
-      .map_err(|e| ApiError::internal(format!("block summary: {e}")))?
+      .map_err(|e| hydb_err(e, "block summary"))?
       .ok_or_else(|| ApiError::not_found("block not found"))?
       .tx_count,
   );
@@ -362,14 +443,20 @@ pub async fn search_by_height(
   state: &AppState,
   height: i32,
 ) -> Result<Option<SearchResponse>, ApiError> {
-  let hash = super::sql::block_hash_for_height(&state.pool, height)
+  if height < 0 {
+    return Ok(None);
+  }
+  let hash = state
+    .hydb()?
+    .blocks()
+    .hash_for_height(hydb_height(height))
     .await
-    .map_err(|e| ApiError::from_daemon(e, "search block height"))?;
+    .map_err(|e| hydb_err(e, "search block height"))?;
   let Some(hash) = hash else {
     return Ok(None);
   };
   Ok(Some(SearchResponse::Block(SearchBlockResult {
-    block_hash: utils::view_hex(&hash, HashEndian::Ser),
+    block_hash: utils::view_hex(hash.as_bytes(), HashEndian::Ser),
     status: "canonical".to_string(),
     block_tags: block_tags(false),
   })))
@@ -379,9 +466,12 @@ pub async fn search_by_hash(
   state: &AppState,
   hash_bytes: &[u8],
 ) -> Result<Option<SearchResponse>, ApiError> {
-  if super::sql::block_height_for_hash(&state.pool, hash_bytes)
+  let blocks = state.hydb()?.blocks();
+  let hash = hydb_hash(hash_bytes)?;
+  if blocks
+    .height_for_hash(hash)
     .await
-    .map_err(|e| ApiError::from_daemon(e, "search block hash height"))?
+    .map_err(|e| hydb_err(e, "search block hash height"))?
     .is_some()
   {
     return Ok(Some(SearchResponse::Block(SearchBlockResult {
@@ -390,9 +480,10 @@ pub async fn search_by_hash(
       block_tags: block_tags(false),
     })));
   }
-  if super::sql::orphan_block_by_hash(&state.pool, hash_bytes)
+  if blocks
+    .topology(hash)
     .await
-    .map_err(|e| ApiError::from_daemon(e, "search orphan block hash"))?
+    .map_err(|e| hydb_err(e, "search orphan block hash"))?
     .is_some()
   {
     return Ok(Some(SearchResponse::Block(SearchBlockResult {
@@ -409,15 +500,18 @@ pub(crate) async fn search_by_hash_prefix(
   prefix: &str,
   limit: i64,
 ) -> Result<Vec<SearchResponse>, ApiError> {
-  let rows = super::sql::search_blocks_by_prefix(&state.pool, prefix, limit)
+  let rows = state
+    .hydb()?
+    .blocks()
+    .search_prefix(prefix.to_owned(), limit.max(0) as u32)
     .await
-    .map_err(|e| ApiError::from_daemon(e, "search block prefix"))?;
+    .map_err(|e| hydb_err(e, "search block prefix"))?;
   Ok(
     rows
       .into_iter()
       .map(|row| {
         SearchResponse::Block(SearchBlockResult {
-          block_hash: utils::view_hex(&row.hash, HashEndian::Ser),
+          block_hash: utils::view_hex(row.hash.as_bytes(), HashEndian::Ser),
           status: "canonical".to_owned(),
           block_tags: block_tags(false),
         })
@@ -448,7 +542,7 @@ mod tests {
 /// # Errors
 ///
 /// Returns `ApiError` when the block identifier is invalid, the block cannot
-/// be resolved from PostgreSQL or RocksDB, or raw block storage is missing.
+/// be resolved, or raw block storage is missing.
 #[utoipa::path(
   get,
   path = "/api/v1/rawblock/{hashOrHeight}",
@@ -467,16 +561,14 @@ pub async fn get_rawblock(
   Path(hash_or_height): Path<String>,
 ) -> Result<Json<RawBlockResponse>, ApiError> {
   let stage = state.stage_status_typed(crate::index::Stage::Block).await?;
-  let hash_bytes = resolve_block_hash(&state.pool, &hash_or_height).await?;
+  let hash_bytes = resolve_block_hash(&state, &hash_or_height).await?;
 
-  let db = &state.db;
-  let blocks_cf = db
-    .cf_handle(crate::db::CF_BLOCKS)
-    .ok_or_else(|| ApiError::internal("blocks CF missing"))?;
-
-  let raw = db
-    .get_cf(blocks_cf, &hash_bytes)
-    .map_err(|e| ApiError::internal(format!("rocksdb: {e}")))?
+  let raw = state
+    .hydb()?
+    .blocks()
+    .raw_bytes(hydb_hash(&hash_bytes)?)
+    .await
+    .map_err(|e| hydb_err(e, "raw block"))?
     .ok_or_else(|| ApiError::not_found("raw block not in store"))?;
 
   Ok(Json(RawBlockResponse {
@@ -486,17 +578,16 @@ pub async fn get_rawblock(
   }))
 }
 
-async fn resolve_block_height(
-  pool: &crate::sql::SqlPool,
-  hash_or_height: &str,
-) -> Result<i32, ApiError> {
+async fn resolve_block_height(state: &AppState, hash_or_height: &str) -> Result<i32, ApiError> {
+  let blocks = state.hydb()?.blocks();
   if let Ok(height) = hash_or_height.parse::<i32>() {
     if height < 0 {
       return Err(ApiError::bad_request("block height must be non-negative"));
     }
-    let exists = super::sql::block_exists(pool, height)
+    let exists = blocks
+      .exists(hydb_height(height))
       .await
-      .map_err(|e| ApiError::internal(format!("query: {e}")))?;
+      .map_err(|e| hydb_err(e, "block exists"))?;
     if !exists {
       return Err(ApiError::not_found("block not found"));
     }
@@ -506,58 +597,48 @@ async fn resolve_block_height(
     let hash_lookup = utils::HashLookup::from_hex(hash_or_height)
       .map_err(|_| ApiError::bad_request("invalid hash hex"))?;
     let (primary_hash, secondary_hash) = hash_lookup.ordered_candidates(HashEndian::Ser);
-    let height = match super::sql::block_height_for_hash(pool, &primary_hash).await {
-      Ok(Some(height)) => Some(height),
-      Ok(None) => {
-        if let Some(secondary_hash) = secondary_hash.as_ref() {
-          super::sql::block_height_for_hash(pool, secondary_hash)
-            .await
-            .map_err(|e| ApiError::internal(format!("query: {e}")))?
-        } else {
-          None
-        }
+    for candidate in [Some(primary_hash), secondary_hash].into_iter().flatten() {
+      if let Some(height) = blocks
+        .height_for_hash(hydb_hash(&candidate)?)
+        .await
+        .map_err(|e| hydb_err(e, "block height for hash"))?
+      {
+        return Ok(height.0 as i32);
       }
-      Err(e) => return Err(ApiError::internal(format!("query: {e}"))),
     }
-    .ok_or_else(|| ApiError::not_found("block not found"))?;
-    Ok(height)
+    Err(ApiError::not_found("block not found"))
   } else {
     Err(ApiError::bad_request("invalid block identifier"))
   }
 }
 
-async fn resolve_block_hash(
-  pool: &crate::sql::SqlPool,
-  hash_or_height: &str,
-) -> Result<Vec<u8>, ApiError> {
+async fn resolve_block_hash(state: &AppState, hash_or_height: &str) -> Result<Vec<u8>, ApiError> {
+  let blocks = state.hydb()?.blocks();
   if let Ok(height) = hash_or_height.parse::<i32>() {
     if height < 0 {
       return Err(ApiError::bad_request("block height must be non-negative"));
     }
-    let hash = super::sql::block_hash_for_height(pool, height)
+    let hash = blocks
+      .hash_for_height(hydb_height(height))
       .await
-      .map_err(|e| ApiError::internal(format!("query: {e}")))?
+      .map_err(|e| hydb_err(e, "block hash for height"))?
       .ok_or_else(|| ApiError::not_found("block not found"))?;
-    Ok(hash)
+    Ok(hash.as_bytes().to_vec())
   } else if hash_or_height.len() == HASH_HEX_LEN {
     let hash_lookup = utils::HashLookup::from_hex(hash_or_height)
       .map_err(|_| ApiError::bad_request("invalid hash hex"))?;
     let (primary_hash, secondary_hash) = hash_lookup.ordered_candidates(HashEndian::Ser);
-    match super::sql::block_height_for_hash(pool, &primary_hash).await {
-      Ok(Some(_)) => Ok(primary_hash),
-      Ok(None) => {
-        if let Some(secondary_hash) = secondary_hash {
-          match super::sql::block_height_for_hash(pool, &secondary_hash).await {
-            Ok(Some(_)) => Ok(secondary_hash),
-            Ok(None) => Err(ApiError::not_found("block not found")),
-            Err(e) => Err(ApiError::internal(format!("query: {e}"))),
-          }
-        } else {
-          Err(ApiError::not_found("block not found"))
-        }
+    for candidate in [Some(primary_hash), secondary_hash].into_iter().flatten() {
+      if blocks
+        .height_for_hash(hydb_hash(&candidate)?)
+        .await
+        .map_err(|e| hydb_err(e, "block height for hash"))?
+        .is_some()
+      {
+        return Ok(candidate);
       }
-      Err(e) => Err(ApiError::internal(format!("query: {e}"))),
     }
+    Err(ApiError::not_found("block not found"))
   } else {
     Err(ApiError::bad_request("invalid block identifier"))
   }

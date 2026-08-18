@@ -107,8 +107,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         theme::normal()
       };
       vec![Row::new(vec![
-        Cell::from(Span::styled(" Blocks", name_style)),
-        Cell::from(Span::styled("RocksDB", theme::muted())),
+        Cell::from(Span::styled(" Chain Data", name_style)),
+        Cell::from(Span::styled("PostgreSQL", theme::muted())),
         Cell::from(Span::styled(height, theme::normal())),
         Cell::from(Span::styled(tip, theme::muted())),
         Cell::from(Span::styled(bps_str, theme::info())),

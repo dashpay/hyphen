@@ -6,24 +6,25 @@
 
 //! Block overlay helpers that enrich indexed routes with live ChainLock facts.
 
+use std::sync::Arc;
+
+use crate::live::state::ChainLockSnapshot;
 use crate::rest::error::ApiError;
 use crate::rest::openapi::{BlockLive, BlockLiveTags};
 use crate::rest::{rfc3339_time, AppState, OverlayFeature};
 use crate::utils::{self, HashEndian};
 
-pub(crate) async fn fetch_chainlock_snapshot(
-  state: &AppState,
-) -> Result<Option<crate::sql::live::chainlock::ChainLockSnapshotRow>, ApiError> {
+/// Read the latest ChainLock from in-RAM live state (an infallible cheap `Arc`
+/// clone); `None` when the ChainLock overlay is disabled or nothing seen yet.
+pub(crate) fn fetch_chainlock_snapshot(state: &AppState) -> Option<Arc<ChainLockSnapshot>> {
   if !state.overlay_enabled(OverlayFeature::Chainlock) {
-    return Ok(None);
+    return None;
   }
-  crate::sql::live::chainlock::snapshot(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(format!("read chainlock snapshot: {e}")))
+  state.live_state.chainlock()
 }
 
 pub(crate) fn block_live_from_snapshot(
-  snapshot: Option<&crate::sql::live::chainlock::ChainLockSnapshotRow>,
+  snapshot: Option<&ChainLockSnapshot>,
   block_hash: &[u8],
 ) -> Result<BlockLive, ApiError> {
   let Some(snapshot) = snapshot else {
@@ -42,38 +43,26 @@ pub(crate) fn block_live_from_snapshot(
 
 #[cfg(test)]
 mod tests {
+  use crate::live::state::ChainLockSnapshot;
+
+  // `app_state()` assembles a `HyphenDb` facade whose async accessors need a
+  // Tokio runtime, so this stays a `tokio::test` even though the ChainLock path
+  // itself is now synchronous RAM.
   #[tokio::test]
-  async fn block_live_marks_matching_chainlock_when_pg_is_configured(
-  ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(pool) = crate::tests::pg_pool().await? else {
-      return Ok(());
-    };
-    crate::sql::bootstrap::reset(&pool).await?;
-
-    let mut tx = pool.begin().await?;
-    crate::sql::live::chainlock::upsert_snapshot(
-      &mut tx,
-      &crate::sql::live::chainlock::ChainLockSnapshotRow {
-        block_hash: vec![0x22; 32],
-        block_height: Some(42),
-        core_height: Some(42),
-        raw_chainlock: vec![0xaa],
-        seen_at: 120,
-      },
-    )
-    .await?;
-    tx.commit().await?;
-
+  async fn block_live_marks_matching_chainlock_from_ram() -> Result<(), String> {
     let mut state = crate::tests::app_state();
-    state.address_pool = pool.clone();
-    state.pool = pool;
     state.overlays.chainlock = true;
+    state.live_state.set_chainlock(ChainLockSnapshot {
+      block_hash: vec![0x22; 32],
+      block_height: Some(42),
+      core_height: Some(42),
+      raw_chainlock: vec![0xaa],
+      seen_at: 120,
+    });
 
-    let snapshot = super::fetch_chainlock_snapshot(&state)
-      .await
-      .map_err(|e| e.message)?;
+    let snapshot = super::fetch_chainlock_snapshot(&state);
     let live =
-      super::block_live_from_snapshot(snapshot.as_ref(), &[0x22; 32]).map_err(|e| e.message)?;
+      super::block_live_from_snapshot(snapshot.as_deref(), &[0x22; 32]).map_err(|e| e.message)?;
     assert_eq!(
       live.tags,
       Some(crate::rest::openapi::BlockLiveTags {

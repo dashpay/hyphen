@@ -22,18 +22,14 @@ extern crate self as hyphend;
 
 #[cfg(feature = "daemon")]
 mod api_metrics;
-#[cfg(all(feature = "bench", feature = "daemon"))]
-pub mod bench;
-#[cfg(feature = "daemon")]
-mod cache;
-#[cfg(feature = "daemon")]
-pub(crate) mod consensus;
+#[cfg(test)]
+mod architecture;
 #[cfg(feature = "daemon")]
 mod config;
 #[cfg(feature = "daemon")]
-mod datadir;
+pub(crate) mod consensus;
 #[cfg(feature = "daemon")]
-mod db;
+mod datadir;
 #[cfg(feature = "daemon")]
 pub mod error;
 #[cfg(feature = "daemon")]
@@ -52,10 +48,6 @@ pub mod live;
 mod lockfile;
 #[cfg(feature = "daemon")]
 mod policy;
-#[cfg(feature = "daemon")]
-mod readiness;
-#[cfg(feature = "daemon")]
-pub mod recovery;
 #[cfg(all(feature = "daemon", feature = "tests"))]
 pub mod rest;
 #[cfg(all(feature = "daemon", not(feature = "tests")))]
@@ -64,11 +56,7 @@ mod rest;
 pub mod sources;
 #[cfg(all(feature = "daemon", not(feature = "tests")))]
 mod sources;
-#[cfg(feature = "daemon")]
-pub mod sql;
-#[cfg(feature = "daemon")]
-pub mod store;
-#[cfg(any(test, all(feature = "tests", feature = "daemon")))]
+#[cfg(all(feature = "daemon", any(test, feature = "tests")))]
 pub mod tests;
 #[cfg(feature = "daemon")]
 pub mod tx;

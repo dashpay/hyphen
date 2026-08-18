@@ -1,0 +1,118 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT height, hash, prev_hash, merkle_root, time, bits, nonce, version, size,\n                tx_count, chainwork, cb_height, cb_merkle_root, cb_merkle_flags,\n                cb_best_cl_height, cb_best_cl_sig, cb_credit_pool\n           FROM blocks WHERE hash = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "prev_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "merkle_root",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "time",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "bits",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "nonce",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "size",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "tx_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "chainwork",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "cb_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "cb_merkle_root",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 13,
+        "name": "cb_merkle_flags",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "cb_best_cl_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "cb_best_cl_sig",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 16,
+        "name": "cb_credit_pool",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "efe38f4601e1d481cd21d2a38e90e5df231c83fdcf7baa644f219c326d5872f1"
+}

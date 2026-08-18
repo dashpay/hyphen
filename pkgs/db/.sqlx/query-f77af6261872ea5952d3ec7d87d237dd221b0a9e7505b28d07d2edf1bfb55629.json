@@ -1,0 +1,104 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH page AS (\n             SELECT txid, block_height, block_pos FROM address_txs\n              WHERE address = $1 AND (block_height, block_pos, txid) < ($2, $3, $4)\n              ORDER BY block_height DESC, block_pos DESC, txid DESC LIMIT $5\n           )  -- fetches limit+1; the extra row is only the has-more signal\n           SELECT t.txid, p.block_height, p.block_pos, b.time::bigint AS \"block_time!\",\n                  t.version, t.tx_type AS \"tx_type: HyDbTxType\", t.size, t.value_out,\n                  (COALESCE(received.value, 0) - COALESCE(sent.value, 0))::bigint AS \"net_value!\",\n                  CASE WHEN (COALESCE(received.value, 0) - COALESCE(sent.value, 0)) > 0\n                       THEN 'in' ELSE 'out' END AS \"direction!\",\n                  t.fee\n             FROM page AS p\n             JOIN transactions AS t ON t.block_height = p.block_height AND t.txid = p.txid\n             JOIN blocks AS b ON b.height = p.block_height\n             LEFT JOIN LATERAL (\n               SELECT COALESCE(SUM(o.value), 0)::bigint AS value FROM tx_outputs AS o\n                WHERE o.block_height = p.block_height AND o.txid = p.txid AND o.address = $1\n             ) AS received ON TRUE\n             LEFT JOIN LATERAL (\n               SELECT COALESCE(SUM(i.prev_value), 0)::bigint AS value FROM tx_inputs AS i\n                WHERE i.block_height = p.block_height AND i.txid = p.txid\n                  AND i.prev_address = $1 AND i.prev_value IS NOT NULL\n             ) AS sent ON TRUE\n            ORDER BY p.block_height DESC, p.block_pos DESC, p.txid DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "txid",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "block_pos",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "block_time!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "tx_type: HyDbTxType",
+        "type_info": {
+          "Custom": {
+            "name": "tx_type",
+            "kind": {
+              "Enum": [
+                "normal",
+                "provider_register",
+                "provider_update_service",
+                "provider_update_registrar",
+                "provider_update_revoke",
+                "coinbase",
+                "quorum_commitment",
+                "asset_lock",
+                "asset_unlock",
+                "mnhf"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "size",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "value_out",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "net_value!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "direction!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "fee",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4",
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "f77af6261872ea5952d3ec7d87d237dd221b0a9e7505b28d07d2edf1bfb55629"
+}

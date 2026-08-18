@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.relname::text AS \"relation!\",\n                pg_total_relation_size(c.oid)::bigint AS \"bytes!\"\n           FROM pg_class c\n           JOIN pg_namespace n ON n.oid = c.relnamespace\n          WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')\n          ORDER BY pg_total_relation_size(c.oid) DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "relation!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "bytes!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "765e497d50a9ce365e715871f587d73d99f2b93b9977d1b9acd053f3359545f2"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM validator_counts",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "737fc0f8dfa8ed8565aaf43181a2bfd6d7554c0d2d2fdaf5a24ddcd8812b1e11"
+}

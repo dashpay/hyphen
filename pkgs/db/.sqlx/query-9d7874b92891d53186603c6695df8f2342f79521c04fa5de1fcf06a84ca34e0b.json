@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT txid, block_pos, version, tx_type AS \"tx_type: HyDbTxType\", lock_time, size,\n                  value_out, input_count, output_count\n             FROM transactions\n            WHERE block_height = $1\n            ORDER BY block_pos ASC, txid ASC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "txid",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_pos",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "tx_type: HyDbTxType",
+        "type_info": {
+          "Custom": {
+            "name": "tx_type",
+            "kind": {
+              "Enum": [
+                "normal",
+                "provider_register",
+                "provider_update_service",
+                "provider_update_registrar",
+                "provider_update_revoke",
+                "coinbase",
+                "quorum_commitment",
+                "asset_lock",
+                "asset_unlock",
+                "mnhf"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "lock_time",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "size",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "value_out",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "input_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "output_count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9d7874b92891d53186603c6695df8f2342f79521c04fa5de1fcf06a84ca34e0b"
+}

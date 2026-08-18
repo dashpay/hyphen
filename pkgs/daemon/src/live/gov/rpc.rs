@@ -9,16 +9,17 @@
 use std::sync::Arc;
 
 use crate::lifecycle::Lifecycle;
+use crate::live::state::LiveState;
 use crate::live::stream::StreamHub;
 use crate::sources::CoreRpcClient;
 
 /// Periodically refresh governance state until shutdown.
 pub async fn refresh_loop(
-  pool: crate::sql::SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<CoreRpcClient>,
   lifecycle: Arc<Lifecycle>,
   refresh_secs: u64,
   stream_hub: Option<Arc<StreamHub>>,
 ) {
-  super::state::refresh_loop(pool, rpc, lifecycle, refresh_secs, stream_hub).await;
+  super::state::refresh_loop(live_state, rpc, lifecycle, refresh_secs, stream_hub).await;
 }

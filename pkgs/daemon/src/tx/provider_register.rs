@@ -30,7 +30,8 @@ pub fn to_effect(
   p2sh_version: u8,
 ) -> ValidatorEffect {
   let (core_addrs, plat_p2p_addrs, plat_https_addrs) = net_info_to_addrs(&p.net_info);
-  let payout_addr = dash_script::derive_address(p.script_payout.as_bytes(), p2pkh_version, p2sh_version);
+  let payout_addr =
+    dash_script::derive_address(p.script_payout.as_bytes(), p2pkh_version, p2sh_version);
   let owner_address = Some(dash_script::encode_key_id(&p.key_id_owner, p2pkh_version));
   let voting_address = Some(dash_script::encode_key_id(&p.key_id_voting, p2pkh_version));
   ValidatorEffect::Insert(ValidatorInsert {

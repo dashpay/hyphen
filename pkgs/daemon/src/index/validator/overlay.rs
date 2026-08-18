@@ -11,9 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::sql::SqlPool;
-
-use crate::error::DaemonError;
+use crate::live::state::LiveState;
 use crate::utils::{self, HashEndian};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,67 +26,63 @@ pub struct ValidatorOverlay {
   pub revocation_reason: Option<i32>,
 }
 
-pub async fn fetch_overlay_map(
-  pool: &SqlPool,
-) -> Result<HashMap<String, ValidatorOverlay>, DaemonError> {
-  let rows = crate::sql::live::protx::snapshot(pool).await?;
-  Ok(
-    rows
-      .into_iter()
-      .map(|row| {
-        (
-          utils::view_hex(&row.pro_tx_hash, HashEndian::Ser),
-          ValidatorOverlay {
-            current_type: row.validator_type,
-            current_status: row.current_status,
-            last_paid_height: row.last_paid_height,
-            consecutive_payments: row.consecutive_payments,
-            pose_penalty: row.pose_penalty,
-            pose_revived_height: row.pose_revived_height,
-            pose_ban_height: row.pose_ban_height,
-            revocation_reason: row.revocation_reason,
-          },
-        )
-      })
-      .collect(),
-  )
+pub fn fetch_overlay_map(live_state: &LiveState) -> HashMap<String, ValidatorOverlay> {
+  let Some(snapshot) = live_state.protx() else {
+    return HashMap::new();
+  };
+  snapshot
+    .values()
+    .map(|entry| {
+      (
+        utils::view_hex(&entry.pro_tx_hash, HashEndian::Ser),
+        ValidatorOverlay {
+          current_type: entry.validator_type.clone(),
+          current_status: entry.current_status.clone(),
+          last_paid_height: entry.last_paid_height,
+          consecutive_payments: entry.consecutive_payments,
+          pose_penalty: entry.pose_penalty,
+          pose_revived_height: entry.pose_revived_height,
+          pose_ban_height: entry.pose_ban_height,
+          revocation_reason: entry.revocation_reason,
+        },
+      )
+    })
+    .collect()
 }
 
 #[cfg(test)]
 mod tests {
   use super::ValidatorOverlay;
-  use crate::utils::HashEndian;
+  use crate::live::state::{LiveState, ProTxEntry, ProtxSnapshot};
+  use crate::utils::{self, HashEndian};
 
-  #[tokio::test]
-  async fn fetch_overlay_map_reads_persisted_rows_when_pg_is_configured(
-  ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(pool) = crate::tests::pg_pool().await? else {
-      return Ok(());
-    };
-    crate::sql::bootstrap::reset(&pool).await?;
+  fn entry(pro_tx_hash: Vec<u8>) -> ProTxEntry {
+    ProTxEntry {
+      pro_tx_hash,
+      validator_type: Some("Evo".to_owned()),
+      current_status: Some("valid".to_owned()),
+      last_paid_height: Some(42),
+      consecutive_payments: None,
+      pose_penalty: None,
+      pose_revived_height: None,
+      pose_ban_height: None,
+      revocation_reason: None,
+      updated_at: 100,
+    }
+  }
 
-    let mut tx = pool.begin().await?;
-    crate::sql::live::protx::replace_snapshot(
-      &mut tx,
-      &[crate::sql::live::protx::ValidatorProTxSnapshotRow {
-        pro_tx_hash: vec![0x11; 32],
-        validator_type: Some("Evo".to_owned()),
-        current_status: Some("valid".to_owned()),
-        last_paid_height: Some(42),
-        consecutive_payments: None,
-        pose_penalty: None,
-        pose_revived_height: None,
-        pose_ban_height: None,
-        revocation_reason: None,
-        updated_at: 100,
-      }],
-    )
-    .await?;
-    tx.commit().await?;
+  #[test]
+  fn fetch_overlay_map_keys_serialized_hashes_by_public_hex() {
+    let live = LiveState::new();
+    // pro_tx_hash is stored serialized-endian; the overlay map is keyed by the
+    // public view hex, so a lookup by that hex must resolve the entry.
+    let ser: Vec<u8> = [0x00u8, 0x11, 0x22, 0x33].repeat(8);
+    live.set_protx(ProtxSnapshot::from_entries(vec![entry(ser.clone())]));
 
-    let overlay = super::fetch_overlay_map(&pool).await?;
+    let overlay = super::fetch_overlay_map(&live);
+    let public_hex = utils::view_hex(&ser, HashEndian::Ser);
     assert_eq!(
-      overlay.get(&"11".repeat(32)),
+      overlay.get(&public_hex),
       Some(&ValidatorOverlay {
         current_type: Some("Evo".to_owned()),
         current_status: Some("valid".to_owned()),
@@ -100,39 +94,11 @@ mod tests {
         revocation_reason: None,
       })
     );
-    Ok(())
   }
 
-  #[tokio::test]
-  async fn fetch_overlay_map_matches_serialized_hash_rows_by_public_hex(
-  ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(pool) = crate::tests::pg_pool().await? else {
-      return Ok(());
-    };
-    crate::sql::bootstrap::reset(&pool).await?;
-
-    let public_hex = "00112233".repeat(8);
-    let mut tx = pool.begin().await?;
-    crate::sql::live::protx::replace_snapshot(
-      &mut tx,
-      &[crate::sql::live::protx::ValidatorProTxSnapshotRow {
-        pro_tx_hash: crate::utils::decode_hex_to(&public_hex, HashEndian::Ser)?,
-        validator_type: Some("Evo".to_owned()),
-        current_status: Some("valid".to_owned()),
-        last_paid_height: None,
-        consecutive_payments: None,
-        pose_penalty: None,
-        pose_revived_height: None,
-        pose_ban_height: None,
-        revocation_reason: None,
-        updated_at: 100,
-      }],
-    )
-    .await?;
-    tx.commit().await?;
-
-    let overlay = super::fetch_overlay_map(&pool).await?;
-    assert!(overlay.contains_key(&public_hex));
-    Ok(())
+  #[test]
+  fn fetch_overlay_map_empty_without_snapshot() {
+    let live = LiveState::new();
+    assert!(super::fetch_overlay_map(&live).is_empty());
   }
 }

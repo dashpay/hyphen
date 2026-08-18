@@ -12,8 +12,6 @@ use directories::BaseDirs;
 
 use crate::error::DaemonError;
 
-const MIN_FREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
-
 /// Resolves the data directory, using the override if provided,
 /// otherwise falling back to the platform default.
 ///
@@ -46,24 +44,4 @@ pub fn ensure_exists(path: &Path) -> Result<(), DaemonError> {
     context: "create datadir",
     source: e,
   })
-}
-
-/// Verifies at least 5 GB of free space is available.
-///
-/// # Errors
-///
-/// Returns `DaemonError::Io` when free space cannot be queried, or
-/// `DaemonError::InsufficientDisk` when the threshold is not met.
-pub fn check_free_space(path: &Path) -> Result<(), DaemonError> {
-  let free = fs2::free_space(path).map_err(|e| DaemonError::Io {
-    context: "check free space",
-    source: e,
-  })?;
-  if free < MIN_FREE_BYTES {
-    return Err(DaemonError::InsufficientDisk {
-      available: free,
-      required: MIN_FREE_BYTES,
-    });
-  }
-  Ok(())
 }

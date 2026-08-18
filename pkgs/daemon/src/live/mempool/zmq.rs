@@ -8,31 +8,32 @@
 
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
+use hyphen_db::HyphenDb;
 use tokio::sync::broadcast;
 
-use crate::index::spent::cache::SpentQueryCache;
 use crate::lifecycle::Lifecycle;
+use crate::live::state::LiveState;
 use crate::sources::ZmqEvent;
 
-/// Persist recent mempool transaction changes from ZMQ until shutdown.
+/// Track recent mempool transaction changes in RAM from ZMQ until shutdown.
+#[allow(clippy::too_many_arguments)]
 pub async fn sync_recent_loop(
-  pool: SqlPool,
+  db: HyphenDb,
+  live_state: Arc<LiveState>,
   rx: broadcast::Receiver<ZmqEvent>,
   lifecycle: Arc<Lifecycle>,
   keep: usize,
   p2pkh_version: u8,
   p2sh_version: u8,
-  spent_cache: Arc<SpentQueryCache>,
 ) {
   super::state::sync_recent_loop(
-    pool,
+    db,
+    live_state,
     rx,
     lifecycle,
     keep,
     p2pkh_version,
     p2sh_version,
-    spent_cache,
   )
   .await;
 }

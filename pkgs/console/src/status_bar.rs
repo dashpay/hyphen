@@ -18,18 +18,6 @@ use crate::theme;
 
 fn recovery_status(state: &AppState) -> Option<String> {
   let snap = state.snapshot.as_ref()?;
-  let block = snap.stages.iter().find(|stage| stage.stage == "block")?;
-  let rocks_tip = snap.ingestion_tip.map(|height| height as i32)?;
-  if block.indexed_height < 0 && rocks_tip >= 0 {
-    return Some(format!("rebuild pg -1/{rocks_tip} from local RocksDB"));
-  }
-  if block.indexed_height < rocks_tip {
-    let remaining = rocks_tip.saturating_sub(block.indexed_height);
-    return Some(format!(
-      "rebuild pg {}/{} from local RocksDB  remaining {}",
-      block.indexed_height, rocks_tip, remaining
-    ));
-  }
   let progress = &snap.chain_progress_diag;
   if progress.recovery_state != "clean" {
     return Some(match progress.recovery_height {
@@ -119,7 +107,7 @@ fn draw_left(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
   } else {
     let hints = if state.focus == Focus::Main && state.section == Section::Overview {
       match state.overview_sub {
-        OverviewSubFocus::Stores => "j/k:nav  c:compact  d:disconnect  w:rewind  Tab:focus  q:quit",
+        OverviewSubFocus::Stores => "j/k:nav  d:disconnect  w:rewind  Tab:focus  q:quit",
         OverviewSubFocus::Indices => {
           "j/k:nav  Enter:browse  r:reindex  d:disconnect  w:rewind  /:filter  n/p:page  Tab:focus  q:quit"
         }

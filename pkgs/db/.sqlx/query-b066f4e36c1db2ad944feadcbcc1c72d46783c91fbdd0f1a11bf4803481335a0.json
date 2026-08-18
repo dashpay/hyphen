@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT payload FROM sptx_payloads WHERE txid = $1 AND block_height = $2\n          ORDER BY block_height DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payload",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b066f4e36c1db2ad944feadcbcc1c72d46783c91fbdd0f1a11bf4803481335a0"
+}

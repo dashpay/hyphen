@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT protx_hash FROM validators\n          WHERE display_hex(protx_hash) LIKE $1 ESCAPE '\\'\n          ORDER BY last_updated_height DESC, registered_height DESC, protx_hash ASC\n          LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "protx_hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5fd75a2da058ded57e536cad72f8cda8bd1f86f89ee1bb95ff071cd041229464"
+}

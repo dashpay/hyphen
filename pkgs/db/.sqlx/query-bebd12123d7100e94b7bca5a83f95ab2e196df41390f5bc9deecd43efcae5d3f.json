@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT height, tx_count, utxos_spendable, utxos_unspendable, blockchain_size,\n                credit_pool_balance, circulating_supply, difficulty\n           FROM block_metrics\n          WHERE height >= $1 AND height <= $2\n            AND ($3 <= 1 OR (height % $3) = 0)\n          ORDER BY height ASC\n          LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "tx_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "utxos_spendable",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "utxos_unspendable",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "blockchain_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "credit_pool_balance",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "circulating_supply",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "difficulty",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "bebd12123d7100e94b7bca5a83f95ab2e196df41390f5bc9deecd43efcae5d3f"
+}

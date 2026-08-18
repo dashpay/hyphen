@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT total FROM transactions_summary WHERE singleton) AS \"tx_total!\",\n                (SELECT total FROM supply_summary WHERE singleton) AS \"supply_total!\",\n                (SELECT included_supply FROM supply_summary WHERE singleton) AS \"supply_included!\",\n                (SELECT unspendable_value FROM supply_summary WHERE singleton) AS \"supply_unspendable!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tx_total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "supply_total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "supply_included!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "supply_unspendable!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "45df94052805a0cafaea7528cfd78760bda216d0be074d933082430f9edc77b4"
+}

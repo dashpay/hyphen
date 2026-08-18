@@ -31,9 +31,15 @@ pub enum DaemonError {
     source: std::io::Error,
   },
   Db(String),
-  RestSource { message: String, kind: RestErrorKind },
+  RestSource {
+    message: String,
+    kind: RestErrorKind,
+  },
   Config(String),
-  Pg { message: String, code: Option<String> },
+  Pg {
+    message: String,
+    code: Option<String>,
+  },
   Index(String),
 }
 
@@ -122,7 +128,7 @@ fn classify_pg(code: Option<&str>, message: &str) -> Outcome {
       _ if sqlstate.starts_with("40") => Outcome::Warning, // Transaction Rollback (deadlock, serialization)
       _ if sqlstate.starts_with("53") => Outcome::Warning, // Insufficient Resources
       _ if sqlstate.starts_with("57") => Outcome::Warning, // Operator Intervention (admin shutdown)
-      "55006" => Outcome::Warning,                          // database in recovery
+      "55006" => Outcome::Warning,                         // database in recovery
       _ if sqlstate.starts_with("23") => Outcome::Error,   // Integrity Constraint Violation
       _ if sqlstate.starts_with("42") => Outcome::Error,   // Syntax/Access Rule Violation
       _ => Outcome::Error,

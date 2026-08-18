@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE address_stats AS a SET\n           balance = u.balance, total_received = u.total_received, tx_count = u.tx_count,\n           utxo_count = u.utxo_count, first_seen_height = u.first_seen_height,\n           last_seen_height = u.last_seen_height\n         FROM undo_address_stats AS u\n        WHERE u.height = $1 AND u.existed AND a.address = u.address",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed2c6ef4cad7ae6840e25b5cdd56de6459e525ef13529c67584862ae05c30a15"
+}

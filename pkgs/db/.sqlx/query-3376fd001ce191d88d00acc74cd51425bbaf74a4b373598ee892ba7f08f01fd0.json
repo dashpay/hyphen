@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN(height) AS lo, MAX(height) AS hi FROM undo_blocks",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lo",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "hi",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "3376fd001ce191d88d00acc74cd51425bbaf74a4b373598ee892ba7f08f01fd0"
+}

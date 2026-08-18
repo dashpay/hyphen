@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM validators WHERE protx_hash = ANY($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "ByteaArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d7876c47b27376b567dd139b4dc8bdf8a860d01e5f08c2caf4da86f654c27fe"
+}

@@ -4,27 +4,23 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! Wire-shaped IPC supervisor.
+//! Wire-shaped IPC supervisor: the Unix-socket server the console connects
+//! to, the heartbeat snapshot broadcaster, and the operator command loop.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rocksdb::DB;
+use hyphen_db::{HyDbIngest, HyphenDb};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::api_metrics::ApiServerMetrics;
 use crate::error::DaemonError;
-use crate::index;
-use crate::index::batch::BatchSizerRegistry;
-use crate::index::BlockIndexerWorker;
-use crate::ingest::IngestRuntime;
+use crate::ingest::IngestStatus;
 use crate::init::Options;
 use crate::ipc::verb::CommandCtx;
 use crate::lifecycle::Lifecycle;
-use crate::readiness::ReadinessCache;
 use crate::sources::{CoreRpcClient, CoreZmqSource, RestSource};
-use crate::store::manager::SecondaryStoreSet;
 use crate::visor::{
   await_supervisable_task, spawn_supervised_task, InterruptGate, SupervisedHandle, Visor,
 };
@@ -33,38 +29,19 @@ use hyphend::wire;
 /// Inputs needed to construct the IPC supervisor.
 pub(crate) struct IpcVisorConfig {
   pub socket_path: PathBuf,
-  pub heartbeat_db_path: PathBuf,
   pub options: Options,
-  pub write_pool: crate::sql::SqlPool,
-  pub query_pool: crate::sql::SqlPool,
-  pub admin_pool: crate::sql::SqlPool,
-  pub db: Arc<DB>,
-  pub secondary_stores: Arc<SecondaryStoreSet>,
+  pub hydb: HyphenDb,
+  pub ingest: Arc<HyDbIngest>,
+  pub ingest_status: Arc<IngestStatus>,
+  pub progress_rx: tokio::sync::watch::Receiver<hyphen_db::HyDbProgress>,
   pub source: Arc<dyn RestSource>,
   pub rpc: Option<Arc<CoreRpcClient>>,
   pub zmq: Option<Arc<CoreZmqSource>>,
   pub event_tx: broadcast::Sender<wire::msg::DaemonMessage>,
   pub lifecycle: Arc<Lifecycle>,
-  pub ingest_runtime: Arc<IngestRuntime>,
-  pub block_worker: Arc<BlockIndexerWorker>,
-  pub batch_registry: BatchSizerRegistry,
   pub config_snapshot: Arc<wire::msg::ConfigSnapshot>,
   pub pg_diag_base: Arc<wire::msg::PostgresDiag>,
   pub api_metrics: Arc<ApiServerMetrics>,
-  pub readiness_cache: Arc<ReadinessCache>,
-  pub controls:
-    Arc<tokio::sync::Mutex<std::collections::HashMap<index::Stage, index::IndexerControl>>>,
-  pub revalidate_schema: Arc<std::sync::atomic::AtomicBool>,
-  pub control_plane_pause_active: Arc<std::sync::atomic::AtomicBool>,
-  pub operator_pause_requested: Arc<std::sync::atomic::AtomicBool>,
-  pub pausing_tx: tokio::sync::watch::Sender<std::collections::BTreeSet<String>>,
-  pub suspend_tx: tokio::sync::watch::Sender<std::collections::BTreeSet<String>>,
-  pub pausing_rx: tokio::sync::watch::Receiver<std::collections::BTreeSet<String>>,
-  pub suspend_rx: tokio::sync::watch::Receiver<std::collections::BTreeSet<String>>,
-  pub chain_state_lock: Arc<tokio::sync::RwLock<()>>,
-  pub p2pkh_version: u8,
-  pub p2sh_version: u8,
-  pub block_time_secs: f64,
 }
 
 impl std::fmt::Debug for IpcVisorConfig {
@@ -153,27 +130,17 @@ impl Visor for IpcVisor {
     if self.heartbeat_task.is_none() {
       let spec = crate::ipc::heartbeat_supervised_task(crate::ipc::HeartbeatWorkerTaskConfig {
         options: self.cfg.options.clone(),
-        write_pool: self.cfg.write_pool.clone(),
-        query_pool: self.cfg.query_pool.clone(),
-        admin_pool: self.cfg.admin_pool.clone(),
-        db: Arc::clone(&self.cfg.db),
-        secondary_stores: Arc::clone(&self.cfg.secondary_stores),
-        db_path: self.cfg.heartbeat_db_path.clone(),
+        hydb: self.cfg.hydb.clone(),
         source: Arc::clone(&self.cfg.source),
         rpc: self.cfg.rpc.clone(),
         zmq: self.cfg.zmq.clone(),
         event_tx: self.cfg.event_tx.clone(),
         lifecycle: Arc::clone(&self.cfg.lifecycle),
-        ingestion_runtime: Arc::clone(&self.cfg.ingest_runtime),
-        block_worker: Arc::clone(&self.cfg.block_worker),
-        batch_registry: self.cfg.batch_registry.clone(),
+        ingest_status: Arc::clone(&self.cfg.ingest_status),
+        progress_rx: self.cfg.progress_rx.clone(),
         config_snapshot: Arc::clone(&self.cfg.config_snapshot),
         pg_diag_base: Arc::clone(&self.cfg.pg_diag_base),
         api_metrics: Arc::clone(&self.cfg.api_metrics),
-        readiness_cache: Arc::clone(&self.cfg.readiness_cache),
-        revalidate_schema: Arc::clone(&self.cfg.revalidate_schema),
-        pausing_rx: self.cfg.pausing_rx.clone(),
-        suspend_rx: self.cfg.suspend_rx.clone(),
       });
       let handle = SupervisedHandle::new(spec.initial.worker.clone());
       self.heartbeat_worker = Some(handle.clone());
@@ -193,22 +160,9 @@ impl Visor for IpcVisor {
         .take()
         .ok_or_else(|| DaemonError::Config("ipc command receiver already consumed".to_owned()))?;
       let ctx = CommandCtx {
-        pool: self.cfg.write_pool.clone(),
-        db: Arc::clone(&self.cfg.db),
-        secondary_stores: Arc::clone(&self.cfg.secondary_stores),
+        hydb: self.cfg.hydb.clone(),
+        ingest: Arc::clone(&self.cfg.ingest),
         event_tx: self.cfg.event_tx.clone(),
-        controls: Arc::clone(&self.cfg.controls),
-        pausing_tx: self.cfg.pausing_tx.clone(),
-        suspend_tx: self.cfg.suspend_tx.clone(),
-        revalidate_schema: Arc::clone(&self.cfg.revalidate_schema),
-        ingestion_monitor: Arc::clone(&self.cfg.ingest_runtime),
-        block_worker: Arc::clone(&self.cfg.block_worker),
-        control_plane_pause_active: Arc::clone(&self.cfg.control_plane_pause_active),
-        operator_pause_requested: Arc::clone(&self.cfg.operator_pause_requested),
-        chain_state_lock: Arc::clone(&self.cfg.chain_state_lock),
-        p2pkh_version: self.cfg.p2pkh_version,
-        p2sh_version: self.cfg.p2sh_version,
-        block_time_secs: self.cfg.block_time_secs,
       };
       let spec = crate::ipc::command_supervised_task(crate::ipc::CommandWorkerTaskConfig {
         cmd_rx,

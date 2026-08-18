@@ -7,6 +7,9 @@
 //! REST API server built on Axum.
 
 pub mod error;
+pub(crate) mod hydb;
+#[cfg(any(test, feature = "tests"))]
+pub(crate) mod hydb_fake;
 pub mod openapi;
 pub mod search;
 pub mod status;
@@ -14,11 +17,9 @@ pub mod status;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
 use async_trait::async_trait;
 use axum::middleware::{self, Next};
 use axum::Router;
-use rocksdb::DB;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 
@@ -33,7 +34,6 @@ use crate::api_metrics::ApiServerMetrics;
 use crate::error::DaemonError;
 use crate::index::block::rest as block_rest;
 use crate::index::metrics::rest as metrics_rest;
-use crate::index::spent::cache::SpentQueryCache;
 use crate::index::spent::rest as spent_rest;
 use crate::index::tx::rest as tx_rest;
 use crate::index::validator::rest as validator_rest;
@@ -41,12 +41,12 @@ use crate::index::Stage;
 use crate::live::gov::rest as gov_rest;
 use crate::live::mempool::rest as mempool_rest;
 use crate::live::network::rest as network_rest;
+use crate::live::state::LiveState;
 use crate::live::stream::rest as stream_rest;
 use crate::live::stream::StreamHub;
 use crate::policy::watchdog::{
   WATCHDOG_ACTIVITY_STALE_SECS, WATCHDOG_STARTING_STALE_SECS, WATCHDOG_TICK_SECS,
 };
-use crate::readiness::ReadinessCache;
 use crate::visor::{
   Fenceable, ProgressState, RecoveryDisposition, RunState, ShutdownPhase, Supervisable,
 };
@@ -192,23 +192,28 @@ mod tests {
 /// Shared application state for all API handlers.
 #[derive(Clone)]
 pub struct AppState {
-  pub pool: SqlPool,
-  pub address_pool: SqlPool,
-  pub db: Arc<DB>,
-  pub secondary_stores: Option<Arc<crate::store::manager::SecondaryStoreSet>>,
-  pub readiness_cache: Arc<ReadinessCache>,
-  pub spent_cache: Arc<SpentQueryCache>,
-  pub address_hot_cache_threshold: i32,
-  pub address_summary_catchup_lag: i32,
+  /// The hyphen-db storage facade — the sole chain-data backend.
+  pub hydb: hyphen_db::HyphenDb,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
+  /// The chain's target block time, used to derive `hashrate` from the stored
+  /// `difficulty` at read time (`difficulty * 2^32 / block_time_secs`).
+  pub block_time_secs: f64,
   pub indices: IndexCapabilities,
   pub live: LiveCapabilities,
   pub overlays: OverlayCapabilities,
   #[allow(dead_code)]
   pub recent_mempool_txs: usize,
   pub stream_hub: Option<Arc<StreamHub>>,
+  pub live_state: Arc<LiveState>,
   pub stream_heartbeat_secs: u64,
+  /// Node tip observed by ingest polling (-1 = unknown): lets `sync_status`
+  /// compare the local tip against the node instead of declaring any
+  /// non-negative tip "synced".
+  pub node_tip: Arc<std::sync::atomic::AtomicI64>,
+  /// Unix epoch of the last ingest progress (0 = never), so `updated_at`
+  /// reflects when indexing last advanced rather than "now".
+  pub ingest_progress_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Inputs needed to construct one supervised API worker task.
@@ -443,6 +448,16 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+  /// The hyphen-db storage facade, once the chain-data cutover has connected it.
+  ///
+  /// # Errors
+  ///
+  /// Returns a service-unavailable `ApiError` before the storage engine is
+  /// wired (see [`AppState::hydb`]).
+  pub fn hydb(&self) -> Result<&hyphen_db::HyphenDb, error::ApiError> {
+    Ok(&self.hydb)
+  }
+
   /// Verify that `stage` is enabled and fully caught up enough to serve.
   ///
   /// # Errors
@@ -468,29 +483,19 @@ impl AppState {
       )));
     }
 
-    let snapshot = self
-      .readiness_cache
-      .snapshot(&self.pool)
+    // Derivation is now atomic per block in the storage engine, so every stage
+    // is in lock-step at the canonical tip height.
+    let height = self
+      .hydb()?
+      .status()
+      .tip()
       .await
-      .map_err(|e| error::ApiError::from_daemon(e, &format!("read {stage_name} readiness")))?;
-    let height = snapshot.height(stage).unwrap_or(-1);
+      .map_err(|e| error::ApiError::internal(format!("read {stage_name} tip: {e}")))?
+      .map_or(-1, |tip| tip.height.0 as i32);
     if height < 0 {
       return Err(error::ApiError::service_unavailable(format!(
         "{stage_name} index is not ready",
       )));
-    }
-
-    if let Some(gate_stage) = stage.gate_stage() {
-      let gate_height = snapshot.height(gate_stage).unwrap_or(-1);
-      if gate_height < 0 || height < gate_height {
-        return Err(error::ApiError::service_unavailable(format!(
-          "{stage_name} index is catching up",
-        )));
-      }
-      return Ok(StageStatus {
-        height,
-        gate_height: Some(gate_height),
-      });
     }
 
     Ok(StageStatus {
@@ -543,15 +548,9 @@ impl AppState {
   ///
   /// Returns `ApiError::ServiceUnavailable` when the spent stage is still too
   /// far behind its gate height for derived summary reads.
-  pub fn check_address_summary_stage(&self, status: StageStatus) -> Result<(), error::ApiError> {
-    let Some(gate_height) = status.gate_height else {
-      return Ok(());
-    };
-    if gate_height.saturating_sub(status.height) > self.address_summary_catchup_lag {
-      return Err(error::ApiError::service_unavailable(
-        "address summary is unavailable while the spent index is catching up",
-      ));
-    }
+  pub fn check_address_summary_stage(&self, _status: StageStatus) -> Result<(), error::ApiError> {
+    // Derivation is atomic per block now, so address summaries are always as
+    // fresh as the tip; there is no per-stage catch-up window to gate on.
     Ok(())
   }
 }

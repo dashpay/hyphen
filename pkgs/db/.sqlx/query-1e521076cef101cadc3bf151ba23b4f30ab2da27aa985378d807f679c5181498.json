@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO address_txs (address, block_height, txid, block_pos)\n           SELECT t.address, $1, t.txid, t.block_pos\n             FROM UNNEST($2::text[], $3::bytea[], $4::int4[]) AS t(address, txid, block_pos)\n           ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "TextArray",
+        "ByteaArray",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1e521076cef101cadc3bf151ba23b4f30ab2da27aa985378d807f679c5181498"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE validators SET addr_core_p2p = $2, addr_platform_p2p = $3,\n           addr_platform_https = $4, operator_payout_address = $5, last_updated_height = $6\n         WHERE protx_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cf4c7f024ed433ab8fbebd1141eee9e3cbe774d0f6430adfe730832d50517c9b"
+}

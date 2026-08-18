@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM utxo_set WHERE outpoint IN\n           (SELECT outpoint FROM tx_outputs WHERE block_height = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4365112e17065eb65a7e04a4f986ee4d856725413ee56f89a43f3b80bfd9bcf0"
+}

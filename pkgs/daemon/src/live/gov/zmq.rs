@@ -8,20 +8,20 @@
 
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
 use tokio::sync::broadcast;
 
 use crate::lifecycle::Lifecycle;
+use crate::live::state::LiveState;
 use crate::live::stream::StreamHub;
 use crate::sources::{CoreRpcClient, ZmqEvent};
 
 /// Trigger governance refreshes from ZMQ governance deltas until shutdown.
 pub async fn refresh_from_zmq_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<CoreRpcClient>,
   rx: broadcast::Receiver<ZmqEvent>,
   lifecycle: Arc<Lifecycle>,
   stream_hub: Option<Arc<StreamHub>>,
 ) {
-  super::state::refresh_from_zmq_loop(pool, rpc, rx, lifecycle, stream_hub).await;
+  super::state::refresh_from_zmq_loop(live_state, rpc, rx, lifecycle, stream_hub).await;
 }

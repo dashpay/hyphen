@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO address_stats\n           (address, balance, total_received, tx_count, utxo_count,\n            first_seen_height, last_seen_height)\n         SELECT t.address, t.balance_delta, t.received, t.tx_delta, t.utxo_delta, $1, $1\n           FROM UNNEST($2::text[], $3::int8[], $4::int8[], $5::int4[], $6::int4[])\n             AS t(address, balance_delta, received, tx_delta, utxo_delta)\n         ON CONFLICT (address) DO UPDATE SET\n           balance = address_stats.balance + EXCLUDED.balance,\n           total_received = address_stats.total_received + EXCLUDED.total_received,\n           tx_count = address_stats.tx_count + EXCLUDED.tx_count,\n           utxo_count = address_stats.utxo_count + EXCLUDED.utxo_count,\n           last_seen_height = EXCLUDED.last_seen_height",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "TextArray",
+        "Int8Array",
+        "Int8Array",
+        "Int4Array",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44ce09f6f1aae9a3ed7d201bf45c80cbdc8368963f371c3e7326f4c886cf152d"
+}

@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT block_height, block_pos, version, tx_type AS \"tx_type: HyDbTxType\",\n                lock_time, size, value_out, fee\n           FROM transactions WHERE txid = $1\n          ORDER BY block_height DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "block_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_pos",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "tx_type: HyDbTxType",
+        "type_info": {
+          "Custom": {
+            "name": "tx_type",
+            "kind": {
+              "Enum": [
+                "normal",
+                "provider_register",
+                "provider_update_service",
+                "provider_update_registrar",
+                "provider_update_revoke",
+                "coinbase",
+                "quorum_commitment",
+                "asset_lock",
+                "asset_unlock",
+                "mnhf"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "lock_time",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "size",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "value_out",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "fee",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "7b25fa988dc4316cc9713f6cf63328d80e00da981d7fb4b9fd68844e1c59e4a3"
+}

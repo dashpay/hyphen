@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE transactions_summary SET total = $1 WHERE singleton",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "62d2a535da8aa2d6d472ca81319874627a8bd89dd40d4007a0477b4de6a9a2f1"
+}

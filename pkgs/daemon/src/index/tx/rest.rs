@@ -11,6 +11,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::rest::error::ApiError;
+use crate::rest::hydb::{hydb_err, hydb_hash, tx_type_str};
 use crate::rest::openapi::{
   ErrorResponse, RawTxResponse, SearchResponse, SearchTxResult, TxDetail, TxInput, TxListResponse,
   TxOutput, TxScriptPubKey, TxScriptSig, TxSummary, TxTags,
@@ -60,94 +61,91 @@ pub async fn get_tx(
     .map_err(|_| ApiError::bad_request("invalid txid hex"))?;
   let (primary_txid, secondary_txid) = txid_lookup.ordered_candidates(HashEndian::Ser);
 
-  let row = match super::sql::transaction(&state.pool, &primary_txid).await {
-    Ok(Some(row)) => Some(row),
-    Ok(None) => {
-      if let Some(secondary_txid) = secondary_txid.as_ref() {
-        super::sql::transaction(&state.pool, secondary_txid)
-          .await
-          .map_err(|e| ApiError::internal(format!("query: {e}")))?
-      } else {
-        None
-      }
+  let txs = state.hydb()?.txs();
+  let mut detail = txs
+    .get(hydb_hash(&primary_txid)?)
+    .await
+    .map_err(|e| hydb_err(e, "transaction"))?;
+  if detail.is_none() {
+    if let Some(secondary_txid) = secondary_txid.as_ref() {
+      detail = txs
+        .get(hydb_hash(secondary_txid)?)
+        .await
+        .map_err(|e| hydb_err(e, "transaction"))?;
     }
-    Err(e) => return Err(ApiError::internal(format!("query: {e}"))),
-  };
+  }
 
-  if let Some(row) = row {
+  if let Some(detail) = detail {
     let stage = state
       .stage_status_typed(crate::index::Stage::Transaction)
       .await?;
-    let has_address_index = state.indices.address;
+    let txid_bytes = detail.txid.as_bytes().to_vec();
 
-    let input_rows = super::sql::transaction_inputs(&state.pool, &row.txid, has_address_index)
-      .await
-      .map_err(|e| ApiError::internal(format!("inputs: {e}")))?;
-
-    let vin: Vec<TxInput> = input_rows
+    let vin: Vec<TxInput> = detail
+      .inputs
       .iter()
-      .map(|row| TxInput {
-        n: row.vin_index,
+      .map(|input| TxInput {
+        n: input.vin_index,
         script_sig: TxScriptSig {
-          hex: hex::encode(&row.script_sig),
+          hex: hex::encode(&input.script_sig),
         },
-        sequence: row.sequence,
-        address: row.prev_address.clone(),
-        value: row.prev_value,
-        txid: row
-          .prev_txid
+        sequence: input.sequence,
+        address: input.prev_address.as_ref().map(|address| address.0.clone()),
+        value: input.prev_value,
+        txid: input
+          .prev_outpoint
           .as_ref()
-          .map(|txid| utils::view_hex(txid, HashEndian::Ser)),
-        vout: row.prev_vout,
-        coinbase: row
-          .prev_txid
-          .is_none()
-          .then(|| hex::encode(&row.script_sig)),
+          .map(|outpoint| utils::view_hex(outpoint.txid.as_bytes(), HashEndian::Ser)),
+        vout: input
+          .prev_outpoint
+          .as_ref()
+          .map(|outpoint| outpoint.vout as i32),
+        coinbase: input.coinbase.then(|| hex::encode(&input.script_sig)),
       })
       .collect();
 
-    let output_rows = super::sql::transaction_outputs(&state.pool, &row.txid, has_address_index)
-      .await
-      .map_err(|e| ApiError::internal(format!("outputs: {e}")))?;
-
-    let vout: Vec<TxOutput> = output_rows
+    let vout: Vec<TxOutput> = detail
+      .outputs
       .iter()
-      .map(|row| TxOutput {
-        n: row.vout_index,
-        value: row.value,
+      .map(|output| TxOutput {
+        n: output.vout_index,
+        value: output.value,
         script_pub_key: TxScriptPubKey {
-          hex: hex::encode(&row.script_pubkey),
+          hex: hex::encode(&output.script_pubkey),
         },
-        address: row.address.clone(),
-        spent: row.spent_txid.is_some(),
+        address: output.address.as_ref().map(|address| address.0.clone()),
+        spent: output.spent_by.is_some(),
       })
       .collect();
 
-    let payload = super::sql::transaction_payload(&state.pool, &row.txid)
-      .await
-      .map_err(|e| ApiError::internal(format!("payload: {e}")))?
-      .map(|row| crate::tx::enrich_api(&row.tx_type.to_string(), &row.payload));
-    let stored_tx_type = row.tx_type.to_string();
+    let stored_tx_type = tx_type_str(detail.tx_type);
     let public_tx_type = crate::tx::public_tx_type(
-      &stored_tx_type,
-      output_rows.iter().map(|row| row.script_pubkey.as_slice()),
+      stored_tx_type,
+      detail
+        .outputs
+        .iter()
+        .map(|output| output.script_pubkey.as_slice()),
     );
+    let payload = detail
+      .payload
+      .as_ref()
+      .map(|payload| crate::tx::enrich_api(stored_tx_type, payload));
 
-    let live = super::overlay::indexed_live(&state, &row.txid).await?;
-    let is_coinbase = row.block_pos == 0;
+    let live = super::overlay::indexed_live(&state, &txid_bytes).await?;
+    let is_coinbase = detail.block_pos == 0;
     return Ok(Json(TxDetail {
       as_of_height: Some(stage.height),
-      txid: utils::view_hex(&row.txid, HashEndian::Ser),
-      block_height: Some(row.block_height),
-      block_pos: Some(row.block_pos),
-      version: row.version as i16,
+      txid: utils::view_hex(&txid_bytes, HashEndian::Ser),
+      block_height: Some(detail.block_height.0 as i32),
+      block_pos: Some(detail.block_pos),
+      version: detail.version as i16,
       tx_type: public_tx_type.to_owned(),
-      lock_time: row.lock_time,
-      size: row.size,
-      value_out: row.value_out,
-      input_count: row.input_count,
-      output_count: row.output_count,
-      fee: row.fee,
+      lock_time: detail.lock_time,
+      size: detail.size,
+      value_out: detail.value_out,
+      input_count: detail.inputs.len() as i32,
+      output_count: detail.outputs.len() as i32,
+      fee: detail.fee,
       tags: TxTags {
         mined: true,
         coinbase: is_coinbase,
@@ -195,43 +193,43 @@ pub async fn get_rawtx(
     .map_err(|_| ApiError::bad_request("invalid txid hex"))?;
   let (primary_txid, secondary_txid) = txid_lookup.ordered_candidates(HashEndian::Ser);
 
-  let row = match super::sql::transaction_location(&state.pool, &primary_txid).await {
-    Ok(Some(row)) => Some(row),
-    Ok(None) => {
-      if let Some(secondary_txid) = secondary_txid.as_ref() {
-        super::sql::transaction_location(&state.pool, secondary_txid)
-          .await
-          .map_err(|e| ApiError::internal(format!("query: {e}")))?
-      } else {
-        None
-      }
+  let hydb = state.hydb()?;
+  let mut detail = hydb
+    .txs()
+    .get(hydb_hash(&primary_txid)?)
+    .await
+    .map_err(|e| hydb_err(e, "transaction location"))?;
+  if detail.is_none() {
+    if let Some(secondary_txid) = secondary_txid.as_ref() {
+      detail = hydb
+        .txs()
+        .get(hydb_hash(secondary_txid)?)
+        .await
+        .map_err(|e| hydb_err(e, "transaction location"))?;
     }
-    Err(e) => return Err(ApiError::internal(format!("query: {e}"))),
-  };
+  }
 
-  if let Some(row) = row {
+  if let Some(detail) = detail {
     let stage = state
       .stage_status_typed(crate::index::Stage::Transaction)
       .await?;
-    let block_hash = crate::index::block::sql::block_hash_for_height(&state.pool, row.block_height)
+    let block_hash = hydb
+      .blocks()
+      .hash_for_height(detail.block_height)
       .await
-      .map_err(|e| ApiError::internal(format!("block hash: {e}")))?
+      .map_err(|e| hydb_err(e, "block hash for tx"))?
       .ok_or_else(|| ApiError::internal("block not found for tx"))?;
-
-    let db = &state.db;
-    let blocks_cf = db
-      .cf_handle(crate::db::CF_BLOCKS)
-      .ok_or_else(|| ApiError::internal("blocks CF missing"))?;
-
-    let raw_block = db
-      .get_cf(blocks_cf, &block_hash)
-      .map_err(|e| ApiError::internal(format!("rocksdb: {e}")))?
+    let raw_block = hydb
+      .blocks()
+      .raw_bytes(block_hash)
+      .await
+      .map_err(|e| hydb_err(e, "raw block"))?
       .ok_or_else(|| ApiError::not_found("raw block not in store"))?;
 
     let ranges = dash_primitives::block::tx_byte_ranges(&raw_block)
       .map_err(|e| ApiError::internal(format!("tx ranges: {e}")))?;
     let (start, end) = ranges
-      .get(row.block_pos as usize)
+      .get(detail.block_pos as usize)
       .ok_or_else(|| ApiError::internal("tx position out of range"))?;
 
     return Ok(Json(RawTxResponse {
@@ -277,24 +275,25 @@ pub async fn list_txs(
     .as_ref()
     .map_or(stage.height, |cursor| cursor.as_of_height);
   let before = decode_tx_cursor_key(cursor.as_ref())?;
+  let before_cursor = before.as_ref().map(|(height, pos, txid)| {
+    hyphen_db::HyDbCursor(format!("{height}:{pos}:{}", hex::encode(txid)))
+  });
 
-  let before_ref = before
-    .as_ref()
-    .map(|(height, pos, txid)| (*height, *pos, txid.as_slice()));
-  let mut rows = super::sql::list_transactions(&state.pool, limit + 1, before_ref)
+  let txs = state.hydb()?.txs();
+  let page = txs
+    .list(limit as u32, before_cursor)
     .await
-    .map_err(|e| ApiError::internal(format!("query: {e}")))?;
-  let has_more = rows.len() as i64 > limit;
-  rows.truncate(limit as usize);
-  let next_cursor = if has_more {
-    rows
+    .map_err(|e| hydb_err(e, "list transactions"))?;
+  let next_cursor = if page.next_cursor.is_some() {
+    page
+      .items
       .last()
       .map(|row| {
         encode_cursor(&TxCursor {
           as_of_height,
-          block_height: row.block_height,
+          block_height: row.block_height.0 as i32,
           block_pos: row.block_pos,
-          txid: utils::view_hex(&row.txid, HashEndian::Ser),
+          txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
         })
       })
       .transpose()?
@@ -302,14 +301,15 @@ pub async fn list_txs(
     None
   };
 
-  let value: Vec<TxSummary> = rows
+  let value: Vec<TxSummary> = page
+    .items
     .iter()
     .map(|row| TxSummary {
-      txid: utils::view_hex(&row.txid, HashEndian::Ser),
-      block_height: row.block_height,
+      txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
+      block_height: row.block_height.0 as i32,
       block_pos: row.block_pos,
       version: row.version as i16,
-      tx_type: row.tx_type.to_string(),
+      tx_type: tx_type_str(row.tx_type).to_owned(),
       lock_time: row.lock_time,
       size: row.size,
       value_out: row.value_out,
@@ -321,10 +321,10 @@ pub async fn list_txs(
       },
     })
     .collect();
-  let total_count = super::sql::transactions_summary(&state.pool)
+  let total_count = txs
+    .total()
     .await
-    .map_err(|e| ApiError::internal(format!("summary: {e}")))?
-    .total;
+    .map_err(|e| hydb_err(e, "transactions summary"))? as i64;
   Ok(Json(IndexedCursorPage {
     as_of_height,
     total_count,
@@ -365,15 +365,18 @@ pub(crate) async fn search_by_txid(
   query: &str,
   txid_bytes: &[u8],
 ) -> Result<Option<SearchResponse>, ApiError> {
-  if let Some(row) = super::sql::transaction(&state.pool, txid_bytes)
+  if let Some(detail) = state
+    .hydb()?
+    .txs()
+    .get(hydb_hash(txid_bytes)?)
     .await
-    .map_err(|e| ApiError::from_daemon(e, "search transaction"))?
+    .map_err(|e| hydb_err(e, "search transaction"))?
   {
     return Ok(Some(SearchResponse::Tx(SearchTxResult {
-      tx_hash: utils::view_hex(&row.txid, HashEndian::Ser),
+      tx_hash: utils::view_hex(detail.txid.as_bytes(), HashEndian::Ser),
       tx_tags: TxTags {
         mined: true,
-        coinbase: row.block_pos == 0,
+        coinbase: detail.block_pos == 0,
       },
     })));
   }
@@ -392,18 +395,22 @@ pub(crate) async fn search_by_txid_prefix(
   prefix: &str,
   limit: i64,
 ) -> Result<Vec<SearchResponse>, ApiError> {
-  let rows = super::sql::search_transactions_by_prefix(&state.pool, prefix, limit)
+  let hashes = state
+    .hydb()?
+    .txs()
+    .search_prefix(prefix.to_owned(), limit.max(0) as u32)
     .await
-    .map_err(|e| ApiError::from_daemon(e, "search transaction prefix"))?;
+    .map_err(|e| hydb_err(e, "search transaction prefix"))?;
   Ok(
-    rows
+    hashes
       .into_iter()
-      .map(|row| {
+      .map(|txid| {
         SearchResponse::Tx(SearchTxResult {
-          tx_hash: utils::view_hex(&row.txid, HashEndian::Ser),
+          tx_hash: utils::view_hex(txid.as_bytes(), HashEndian::Ser),
+          // Prefix hits carry no positional detail; coinbase can't be inferred.
           tx_tags: TxTags {
             mined: true,
-            coinbase: row.block_pos == 0,
+            coinbase: false,
           },
         })
       })
@@ -413,33 +420,7 @@ pub(crate) async fn search_by_txid_prefix(
 
 #[cfg(test)]
 mod tests {
-  use std::fs;
-  use std::sync::Arc;
-  use std::time::{SystemTime, UNIX_EPOCH};
-
   use axum::extract::{Path, State};
-  use rocksdb::DB;
-
-  use crate::rest::{AppState, IndexCapabilities, LiveCapabilities, OverlayCapabilities};
-
-  async fn seed_sync_state(pool: &crate::sql::SqlPool) -> Result<(), crate::error::DaemonError> {
-    for stage in [
-      "block",
-      "transaction",
-      "script",
-      "spent",
-      "metrics",
-      "validator",
-    ] {
-      crate::sql::sync::update_indexed_stage_height(
-        pool,
-        crate::index::Stage::from_name(stage).expect("stage should be valid"),
-        12,
-      )
-      .await?;
-    }
-    Ok(())
-  }
 
   fn normal_tx_bytes() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -456,12 +437,32 @@ mod tests {
     buf
   }
 
+  fn mempool_tx_fixture(txid: Vec<u8>, raw_tx: Vec<u8>) -> crate::live::state::MempoolTx {
+    let size = raw_tx.len() as i32;
+    crate::live::state::MempoolTx {
+      txid,
+      raw_tx,
+      version: 1,
+      tx_type: "normal".to_owned(),
+      lock_time: 0,
+      size,
+      value_out: 42,
+      input_count: 1,
+      output_count: 1,
+      fee: None,
+      payload: None,
+      inputs: Vec::new(),
+      outputs: Vec::new(),
+      first_seen_at: 10,
+      last_seen_at: 20,
+    }
+  }
+
   #[tokio::test]
   async fn mempool_tx_value_marks_unmined_and_islock_state() {
-    let pool = crate::sql::SqlPool::connect_lazy("postgres://localhost/unused")
-      .expect("lazy postgres pool should build");
+    let db = crate::rest::hydb_fake::MemDb::new().into_hydb();
     let value = crate::live::mempool::query::build_tx_value(
-      &pool,
+      &db,
       &"11".repeat(32),
       &[0x11; 32],
       &normal_tx_bytes(),
@@ -483,127 +484,41 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn rawtx_falls_back_to_recent_mempool_cache_when_pg_is_configured(
-  ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(database_url) = std::env::var_os("HYPHEN_TEST_DATABASE_URL") else {
-      return Ok(());
-    };
-    let pool = crate::sql::connect_test_pool(
-      &database_url
-        .into_string()
-        .map_err(|_| "invalid database url")?,
-    )
-    .await?;
-    crate::sql::bootstrap::reset(&pool).await?;
-
+  async fn rawtx_falls_back_to_recent_mempool_cache() {
     let txid = vec![0x11; 32];
     let raw_tx = normal_tx_bytes();
-    let mut tx = pool.begin().await?;
-    crate::sql::live::mempool::upsert_recent_tx(
-      &mut tx,
-      &crate::sql::live::mempool::MempoolRecentTxRow {
-        txid: txid.clone(),
-        raw_tx: raw_tx.clone(),
-        first_seen_at: 10,
-        last_seen_at: 20,
-      },
-    )
-    .await?;
-    tx.commit().await?;
+    let live_state = crate::live::state::LiveState::new();
+    live_state.insert_mempool_tx(mempool_tx_fixture(txid.clone(), raw_tx.clone()));
 
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .map(|d| d.as_nanos())
-      .unwrap_or_default();
-    let db_path = std::env::temp_dir().join(format!("hyphen-rawtx-test-{unique}"));
-    let db = DB::open_default(&db_path)?;
-    let _ = fs::remove_dir_all(&db_path);
-
-    let state = AppState {
-      address_pool: pool.clone(),
-      pool,
-      db: Arc::new(db),
-      secondary_stores: None,
-      readiness_cache: Arc::new(crate::readiness::ReadinessCache::new(false, 1)),
-      spent_cache: Arc::new(crate::index::spent::cache::SpentQueryCache::disabled()),
-      address_hot_cache_threshold: crate::config::DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-      address_summary_catchup_lag: crate::config::DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG,
-      p2pkh_version: 76,
-      p2sh_version: 16,
-      indices: IndexCapabilities {
-        address: false,
-        validator: false,
-        metrics: false,
-      },
-      live: LiveCapabilities {
-        mempool: true,
-        islock: false,
-        network: false,
-        governance: false,
-        stream: false,
-      },
-      overlays: OverlayCapabilities {
-        protx: false,
-        chainlock: false,
-      },
-      recent_mempool_txs: 25,
-      stream_hub: None,
-      stream_heartbeat_secs: 1,
-    };
+    let mut state = crate::tests::app_state();
+    state.live.mempool = true;
+    state.live_state = std::sync::Arc::new(live_state);
+    state.hydb = crate::rest::hydb_fake::MemDb::new().into_hydb();
 
     let value = super::get_rawtx(State(state), Path(hex::encode(txid)))
       .await
       .expect("mempool raw tx should resolve")
       .0;
     assert_eq!(value.rawtx, hex::encode(raw_tx));
-    Ok(())
   }
 
   #[tokio::test]
-  async fn get_tx_prefers_persisted_live_detail_when_pg_is_configured(
-  ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(database_url) = std::env::var_os("HYPHEN_TEST_DATABASE_URL") else {
-      return Ok(());
-    };
-    let pool = crate::sql::connect_test_pool(
-      &database_url
-        .into_string()
-        .map_err(|_| "invalid database url")?,
-    )
-    .await?;
-    crate::sql::bootstrap::reset(&pool).await?;
-
+  async fn get_tx_prefers_live_detail_over_chain_miss() {
     let txid = vec![0x22; 32];
-    let raw_tx = normal_tx_bytes();
-    let mut tx = pool.begin().await?;
-    crate::sql::live::mempool::upsert_recent_tx(
-      &mut tx,
-      &crate::sql::live::mempool::MempoolRecentTxRow {
-        txid: txid.clone(),
-        raw_tx,
-        first_seen_at: 10,
-        last_seen_at: 20,
-      },
-    )
-    .await?;
-    crate::sql::live::mempool::upsert_tx_detail(
-      &mut tx,
-      &crate::sql::live::mempool::MempoolTxDetailRow {
-        txid: txid.clone(),
-        version: 3,
-        tx_type: "normal".to_owned(),
-        lock_time: 5,
-        size: 123,
-        value_out: 42,
-        input_count: 1,
-        output_count: 1,
-        fee: Some(7),
-        payload: Some(serde_json::json!({"memo": "live"})),
-        first_seen_at: 10,
-        last_seen_at: 20,
-      },
-      &[crate::sql::live::mempool::MempoolTxInputRow {
-        txid: txid.clone(),
+    let live_state = crate::live::state::LiveState::new();
+    live_state.insert_mempool_tx(crate::live::state::MempoolTx {
+      txid: txid.clone(),
+      raw_tx: normal_tx_bytes(),
+      version: 3,
+      tx_type: "normal".to_owned(),
+      lock_time: 5,
+      size: 123,
+      value_out: 42,
+      input_count: 1,
+      output_count: 1,
+      fee: Some(7),
+      payload: Some(serde_json::json!({"memo": "live"})),
+      inputs: vec![crate::live::state::MempoolTxInput {
         vin_index: 0,
         sequence: 99,
         prev_txid: Some(vec![0x33; 32]),
@@ -613,70 +528,26 @@ mod tests {
         prev_address: Some("Xprev".to_owned()),
         prev_value: Some(50),
       }],
-      &[crate::sql::live::mempool::MempoolTxOutputRow {
-        txid: txid.clone(),
+      outputs: vec![crate::live::state::MempoolTxOutput {
         vout_index: 0,
         value: 42,
         script_pubkey: vec![0xbb],
         address: Some("Xdest".to_owned()),
       }],
-      &[crate::sql::live::mempool::MempoolAddressTxRow {
-        address: "Xdest".to_owned(),
-        txid: txid.clone(),
-        last_seen_at: 20,
-      }],
-    )
-    .await?;
-    crate::sql::live::islock::upsert_current(
-      &mut tx,
-      &crate::sql::live::islock::IslockCurrentRow {
-        txid: txid.clone(),
-        raw_islock: vec![0xcc],
-        seen_at: 25,
-      },
-    )
-    .await?;
-    tx.commit().await?;
+      first_seen_at: 10,
+      last_seen_at: 20,
+    });
+    live_state.upsert_islock(crate::live::state::IsLock {
+      txid: txid.clone(),
+      raw_islock: vec![0xcc],
+      seen_at: 25,
+    });
 
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .map(|d| d.as_nanos())
-      .unwrap_or_default();
-    let db_path = std::env::temp_dir().join(format!("hyphen-gettx-test-{unique}"));
-    let db = DB::open_default(&db_path)?;
-    let _ = fs::remove_dir_all(&db_path);
-
-    let state = AppState {
-      address_pool: pool.clone(),
-      pool,
-      db: Arc::new(db),
-      secondary_stores: None,
-      readiness_cache: Arc::new(crate::readiness::ReadinessCache::new(false, 1)),
-      spent_cache: Arc::new(crate::index::spent::cache::SpentQueryCache::disabled()),
-      address_hot_cache_threshold: crate::config::DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-      address_summary_catchup_lag: crate::config::DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG,
-      p2pkh_version: 76,
-      p2sh_version: 16,
-      indices: IndexCapabilities {
-        address: false,
-        validator: false,
-        metrics: false,
-      },
-      live: LiveCapabilities {
-        mempool: true,
-        islock: true,
-        network: false,
-        governance: false,
-        stream: false,
-      },
-      overlays: OverlayCapabilities {
-        protx: false,
-        chainlock: false,
-      },
-      recent_mempool_txs: 25,
-      stream_hub: None,
-      stream_heartbeat_secs: 1,
-    };
+    let mut state = crate::tests::app_state();
+    state.live.mempool = true;
+    state.live.islock = true;
+    state.live_state = std::sync::Arc::new(live_state);
+    state.hydb = crate::rest::hydb_fake::MemDb::new().into_hydb();
 
     let value = super::get_tx(State(state), Path(hex::encode(&txid)))
       .await
@@ -695,161 +566,54 @@ mod tests {
     assert_eq!(value.payload, Some(serde_json::json!({"memo": "live"})));
     assert_eq!(value.vin[0].address.as_deref(), Some("Xprev"));
     assert_eq!(value.vout[0].address.as_deref(), Some("Xdest"));
-    Ok(())
   }
 
+  // The indexed `get_tx` path serves chain data from the storage engine; a
+  // seeded in-memory `HyphenDb` fake stands in for a live Postgres.
   #[tokio::test]
-  async fn get_tx_uses_indexed_prevout_address_fallback_when_pg_is_configured(
-  ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(database_url) = std::env::var_os("HYPHEN_TEST_DATABASE_URL") else {
-      return Ok(());
-    };
-    let pool = crate::sql::connect_test_pool(
-      &database_url
-        .into_string()
-        .map_err(|_| "invalid database url")?,
-    )
-    .await?;
-    crate::sql::bootstrap::reset(&pool).await?;
-    seed_sync_state(&pool).await?;
-
+  async fn get_tx_uses_indexed_prevout_address_fallback() -> Result<(), Box<dyn std::error::Error>>
+  {
     let prev_txid = vec![0x33; 32];
     let txid = vec![0x44; 32];
-    let mut block_tx = pool.begin().await?;
-    crate::sql::index::block::insert_block(
-      &mut block_tx,
-      12,
-      &[0x01; 32],
-      &[0x02; 32],
-      &[0x03; 32],
-      0,
-      0,
-      0,
-      1,
-      160,
-      2,
-      "00",
-      &crate::index::block::util::CbTxFields::default(),
-    )
-    .await?;
-    block_tx.commit().await?;
-
-    let mut sql_conn = pool.acquire().await?;
-    crate::sql::index::tx::insert_transaction_row(
-      &mut sql_conn,
-      &crate::sql::index::tx::TxRow {
-        txid: prev_txid.clone(),
-        block_height: 12,
-        block_pos: 0,
-        version: 1,
-        tx_type: crate::sql::types::TxTypeDb::Normal,
-        lock_time: 0,
-        size: 100,
-        value_out: 50,
-        input_count: 1,
-        output_count: 1,
-        fee: Some(0),
-      },
-    )
-    .await?;
-    crate::sql::index::tx::insert_transaction_row(
-      &mut sql_conn,
-      &crate::sql::index::tx::TxRow {
-        txid: txid.clone(),
-        block_height: 12,
-        block_pos: 1,
-        version: 1,
-        tx_type: crate::sql::types::TxTypeDb::Normal,
-        lock_time: 0,
-        size: 100,
-        value_out: 40,
-        input_count: 1,
-        output_count: 1,
-        fee: Some(10),
-      },
-    )
-    .await?;
-    crate::sql::index::tx::insert_transaction_input_rows(
-      &mut sql_conn,
-      12,
-      &txid,
-      &[crate::sql::index::tx::TxInputRow {
+    let detail = hyphen_db::query::HyDbQrTxDetail {
+      txid: hyphen_db::HyDbHash::from_slice(&txid)?,
+      block_height: hyphen_db::HyDbHeight(12),
+      block_pos: 1,
+      version: 1,
+      tx_type: hyphen_db::HyDbTxType::Normal,
+      lock_time: 0,
+      size: 100,
+      value_out: 40,
+      fee: Some(10),
+      inputs: vec![hyphen_db::query::HyDbQrTxIn {
         vin_index: 0,
-        prev_txid: Some(prev_txid.clone()),
-        prev_vout: Some(0),
+        prev_outpoint: Some(hyphen_db::HyDbOutpoint {
+          txid: hyphen_db::HyDbHash::from_slice(&prev_txid)?,
+          vout: 0,
+        }),
+        coinbase: false,
+        prev_address: Some(hyphen_db::HyDbAddress("Xprev".to_owned())),
+        prev_value: Some(50),
         script_sig: vec![0xaa],
         sequence: 99,
-        prev_address: None,
-        prev_value: None,
       }],
-    )
-    .await?;
-    crate::sql::index::tx::insert_transaction_output_rows(
-      &mut sql_conn,
-      &prev_txid,
-      12,
-      &[crate::sql::index::tx::TxOutputRow {
-        vout_index: 0,
-        value: 50,
-        script_pubkey: vec![0xbb],
-        address: Some("Xprev".to_owned()),
-        spent_txid: None,
-      }],
-    )
-    .await?;
-    crate::sql::index::tx::insert_transaction_output_rows(
-      &mut sql_conn,
-      &txid,
-      12,
-      &[crate::sql::index::tx::TxOutputRow {
+      outputs: vec![hyphen_db::query::HyDbQrTxOut {
         vout_index: 0,
         value: 40,
+        address: Some(hyphen_db::HyDbAddress("Xdest".to_owned())),
+        address_type: None,
         script_pubkey: vec![0xcc],
-        address: Some("Xdest".to_owned()),
-        spent_txid: None,
+        spent_by: None,
       }],
-    )
-    .await?;
-
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .map(|d| d.as_nanos())
-      .unwrap_or_default();
-    let db_path = std::env::temp_dir().join(format!("hyphen-indexed-gettx-test-{unique}"));
-    let db = DB::open_default(&db_path)?;
-    let _ = fs::remove_dir_all(&db_path);
-
-    let state = AppState {
-      address_pool: pool.clone(),
-      pool,
-      db: Arc::new(db),
-      secondary_stores: None,
-      readiness_cache: Arc::new(crate::readiness::ReadinessCache::new(false, 1)),
-      spent_cache: Arc::new(crate::index::spent::cache::SpentQueryCache::disabled()),
-      address_hot_cache_threshold: crate::config::DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-      address_summary_catchup_lag: crate::config::DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG,
-      p2pkh_version: 76,
-      p2sh_version: 16,
-      indices: IndexCapabilities {
-        address: true,
-        validator: false,
-        metrics: false,
-      },
-      live: LiveCapabilities {
-        mempool: false,
-        islock: false,
-        network: false,
-        governance: false,
-        stream: false,
-      },
-      overlays: OverlayCapabilities {
-        protx: false,
-        chainlock: false,
-      },
-      recent_mempool_txs: 25,
-      stream_hub: None,
-      stream_heartbeat_secs: 1,
+      payload: None,
     };
+
+    let mut state = crate::tests::app_state();
+    state.indices.address = true;
+    state.hydb = crate::rest::hydb_fake::MemDb::new()
+      .with_tx(detail)
+      .with_tip(12, [0x12; 32])
+      .into_hydb();
 
     let value = super::get_tx(State(state), Path(hex::encode(&txid)))
       .await

@@ -135,8 +135,7 @@ fn command_id(cmd: &DaemonCommand) -> u64 {
   match cmd {
     DaemonCommand::Rewind { id, .. }
     | DaemonCommand::DisconnectTip { id }
-    | DaemonCommand::ForceReindex { id, .. }
-    | DaemonCommand::ForceCompact { id, .. } => *id,
+    | DaemonCommand::ForceReindex { id, .. } => *id,
   }
 }
 
@@ -145,6 +144,5 @@ fn command_name(cmd: &DaemonCommand) -> &'static str {
     DaemonCommand::Rewind { .. } => "rewind",
     DaemonCommand::DisconnectTip { .. } => "disconnect_tip",
     DaemonCommand::ForceReindex { .. } => "force_reindex",
-    DaemonCommand::ForceCompact { .. } => "force_compact",
   }
 }

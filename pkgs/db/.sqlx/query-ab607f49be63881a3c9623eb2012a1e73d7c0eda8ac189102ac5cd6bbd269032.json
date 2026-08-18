@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT address, balance, total_received,\n                  (total_received - balance)::bigint AS \"total_sent!\", tx_count\n             FROM address_stats\n            WHERE balance > 0\n              AND (balance < $1 OR (balance = $1 AND address > $2))\n            ORDER BY balance DESC, address ASC LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "balance",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_received",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_sent!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "tx_count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "ab607f49be63881a3c9623eb2012a1e73d7c0eda8ac189102ac5cd6bbd269032"
+}

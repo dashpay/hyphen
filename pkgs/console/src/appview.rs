@@ -93,12 +93,10 @@ fn draw_prompt_popup(frame: &mut Frame<'_>, prompt: &PromptState) {
 fn confirm_prompt(action: &ControlAction) -> (&'static str, Vec<Line<'static>>) {
   let message = match action {
     ControlAction::Reindex { name, .. } => format!("  Reindex \"{name}\" from scratch?"),
-    ControlAction::Compact { name, .. } => format!("  Compact RocksDB store \"{name}\"?"),
     ControlAction::DisconnectTip => "  Disconnect the current indexed tip?".to_owned(),
   };
   let detail = match action {
     ControlAction::Reindex { .. } => "  All data for this index will be re-processed.",
-    ControlAction::Compact { .. } => "  Compaction can increase IO while it runs.",
     ControlAction::DisconnectTip => "  The daemon will rewind exactly one block.",
   };
 

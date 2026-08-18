@@ -11,28 +11,23 @@ pub mod transport;
 pub mod verb;
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use rocksdb::DB;
+use hyphen_db::HyphenDb;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::api_metrics::ApiServerMetrics;
 use crate::error::DaemonError;
-use crate::index::batch::BatchSizerRegistry;
-use crate::index::BlockIndexerWorker;
-use crate::ingest::IngestRuntime;
+use crate::ingest::IngestStatus;
 use crate::init::Options;
 use crate::ipc::verb::CommandCtx;
 use crate::lifecycle::Lifecycle;
 use crate::policy::watchdog::{
   WATCHDOG_ACTIVITY_STALE_SECS, WATCHDOG_STARTING_STALE_SECS, WATCHDOG_TICK_SECS,
 };
-use crate::readiness::ReadinessCache;
 use crate::sources::{CoreRpcClient, CoreZmqSource, RestSource, RpcSource, ZmqSource};
-use crate::store::manager::SecondaryStoreSet;
 use crate::visor::{
   Fenceable, ProgressState, RecoveryDisposition, RunState, ShutdownPhase, Supervisable,
 };
@@ -59,11 +54,7 @@ impl std::fmt::Debug for IpcServerWorkerTaskConfig {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("IpcServerWorkerTaskConfig")
       .field("socket_path", &self.socket_path)
-      .field("event_tx", &self.event_tx)
-      .field("cmd_tx", &"<mpsc::Sender>")
-      .field("shutdown_rx", &"<watch::Receiver>")
-      .field("lifecycle", &"<Lifecycle>")
-      .finish()
+      .finish_non_exhaustive()
   }
 }
 
@@ -71,58 +62,23 @@ impl std::fmt::Debug for IpcServerWorkerTaskConfig {
 #[derive(Clone)]
 pub(crate) struct HeartbeatWorkerTaskConfig {
   pub options: Options,
-  pub write_pool: crate::sql::SqlPool,
-  pub query_pool: crate::sql::SqlPool,
-  pub admin_pool: crate::sql::SqlPool,
-  pub db: Arc<DB>,
-  pub secondary_stores: Arc<SecondaryStoreSet>,
-  pub db_path: PathBuf,
+  pub hydb: HyphenDb,
   pub source: Arc<dyn RestSource>,
   pub rpc: Option<Arc<CoreRpcClient>>,
   pub zmq: Option<Arc<CoreZmqSource>>,
   pub event_tx: broadcast::Sender<wire::msg::DaemonMessage>,
   pub lifecycle: Arc<Lifecycle>,
-  pub ingestion_runtime: Arc<IngestRuntime>,
-  pub block_worker: Arc<BlockIndexerWorker>,
-  pub batch_registry: BatchSizerRegistry,
+  pub ingest_status: Arc<IngestStatus>,
+  pub progress_rx: tokio::sync::watch::Receiver<hyphen_db::HyDbProgress>,
   pub config_snapshot: Arc<wire::msg::ConfigSnapshot>,
   pub pg_diag_base: Arc<wire::msg::PostgresDiag>,
   pub api_metrics: Arc<ApiServerMetrics>,
-  pub readiness_cache: Arc<ReadinessCache>,
-  pub revalidate_schema: Arc<std::sync::atomic::AtomicBool>,
-  pub pausing_rx: tokio::sync::watch::Receiver<std::collections::BTreeSet<String>>,
-  pub suspend_rx: tokio::sync::watch::Receiver<std::collections::BTreeSet<String>>,
 }
 
 impl std::fmt::Debug for HeartbeatWorkerTaskConfig {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("HeartbeatWorkerTaskConfig")
-      .field("options", &self.options)
-      .field("write_pool", &"<PgPool>")
-      .field("query_pool", &"<PgPool>")
-      .field("admin_pool", &"<PgPool>")
-      .field("db", &"<RocksDb>")
-      .field("secondary_stores", &"<SecondaryStoreSet>")
-      .field("db_path", &self.db_path)
-      .field("source", &"<RestSource>")
-      .field("rpc", &self.rpc.as_ref().map(|_| "<RpcSource>"))
-      .field("zmq", &self.zmq.as_ref().map(|_| "<ZmqSource>"))
-      .field("event_tx", &self.event_tx)
-      .field("lifecycle", &"<Lifecycle>")
-      .field("ingestion_runtime", &self.ingestion_runtime.snapshot())
-      .field("block_worker", &"<BlockIndexerWorker>")
-      .field("batch_registry", &self.batch_registry)
-      .field("config_snapshot", &self.config_snapshot)
-      .field("pg_diag_base", &self.pg_diag_base)
-      .field("api_metrics", &"<ApiServerMetrics>")
-      .field("readiness_cache", &"<ReadinessCache>")
-      .field(
-        "revalidate_schema",
-        &self.revalidate_schema.load(Ordering::Relaxed),
-      )
-      .field("pausing_rx", &"<watch::Receiver>")
-      .field("suspend_rx", &"<watch::Receiver>")
-      .finish()
+      .finish_non_exhaustive()
   }
 }
 
@@ -136,10 +92,7 @@ pub(crate) struct CommandWorkerTaskConfig {
 impl std::fmt::Debug for CommandWorkerTaskConfig {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("CommandWorkerTaskConfig")
-      .field("cmd_rx", &"<mpsc::Receiver>")
-      .field("ctx", &self.ctx)
-      .field("lifecycle", &"<Lifecycle>")
-      .finish()
+      .finish_non_exhaustive()
   }
 }
 
@@ -286,7 +239,7 @@ fn server_worker_task(cfg: IpcServerWorkerTaskConfig) -> WorkerTask<IpcWorker> {
     );
     let result = transport::serve(&cfg.socket_path, cfg.event_tx, cfg.cmd_tx, cfg.shutdown_rx)
       .await
-      .map_err(DaemonError::Db);
+      .map_err(DaemonError::Config);
     ticker.abort();
     runtime.mark_finished();
     result
@@ -315,41 +268,23 @@ fn heartbeat_worker_task(cfg: HeartbeatWorkerTaskConfig) -> WorkerTask<IpcWorker
       Duration::from_secs(WATCHDOG_TICK_SECS),
     );
     let mut state = snapshot::HeartbeatState::new();
-    let mut schema_errors = crate::sql::bootstrap::validate(&cfg.admin_pool)
-      .await
-      .unwrap_or_else(|e| vec![format!("schema validation failed: {e}")]);
     let start_time = Instant::now();
 
     while cfg.lifecycle.running() {
-      if cfg.revalidate_schema.swap(false, Ordering::Relaxed) {
-        schema_errors = crate::sql::bootstrap::validate(&cfg.admin_pool)
-          .await
-          .unwrap_or_else(|e| vec![format!("schema validation failed: {e}")]);
-      }
-
       let ctx = snapshot::HeartbeatCtx {
         options: &cfg.options,
-        write_pool: &cfg.write_pool,
-        query_pool: &cfg.query_pool,
-        admin_pool: &cfg.admin_pool,
-        db: &cfg.db,
-        db_path: &cfg.db_path,
-        secondary_stores: &cfg.secondary_stores,
+        hydb: &cfg.hydb,
         source: cfg.source.as_ref(),
         rpc: cfg.rpc.as_deref().map(|client| client as &dyn RpcSource),
         zmq: cfg.zmq.as_deref().map(|client| client as &dyn ZmqSource),
-        ingestion_runtime: &cfg.ingestion_runtime,
-        block_worker: cfg.block_worker.as_ref(),
-        batch_registry: &cfg.batch_registry,
+        ingest_status: &cfg.ingest_status,
+        progress: *cfg.progress_rx.borrow(),
         config_snap: &cfg.config_snapshot,
         pg_diag_base: &cfg.pg_diag_base,
         api_metrics: &cfg.api_metrics,
-        readiness_cache: &cfg.readiness_cache,
         start_time,
-        pausing_rx: &cfg.pausing_rx,
-        suspend_rx: &cfg.suspend_rx,
       };
-      let snapshot = snapshot::build_snapshot(&ctx, &schema_errors, &mut state).await;
+      let snapshot = snapshot::build_snapshot(&ctx, &mut state).await;
       let _ = cfg
         .event_tx
         .send(wire::msg::DaemonMessage::Snapshot(Box::new(snapshot)));
@@ -376,32 +311,22 @@ pub(crate) fn heartbeat_supervised_task(
   })
 }
 
-/// Build one IPC command worker task without exposing command-loop internals to the visor.
+/// Build one IPC command worker task. Verbs are plain async calls into the
+/// storage engine now, so the loop runs on the shared runtime directly.
 fn command_worker_task(cfg: CommandWorkerTaskConfig) -> WorkerTask<IpcWorker> {
   let worker = IpcWorker::new(Arc::clone(&cfg.lifecycle), "ipc_command_loop", false);
   let runtime = Arc::clone(&worker.runtime);
   let task = async move {
     runtime.mark_started();
-    let lifecycle = Arc::clone(&cfg.lifecycle);
     let ticker = spawn_activity_ticker(
-      Arc::clone(&lifecycle),
+      Arc::clone(&cfg.lifecycle),
       Arc::clone(&runtime),
       Duration::from_secs(WATCHDOG_TICK_SECS),
     );
-    let result = tokio::task::spawn_blocking(move || {
-      tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| DaemonError::Config(format!("command runtime build failed: {e}")))
-        .map(|runtime| {
-          runtime.block_on(verb::handle_commands(cfg.cmd_rx, cfg.ctx, cfg.lifecycle));
-        })
-    })
-    .await
-    .map_err(|join_error| DaemonError::Index(format!("ipc command loop join: {join_error}")))?;
+    verb::handle_commands(cfg.cmd_rx, cfg.ctx, Arc::clone(&cfg.lifecycle)).await;
     ticker.abort();
     runtime.mark_finished();
-    result
+    Ok(())
   };
   WorkerTask::new(worker, task)
 }
@@ -448,7 +373,7 @@ mod tests {
     let now = worker
       .runtime
       .last_progress_epoch()
-      .expect("progress epoch")
+      .unwrap_or_default()
       .saturating_add(HEARTBEAT_STALE_SECS);
 
     assert_eq!(
@@ -478,7 +403,7 @@ mod tests {
     let now = worker
       .runtime
       .last_progress_epoch()
-      .expect("progress epoch")
+      .unwrap_or_default()
       .saturating_add(HEARTBEAT_STALE_SECS);
 
     assert_eq!(

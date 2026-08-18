@@ -61,7 +61,7 @@ pub enum OverviewSubFocus {
 /// Which panel has focus inside the Health page grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthPanel {
-  RocksDb,
+  Storage,
   Postgres,
   Services,
   Status,
@@ -89,7 +89,7 @@ impl HealthPanel {
   /// Return the next panel when moving left/right/up/down inside the 2x2 grid.
   pub fn offset(self, dx: i8, dy: i8) -> Self {
     let (mut col, mut row) = match self {
-      Self::RocksDb => (0_i8, 0_i8),
+      Self::Storage => (0_i8, 0_i8),
       Self::Postgres => (1, 0),
       Self::Services => (0, 1),
       Self::Status => (1, 1),
@@ -97,7 +97,7 @@ impl HealthPanel {
     col = (col + dx).clamp(0, 1);
     row = (row + dy).clamp(0, 1);
     match (col, row) {
-      (0, 0) => Self::RocksDb,
+      (0, 0) => Self::Storage,
       (1, 0) => Self::Postgres,
       (0, 1) => Self::Services,
       _ => Self::Status,
@@ -109,7 +109,6 @@ impl HealthPanel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlAction {
   Reindex { stage: String, name: String },
-  Compact { cf: String, name: String },
   DisconnectTip,
 }
 
@@ -258,7 +257,7 @@ impl AppState {
       browse_filter_active: false,
       page_scroll: 0,
       api_panel: ApiPanel::RestServer,
-      health_panel: HealthPanel::RocksDb,
+      health_panel: HealthPanel::Storage,
       health_scrolls: [0; 4],
       health_scroll_limits: [0; 4],
       index_tree_cursor: 0,

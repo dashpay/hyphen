@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM block_metrics WHERE height = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31bfa799511990e610d220e61ea5489d8c6fc3e5c66267a0ff3db585aff4c7da"
+}

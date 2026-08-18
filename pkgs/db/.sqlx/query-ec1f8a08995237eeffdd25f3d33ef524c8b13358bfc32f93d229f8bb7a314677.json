@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.vout_index, o.value, o.script_pubkey, o.address,\n                o.address_type AS \"address_type: HyDbAddrType\",\n                s.spending_txid AS \"spending_txid?\", s.spending_vin AS \"spending_vin?\"\n           FROM tx_outputs o\n           LEFT JOIN spends s ON s.outpoint = o.outpoint\n          WHERE o.txid = $1 AND o.block_height = $2 ORDER BY o.vout_index",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vout_index",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "value",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "script_pubkey",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "address_type: HyDbAddrType",
+        "type_info": {
+          "Custom": {
+            "name": "address_type",
+            "kind": {
+              "Enum": [
+                "p2pkh",
+                "p2sh",
+                "p2pk",
+                "unknown"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "spending_txid?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "spending_vin?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "ec1f8a08995237eeffdd25f3d33ef524c8b13358bfc32f93d229f8bb7a314677"
+}

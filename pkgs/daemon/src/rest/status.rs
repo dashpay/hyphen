@@ -9,19 +9,19 @@
 use axum::extract::State;
 use axum::Json;
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::error::ApiError;
 use super::openapi::{ErrorResponse, StageStatus, StatusResponse};
 use super::{rfc3339_time, AppState, IndexCapabilities};
 use crate::index::Stage;
-use crate::sql::query::SyncStateRow;
 
 /// Get daemon sync and indexing status.
 ///
 /// # Errors
 ///
-/// Returns `ApiError` when the sync-state query fails or one timestamp cannot
-/// be normalized to RFC 3339.
+/// Returns `ApiError` when the storage-engine tip cannot be read or the current
+/// timestamp cannot be normalized to RFC 3339.
 #[utoipa::path(
   get,
   path = "/api/v1/status",
@@ -33,146 +33,106 @@ use crate::sql::query::SyncStateRow;
   tag = "Status"
 )]
 pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, ApiError> {
-  let rows = crate::sql::query::sync_state_rows(&state.pool)
+  let tip_height = state
+    .hydb()?
+    .status()
+    .tip()
     .await
-    .map_err(|e| ApiError::from_daemon(e, "query status sync_state"))?;
+    .map_err(|e| {
+      ApiError::from_daemon(
+        crate::error::DaemonError::Index(format!("query status tip: {e}")),
+        "query status tip",
+      )
+    })?
+    .map_or(-1, |tip| tip.height.0 as i32);
 
+  // Derivation is atomic per block in the storage engine, so every enabled
+  // stage is lock-step at the canonical tip height. `updated_at` reflects the
+  // last time ingest actually advanced, not the moment of this request; it
+  // falls back to "now" only before the first progress is recorded.
+  let progress_epoch = state
+    .ingest_progress_epoch
+    .load(std::sync::atomic::Ordering::Relaxed);
+  let updated_at = rfc3339_time(if progress_epoch > 0 {
+    progress_epoch.min(i64::MAX as u64) as i64
+  } else {
+    unix_now()
+  })?;
   let mut indices = HashMap::new();
-  let mut block_height: Option<i32> = None;
-
-  for row in &rows {
-    if row.stage == Stage::Block.name() {
-      block_height = Some(row.indexed_height);
-    }
-
+  for stage in enabled_stages(&state.indices) {
     indices.insert(
-      row.stage.clone(),
+      stage.name().to_owned(),
       StageStatus {
-        indexed_height: row.indexed_height,
-        updated_at: rfc3339_time(row.updated_at)?,
+        indexed_height: tip_height,
+        updated_at: updated_at.clone(),
       },
     );
   }
 
+  let node_tip = state.node_tip.load(std::sync::atomic::Ordering::Relaxed);
   Ok(Json(StatusResponse {
-    sync_status: sync_status(&rows, &state.indices).to_string(),
-    block_height: block_height.unwrap_or(-1),
+    sync_status: sync_status(tip_height, node_tip).to_string(),
+    block_height: tip_height,
     indices,
     version: env!("CARGO_PKG_VERSION").to_string(),
   }))
 }
 
-fn sync_status(rows: &[SyncStateRow], indices: &IndexCapabilities) -> &'static str {
-  let heights: HashMap<Stage, i32> = rows
-    .iter()
-    .filter_map(|row| Stage::from_name(&row.stage).map(|stage| (stage, row.indexed_height)))
-    .collect();
-
-  for stage in [
+fn enabled_stages(indices: &IndexCapabilities) -> Vec<Stage> {
+  let flags = crate::index::IndexStageFlags {
+    address: indices.address,
+    metrics: indices.metrics,
+    validator: indices.validator,
+  };
+  [
     Stage::Block,
     Stage::Transaction,
     Stage::Script,
     Stage::Spent,
     Stage::Metrics,
     Stage::Validator,
-  ] {
-    if !stage.enabled_with_flags(crate::index::IndexStageFlags {
-      address: indices.address,
-      metrics: indices.metrics,
-      validator: indices.validator,
-    }) {
-      continue;
-    }
+  ]
+  .into_iter()
+  .filter(|stage| stage.enabled_with_flags(flags))
+  .collect()
+}
 
-    let height = heights.get(&stage).copied().unwrap_or(-1);
-    if height < 0 {
-      return "syncing";
-    }
-
-    if let Some(gate_stage) = stage.gate_stage() {
-      let gate_height = heights.get(&gate_stage).copied().unwrap_or(-1);
-      if gate_height < 0 || height < gate_height {
-        return "syncing";
-      }
-    }
+/// "synced" only when a tip exists AND it has reached the node's reported
+/// height (an unknown node height gives the local tip the benefit of the
+/// doubt — the alternative is never reporting synced without RPC).
+fn sync_status(tip_height: i32, node_tip: i64) -> &'static str {
+  if tip_height < 0 || i64::from(tip_height) < node_tip {
+    "syncing"
+  } else {
+    "synced"
   }
+}
 
-  "synced"
+fn unix_now() -> i64 {
+  SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|d| d.as_secs() as i64)
+    .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
-  use crate::sql::query::SyncStateRow;
-
   use super::sync_status;
 
-  fn row(stage: &str, indexed_height: i32) -> SyncStateRow {
-    SyncStateRow {
-      stage: stage.to_owned(),
-      indexed_height,
-      updated_at: 0,
-    }
+  #[test]
+  fn sync_status_is_syncing_before_first_block() {
+    assert_eq!(sync_status(-1, -1), "syncing");
   }
 
   #[test]
-  fn sync_status_requires_enabled_stages_to_match_their_gates() {
-    let rows = vec![
-      row("block", 100),
-      row("transaction", 99),
-      row("script", 99),
-      row("spent", 99),
-      row("metrics", 100),
-      row("validator", 100),
-    ];
-
-    assert_eq!(
-      sync_status(
-        &rows,
-        &crate::rest::IndexCapabilities {
-          address: true,
-          metrics: true,
-          validator: true,
-        },
-      ),
-      "syncing",
-    );
+  fn sync_status_is_synced_once_a_tip_exists() {
+    assert_eq!(sync_status(0, -1), "synced");
+    assert_eq!(sync_status(1_000_000, -1), "synced");
+    assert_eq!(sync_status(1_000_000, 1_000_000), "synced");
   }
 
   #[test]
-  fn sync_status_ignores_disabled_optional_stages() {
-    let rows = vec![row("block", 100), row("transaction", 100)];
-
-    assert_eq!(
-      sync_status(
-        &rows,
-        &crate::rest::IndexCapabilities {
-          address: false,
-          metrics: false,
-          validator: false,
-        },
-      ),
-      "synced",
-    );
-  }
-
-  #[test]
-  fn sync_status_requires_enabled_optional_stages_to_be_initialized() {
-    let rows = vec![
-      row("block", 100),
-      row("transaction", 100),
-      row("metrics", -1),
-    ];
-
-    assert_eq!(
-      sync_status(
-        &rows,
-        &crate::rest::IndexCapabilities {
-          address: false,
-          metrics: true,
-          validator: false,
-        },
-      ),
-      "syncing",
-    );
+  fn sync_status_is_syncing_while_behind_the_node_tip() {
+    assert_eq!(sync_status(10, 1_000_000), "syncing");
   }
 }

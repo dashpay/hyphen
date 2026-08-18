@@ -39,13 +39,15 @@ use crate::rest::{rfc3339_time, AppState, LiveFeature};
 pub async fn snapshot(State(state): State<AppState>) -> Result<Json<NetworkResponse>, ApiError> {
   state.check_live_feature(LiveFeature::Network)?;
 
-  let row = crate::sql::live::network::snapshot(&state.pool)
-    .await
-    .map_err(|e| ApiError::from_daemon(e, "query network snapshot"))?
+  let row = state
+    .live_state
+    .network()
     .ok_or_else(|| ApiError::service_unavailable("network snapshot is not ready"))?;
-  let validator_aggregates = crate::sql::live::protx::aggregates(&state.pool)
-    .await
-    .map_err(|e| ApiError::from_daemon(e, "query validator snapshot aggregates"))?;
+  let validator_aggregates = state
+    .live_state
+    .protx()
+    .map(|snapshot| snapshot.aggregate())
+    .unwrap_or_default();
   let network_info = serde_json::from_value::<NetworkInfoResponse>(
     row
       .payload

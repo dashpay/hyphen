@@ -33,7 +33,7 @@ impl std::fmt::Debug for BlockCtx {
 }
 
 impl BlockCtx {
-  /// Build a shared block context from raw RocksDB bytes.
+  /// Build a shared block context from raw block bytes.
   ///
   /// # Errors
   ///
@@ -42,8 +42,8 @@ impl BlockCtx {
   pub fn from_raw(height: u32, raw: Vec<u8>) -> Result<Self, DaemonError> {
     let block = bitcoin_consensus_encoding::decode_from_slice::<Block>(&raw)
       .map_err(|e| DaemonError::Index(format!("parse block {height}: {e}")))?;
-    let ranges = tx_byte_ranges(&raw)
-      .map_err(|e| DaemonError::Index(format!("scan txs {height}: {e}")))?;
+    let ranges =
+      tx_byte_ranges(&raw).map_err(|e| DaemonError::Index(format!("scan txs {height}: {e}")))?;
     if ranges.len() != block.transactions.len() {
       return Err(DaemonError::Index(format!(
         "block {height} tx range count {} does not match decoded tx count {}",
@@ -74,7 +74,7 @@ impl BlockCtx {
     &self.block
   }
 
-  /// Return the raw block bytes as read from RocksDB.
+  /// Return the raw serialized block bytes.
   pub fn raw(&self) -> &[u8] {
     &self.raw
   }

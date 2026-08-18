@@ -197,7 +197,8 @@ pub struct TxSummary {
   #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
-  pub lock_time: i32,
+  /// Wide enough for the full u32 nLockTime range.
+  pub lock_time: i64,
   #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
@@ -288,7 +289,8 @@ pub struct TxDetail {
   #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
-  pub lock_time: i32,
+  /// Wide enough for the full u32 nLockTime range.
+  pub lock_time: i64,
   #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
@@ -746,6 +748,9 @@ pub struct ValidatorPose {
 #[derive(Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidatorLive {
+  #[serde(rename = "type")]
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub validator_type: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub valid: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]

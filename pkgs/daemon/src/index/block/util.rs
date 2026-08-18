@@ -37,10 +37,7 @@ pub fn extract_cbtx_fields(block: &Block, _height: u32) -> CbTxFields {
       best_cl_height: cbtx
         .best_cl_height_diff
         .map(|diff| (cbtx.height.to_u32() as i64 - diff as i64) as i32),
-      best_cl_sig: cbtx
-        .best_cl_signature
-        .as_ref()
-        .map(|s| s.0.to_vec()),
+      best_cl_sig: cbtx.best_cl_signature.as_ref().map(|s| s.0.to_vec()),
       credit_pool: cbtx.credit_pool_balance,
     },
     _ => CbTxFields::default(),

@@ -8,62 +8,53 @@
 
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
 use serde_json::json;
 
 use crate::error::DaemonError;
 use crate::lifecycle::Lifecycle;
+use crate::live::state::{LiveState, NetworkSnapshot};
 use crate::live::stream::{LiveEvent, StreamHub};
 use crate::live::warn;
 use crate::policy::api::API_REFRESH_WARN_INTERVAL_SECS;
 use crate::sources::RpcSource;
-use crate::sql;
 
-/// Refresh the persisted network snapshot once from node JSON-RPC.
+/// Refresh the in-RAM network snapshot once from node JSON-RPC.
 ///
 /// # Errors
 ///
-/// Returns `DaemonError::RestSource` when the RPC request fails or
-/// `DaemonError::Pg` when PostgreSQL rejects the write.
+/// Returns `DaemonError::RestSource` when the RPC request fails.
 pub async fn refresh_once(
-  pool: &SqlPool,
+  live_state: &LiveState,
   rpc: &dyn RpcSource,
   stream_hub: Option<&StreamHub>,
 ) -> Result<(), DaemonError> {
   let network_info = rpc.get_network_info().await?;
   let peer_info = rpc.get_peer_info().await?;
-  let row = sql::live::network::NetworkSnapshotRow {
-    payload: json!({
-      "networkInfo": network_info,
-      "peerInfo": peer_info,
-      "peerCount": peer_info.as_array().map_or(0, |peers| peers.len() as i64),
-    }),
+  let payload = json!({
+    "networkInfo": network_info,
+    "peerInfo": peer_info,
+    "peerCount": peer_info.as_array().map_or(0, |peers| peers.len() as i64),
+  });
+  live_state.set_network(NetworkSnapshot {
+    payload: payload.clone(),
     updated_at: now_epoch_secs(),
-  };
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin network snapshot tx: {e}"), code: None })?;
-  sql::live::network::upsert_snapshot(&mut tx, &row).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit network snapshot tx: {e}"), code: None })?;
+  });
   if let Some(stream_hub) = stream_hub {
-    stream_hub.publish(LiveEvent::network(row.payload));
+    stream_hub.publish(LiveEvent::network(payload));
   }
   Ok(())
 }
 
-/// Periodically refresh the persisted network snapshot until shutdown.
+/// Periodically refresh the in-RAM network snapshot until shutdown.
 pub async fn refresh_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<dyn RpcSource>,
   lifecycle: Arc<Lifecycle>,
   refresh_secs: u64,
   stream_hub: Option<Arc<StreamHub>>,
 ) {
   while lifecycle.running() {
-    if let Err(err) = refresh_once(&pool, rpc.as_ref(), stream_hub.as_deref()).await {
+    if let Err(err) = refresh_once(&live_state, rpc.as_ref(), stream_hub.as_deref()).await {
       warn::warn_every(
         "live_network_refresh_failed",
         std::time::Duration::from_secs(API_REFRESH_WARN_INTERVAL_SECS),

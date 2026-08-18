@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sptx_payloads (block_height, txid, tx_type, protx_hash, payload)\n         VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea",
+        {
+          "Custom": {
+            "name": "tx_type",
+            "kind": {
+              "Enum": [
+                "normal",
+                "provider_register",
+                "provider_update_service",
+                "provider_update_registrar",
+                "provider_update_revoke",
+                "coinbase",
+                "quorum_commitment",
+                "asset_lock",
+                "asset_unlock",
+                "mnhf"
+              ]
+            }
+          }
+        },
+        "Bytea",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9a9e4cd225c38b92211a59dd5d18270894993cb98768fb6d18f85cba51d681ef"
+}

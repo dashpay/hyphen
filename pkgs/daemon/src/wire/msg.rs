@@ -154,56 +154,33 @@ pub struct ZmqDiag {
   pub error_counts: Vec<(String, u64)>,
 }
 
-/// Diagnostic snapshot of the RocksDB store.
+/// Diagnostic snapshot of the PostgreSQL storage backend.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RocksDbDiag {
-  /// Estimated live SST bytes across all column families.
-  pub live_sst_bytes: Option<u64>,
-  /// Estimated memtable bytes.
-  pub mem_table_bytes: Option<u64>,
-  /// Block cache bytes currently in use.
-  pub block_cache_usage: Option<u64>,
-  /// Configured block cache capacity in bytes.
-  pub block_cache_capacity: Option<u64>,
-  /// Estimated number of keys in the database.
-  pub estimate_num_keys: Option<u64>,
-  /// Whether a compaction is pending.
-  pub compaction_pending: Option<bool>,
-  /// Number of compactions currently running.
+pub struct StorageDiag {
+  /// PostgreSQL server version string.
+  pub server_version: Option<String>,
+  /// Total size of the daemon's database in bytes.
+  pub database_bytes: Option<u64>,
+  /// Bytes of WAL written since server start (activity indicator).
+  pub wal_bytes: Option<u64>,
+  /// Connections currently open against the daemon's database.
+  pub connections: Option<i64>,
+  /// Server-wide `max_connections` setting.
+  pub max_connections: Option<i64>,
+  /// Autovacuum workers currently running.
+  pub autovacuum_running: Option<i64>,
+  /// Height span covered by the reorg undo tables (lo, hi).
   #[serde(default)]
-  pub num_running_compactions: Option<u64>,
-  /// Configured RocksDB write buffer size in megabytes.
-  pub write_buffer_size_mb: Option<usize>,
-  /// Configured maximum background job count.
-  pub max_background_jobs: Option<i32>,
-  /// Configured maximum open file count.
-  pub max_open_files: Option<i32>,
-  /// Per-column-family live SST sizes: (cf_name, bytes).
+  pub undo_span: Option<(u32, u32)>,
+  /// Per-pool utilization: (pool name, configured size, idle now).
   #[serde(default)]
-  pub cf_sizes: Vec<(String, u64)>,
-  /// Actual on-disk size of the RocksDB directory.
-  #[serde(default)]
-  pub actual_disk_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SecondaryStoreDiag {
-  pub name: String,
-  pub required: bool,
-  pub tip_height: Option<u32>,
-  pub recovery_state: Option<String>,
-  pub recovery_height: Option<u32>,
-  pub live_sst_bytes: Option<u64>,
-  pub estimate_num_keys: Option<u64>,
-  pub actual_disk_bytes: Option<u64>,
-  #[serde(default)]
-  pub cf_sizes: Vec<(String, u64)>,
+  pub pool_stats: Vec<(String, u32, u64)>,
 }
 
 /// Point-in-time ingestion-loop runtime state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IngestionDiag {
-  /// High-level RocksDB ingestion activity state.
+  /// High-level ingestion activity state.
   pub activity: IngestionActivity,
   /// Detailed ingest machine state.
   pub state: IngestionStateName,
@@ -213,11 +190,11 @@ pub struct IngestionDiag {
   pub throttled: bool,
   /// Most recent upstream tip observed by block ingestion polling.
   pub last_polled_tip: Option<u32>,
-  /// RocksDB tip lead over the indexed block height.
+  /// Absorbed-block lead over the connected projection height.
   pub lead_blocks: Option<u32>,
-  /// Configured maximum RocksDB lead before ingestion throttles.
+  /// Configured maximum absorb lead before ingestion throttles.
   pub max_lead_blocks: u32,
-  /// Last time ingestion committed new blocks into RocksDB.
+  /// Last time ingestion connected new blocks into the projection.
   pub last_progress_epoch: Option<u64>,
   /// Last time throttling cleared and ingestion could proceed.
   pub last_throttle_clear_epoch: Option<u64>,
@@ -241,7 +218,7 @@ pub struct IngestionDiag {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IngestionActivity {
-  /// Ingestion is actively appending blocks to RocksDB.
+  /// Ingestion is actively absorbing or connecting blocks.
   Active,
   /// Ingestion is sleeping due to pause or backpressure.
   Sleeping,
@@ -312,7 +289,7 @@ pub enum ForwardProgressState {
 pub enum SchedulerLoopPhase {
   #[default]
   Idle,
-  FetchRocksTip,
+  FetchTip,
   LoadStageHeights,
   ChooseLane,
   RunLane,
@@ -395,7 +372,7 @@ pub struct IndexSchedulerDiag {
   pub last_turn_age_ms: Option<u64>,
 }
 
-/// High-level health classification for the core SQL/RocksDB pipeline.
+/// High-level health classification for the core ingest/connect pipeline.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CorePipelineHealth {
@@ -425,7 +402,7 @@ pub struct CorePipelineDiag {
   /// Whether scheduler truth appears stale relative to observed progress.
   #[serde(default)]
   pub stale_scheduler_state: bool,
-  /// Unix timestamp of the last successful RocksDB ingest commit.
+  /// Unix timestamp of the last successful ingest commit.
   pub last_ingest_success_epoch: Option<u64>,
   /// Unix timestamp of the last successful forward block commit.
   pub last_forward_success_epoch: Option<u64>,
@@ -448,10 +425,19 @@ pub struct PostgresDiag {
   pub query_pool_size: Option<usize>,
   /// Currently available query-pool connections.
   pub query_pool_available: Option<usize>,
+  /// Configured heavy-query-pool connection count.
+  #[serde(default)]
+  pub heavy_query_pool_size: Option<usize>,
+  /// Currently available heavy-query-pool connections.
+  #[serde(default)]
+  pub heavy_query_pool_available: Option<usize>,
   /// Configured admin-pool connection count.
   pub admin_pool_size: Option<usize>,
   /// Currently available admin-pool connections.
   pub admin_pool_available: Option<usize>,
+  /// Statements slower than this threshold are logged (milliseconds).
+  #[serde(default)]
+  pub slow_query_ms: Option<u64>,
   /// Server-wide `max_connections` setting.
   pub max_connections: Option<i32>,
   /// Server-wide `shared_buffers` setting.
@@ -484,10 +470,9 @@ pub struct ConfigSnapshot {
   pub live: ConfigLiveSnapshot,
   /// Resolved overlay feature toggles.
   pub overlays: ConfigOverlaySnapshot,
-  /// Resolved ingestion and batching controls.
-  pub performance: ConfigPerformanceSnapshot,
-  /// Resolved in-process cache settings.
-  pub cache: ConfigCacheSnapshot,
+  /// Resolved PostgreSQL connection settings (URL redacted).
+  #[serde(default)]
+  pub postgres: ConfigPostgresSnapshot,
 }
 
 /// Resolved upstream and storage source configuration.
@@ -597,50 +582,23 @@ pub struct ConfigOverlaySnapshot {
   pub chainlock: bool,
 }
 
-/// Resolved ingestion and batching controls.
+/// Resolved PostgreSQL connection settings published to the console.
+/// The URL is redacted before it ever reaches this struct.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ConfigPerformanceSnapshot {
+pub struct ConfigPostgresSnapshot {
+  /// Redacted connection URL (never contains a password).
   #[serde(default)]
-  /// Fixed ingestion batch size when auto-tuning is disabled.
-  pub ingestion_batch_size: Option<u32>,
+  pub url_redacted: Option<String>,
   #[serde(default)]
-  /// Maximum lead the ingester may build over dependent stages.
-  pub max_ingestion_lead_blocks: Option<u32>,
+  pub write_pool_size: Option<usize>,
   #[serde(default)]
-  /// Number of blocks prefetched from the upstream REST source.
-  pub prefetch_blocks: Option<u32>,
+  pub query_pool_size: Option<usize>,
   #[serde(default)]
-  /// Number of blocks committed per PostgreSQL transaction.
-  pub commit_batch_blocks: Option<u32>,
-  /// Auto-tuner minimum batch size.
+  pub heavy_query_pool_size: Option<usize>,
   #[serde(default)]
-  pub min_batch_size: Option<u32>,
-  /// Auto-tuner maximum batch size.
+  pub admin_pool_size: Option<usize>,
   #[serde(default)]
-  pub max_batch_size: Option<u32>,
-  /// Auto-tuner target batch duration in milliseconds.
-  #[serde(default)]
-  pub target_batch_ms: Option<u64>,
-}
-
-/// Resolved in-process cache settings.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ConfigCacheSnapshot {
-  #[serde(default)]
-  /// Whether in-process query caching is enabled globally.
-  pub enabled: bool,
-  #[serde(default)]
-  /// Whether address query caching is enabled.
-  pub address_enabled: bool,
-  #[serde(default)]
-  /// Byte budget for the address query cache.
-  pub address_budget: Option<String>,
-  #[serde(default)]
-  /// Whether stage-readiness caching is enabled.
-  pub readiness_enabled: bool,
-  #[serde(default)]
-  /// Byte budget for the readiness cache.
-  pub readiness_budget: Option<String>,
+  pub slow_query_ms: Option<u64>,
 }
 
 /// Periodic daemon heartbeat payload sent to IPC clients.
@@ -683,11 +641,8 @@ pub struct DaemonSnapshot {
   #[serde(default)]
   pub server_stats: ApiServerStats,
   #[serde(default)]
-  /// RocksDB diagnostics snapshot.
-  pub rocksdb_diag: RocksDbDiag,
-  #[serde(default)]
-  /// Secondary RocksDB store diagnostics snapshots.
-  pub secondary_store_diags: Vec<SecondaryStoreDiag>,
+  /// PostgreSQL storage diagnostics snapshot.
+  pub storage_diag: StorageDiag,
   #[serde(default)]
   /// PostgreSQL diagnostics snapshot.
   pub postgres_diag: PostgresDiag,
@@ -788,12 +743,5 @@ pub enum DaemonCommand {
     id: u64,
     /// Stable stage identifier to rebuild.
     stage: String,
-  },
-  /// Trigger a full compaction of the named RocksDB CF.
-  ForceCompact {
-    /// Client-chosen correlation identifier.
-    id: u64,
-    /// Column family to compact.
-    cf: String,
   },
 }

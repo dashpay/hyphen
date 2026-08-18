@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO utxo_set (outpoint, address, value, block_height, script_pubkey)\n           SELECT t.outpoint, t.address, t.value, $1, t.script_pubkey\n             FROM UNNEST($2::bytea[], $3::text[], $4::int8[], $5::bytea[])\n               AS t(outpoint, address, value, script_pubkey)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "ByteaArray",
+        "TextArray",
+        "Int8Array",
+        "ByteaArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "18f8eb491fbc780abaccba75d16bcb3e54d04e15684b444995da3e92d05ec3f1"
+}

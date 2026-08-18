@@ -15,7 +15,6 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use crate::error::DaemonError;
-use crate::index::spent::cache::SpentQueryCache;
 use crate::lifecycle::Lifecycle;
 use crate::policy::watchdog::{
   WATCHDOG_ACTIVITY_STALE_SECS, WATCHDOG_STARTING_STALE_SECS, WATCHDOG_TICK_SECS,
@@ -35,6 +34,7 @@ pub mod islock;
 pub mod mempool;
 pub mod network;
 pub mod protx;
+pub mod state;
 pub mod stream;
 pub mod warn;
 pub mod zmq;
@@ -51,7 +51,8 @@ pub(crate) fn event_channel() -> (broadcast::Sender<ZmqEvent>, broadcast::Receiv
 /// Inputs needed to construct a mempool-summary worker task.
 #[derive(Clone, Debug)]
 pub(crate) struct MempoolSummaryWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub db: hyphen_db::HyphenDb,
+  pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub lifecycle: Arc<Lifecycle>,
   pub recent_mempool_txs: usize,
@@ -62,7 +63,7 @@ pub(crate) struct MempoolSummaryWorkerTaskConfig {
 /// Inputs needed to construct a network-refresh worker task.
 #[derive(Clone, Debug)]
 pub(crate) struct NetworkWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub lifecycle: Arc<Lifecycle>,
   pub refresh_secs: u64,
@@ -72,7 +73,7 @@ pub(crate) struct NetworkWorkerTaskConfig {
 /// Inputs needed to construct a chainlock-refresh worker task.
 #[derive(Clone, Debug)]
 pub(crate) struct ChainlockWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub lifecycle: Arc<Lifecycle>,
   pub refresh_secs: u64,
@@ -83,7 +84,7 @@ pub(crate) struct ChainlockWorkerTaskConfig {
 /// Inputs needed to construct a protx-refresh worker task.
 #[derive(Clone, Debug)]
 pub(crate) struct ProtxWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub lifecycle: Arc<Lifecycle>,
   pub refresh_secs: u64,
@@ -92,7 +93,7 @@ pub(crate) struct ProtxWorkerTaskConfig {
 /// Inputs needed to construct a governance-refresh worker task.
 #[derive(Clone, Debug)]
 pub(crate) struct GovernanceWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub lifecycle: Arc<Lifecycle>,
   pub refresh_secs: u64,
@@ -118,19 +119,19 @@ pub(crate) struct StreamWorkerTaskConfig {
 /// Inputs needed to construct a mempool-recent worker task.
 #[derive(Debug)]
 pub(crate) struct MempoolRecentWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub db: hyphen_db::HyphenDb,
+  pub live_state: Arc<state::LiveState>,
   pub rx: broadcast::Receiver<ZmqEvent>,
   pub lifecycle: Arc<Lifecycle>,
   pub keep: usize,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
-  pub spent_cache: Arc<SpentQueryCache>,
 }
 
 /// Inputs needed to construct an islock worker task.
 #[derive(Debug)]
 pub(crate) struct IslockWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub live_state: Arc<state::LiveState>,
   pub rx: broadcast::Receiver<ZmqEvent>,
   pub lifecycle: Arc<Lifecycle>,
 }
@@ -138,7 +139,7 @@ pub(crate) struct IslockWorkerTaskConfig {
 /// Inputs needed to construct a governance-zmq worker task.
 #[derive(Debug)]
 pub(crate) struct GovernanceZmqWorkerTaskConfig {
-  pub pool: crate::sql::SqlPool,
+  pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub rx: broadcast::Receiver<ZmqEvent>,
   pub lifecycle: Arc<Lifecycle>,
@@ -282,7 +283,8 @@ where
 fn mempool_summary_worker_task(cfg: MempoolSummaryWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("mempool_summary", Arc::clone(&cfg.lifecycle), async move {
     mempool::refresh_summary_loop(
-      cfg.pool,
+      cfg.db,
+      cfg.live_state,
       cfg.rpc,
       cfg.lifecycle,
       cfg.recent_mempool_txs,
@@ -309,7 +311,7 @@ pub(crate) fn mempool_summary_supervised_task(
 fn network_worker_task(cfg: NetworkWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("network_refresh", Arc::clone(&cfg.lifecycle), async move {
     network::refresh_loop(
-      cfg.pool,
+      cfg.live_state,
       cfg.rpc,
       cfg.lifecycle,
       cfg.refresh_secs,
@@ -337,7 +339,7 @@ fn chainlock_worker_task(cfg: ChainlockWorkerTaskConfig) -> WorkerTask<LiveWorke
     Arc::clone(&cfg.lifecycle),
     async move {
       chainlock::refresh_loop(
-        cfg.pool,
+        cfg.live_state,
         cfg.rpc,
         cfg.lifecycle,
         cfg.refresh_secs,
@@ -363,7 +365,7 @@ pub(crate) fn chainlock_supervised_task(
 
 fn protx_worker_task(cfg: ProtxWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("protx_refresh", Arc::clone(&cfg.lifecycle), async move {
-    protx::refresh_loop(cfg.pool, cfg.rpc, cfg.lifecycle, cfg.refresh_secs).await;
+    protx::refresh_loop(cfg.live_state, cfg.rpc, cfg.lifecycle, cfg.refresh_secs).await;
     Ok(())
   })
 }
@@ -381,7 +383,7 @@ fn governance_worker_task(cfg: GovernanceWorkerTaskConfig) -> WorkerTask<LiveWor
     Arc::clone(&cfg.lifecycle),
     async move {
       gov::refresh_loop(
-        cfg.pool,
+        cfg.live_state,
         cfg.rpc,
         cfg.lifecycle,
         cfg.refresh_secs,
@@ -452,13 +454,13 @@ pub(crate) fn stream_supervised_task(
 fn mempool_recent_worker_task(cfg: MempoolRecentWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("mempool_recent", Arc::clone(&cfg.lifecycle), async move {
     mempool::sync_recent_loop(
-      cfg.pool,
+      cfg.db,
+      cfg.live_state,
       cfg.rx,
       cfg.lifecycle,
       cfg.keep,
       cfg.p2pkh_version,
       cfg.p2sh_version,
-      cfg.spent_cache,
     )
     .await;
     Ok(())
@@ -468,39 +470,39 @@ fn mempool_recent_worker_task(cfg: MempoolRecentWorkerTaskConfig) -> WorkerTask<
 #[must_use]
 pub(crate) fn mempool_recent_supervised_task(
   rx: broadcast::Sender<ZmqEvent>,
-  pool: crate::sql::SqlPool,
+  db: hyphen_db::HyphenDb,
+  live_state: Arc<state::LiveState>,
   lifecycle: Arc<Lifecycle>,
   keep: usize,
   p2pkh_version: u8,
   p2sh_version: u8,
-  spent_cache: Arc<SpentQueryCache>,
 ) -> SupervisedTaskSpec<LiveWorker> {
   let keep = keep.max(MIN_RECENT_MEMPOOL_TXS_FOR_API);
   let initial = mempool_recent_worker_task(MempoolRecentWorkerTaskConfig {
-    pool: pool.clone(),
+    db: db.clone(),
+    live_state: Arc::clone(&live_state),
     rx: rx.subscribe(),
     lifecycle: Arc::clone(&lifecycle),
     keep,
     p2pkh_version,
     p2sh_version,
-    spent_cache: Arc::clone(&spent_cache),
   });
   SupervisedTaskSpec::new("mempool recent", initial, move || {
     Ok(mempool_recent_worker_task(MempoolRecentWorkerTaskConfig {
-      pool: pool.clone(),
+      db: db.clone(),
+      live_state: Arc::clone(&live_state),
       rx: rx.subscribe(),
       lifecycle: Arc::clone(&lifecycle),
       keep,
       p2pkh_version,
       p2sh_version,
-      spent_cache: Arc::clone(&spent_cache),
     }))
   })
 }
 
 fn islock_worker_task(cfg: IslockWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("islock_sync", Arc::clone(&cfg.lifecycle), async move {
-    islock::sync_current_loop(cfg.pool, cfg.rx, cfg.lifecycle).await;
+    islock::sync_current_loop(cfg.live_state, cfg.rx, cfg.lifecycle).await;
     Ok(())
   })
 }
@@ -508,17 +510,17 @@ fn islock_worker_task(cfg: IslockWorkerTaskConfig) -> WorkerTask<LiveWorker> {
 #[must_use]
 pub(crate) fn islock_supervised_task(
   rx: broadcast::Sender<ZmqEvent>,
-  pool: crate::sql::SqlPool,
+  live_state: Arc<state::LiveState>,
   lifecycle: Arc<Lifecycle>,
 ) -> SupervisedTaskSpec<LiveWorker> {
   let initial = islock_worker_task(IslockWorkerTaskConfig {
-    pool: pool.clone(),
+    live_state: Arc::clone(&live_state),
     rx: rx.subscribe(),
     lifecycle: Arc::clone(&lifecycle),
   });
   SupervisedTaskSpec::new("islock sync", initial, move || {
     Ok(islock_worker_task(IslockWorkerTaskConfig {
-      pool: pool.clone(),
+      live_state: Arc::clone(&live_state),
       rx: rx.subscribe(),
       lifecycle: Arc::clone(&lifecycle),
     }))
@@ -527,7 +529,14 @@ pub(crate) fn islock_supervised_task(
 
 fn governance_zmq_worker_task(cfg: GovernanceZmqWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("governance_zmq", Arc::clone(&cfg.lifecycle), async move {
-    gov::refresh_from_zmq_loop(cfg.pool, cfg.rpc, cfg.rx, cfg.lifecycle, cfg.stream_hub).await;
+    gov::refresh_from_zmq_loop(
+      cfg.live_state,
+      cfg.rpc,
+      cfg.rx,
+      cfg.lifecycle,
+      cfg.stream_hub,
+    )
+    .await;
     Ok(())
   })
 }
@@ -535,13 +544,13 @@ fn governance_zmq_worker_task(cfg: GovernanceZmqWorkerTaskConfig) -> WorkerTask<
 #[must_use]
 pub(crate) fn governance_zmq_supervised_task(
   rx: broadcast::Sender<ZmqEvent>,
-  pool: crate::sql::SqlPool,
+  live_state: Arc<state::LiveState>,
   rpc: Arc<CoreRpcClient>,
   lifecycle: Arc<Lifecycle>,
   stream_hub: Option<Arc<stream::StreamHub>>,
 ) -> SupervisedTaskSpec<LiveWorker> {
   let initial = governance_zmq_worker_task(GovernanceZmqWorkerTaskConfig {
-    pool: pool.clone(),
+    live_state: Arc::clone(&live_state),
     rpc: rpc.clone(),
     rx: rx.subscribe(),
     lifecycle: Arc::clone(&lifecycle),
@@ -549,7 +558,7 @@ pub(crate) fn governance_zmq_supervised_task(
   });
   SupervisedTaskSpec::new("governance zmq", initial, move || {
     Ok(governance_zmq_worker_task(GovernanceZmqWorkerTaskConfig {
-      pool: pool.clone(),
+      live_state: Arc::clone(&live_state),
       rpc: rpc.clone(),
       rx: rx.subscribe(),
       lifecycle: Arc::clone(&lifecycle),

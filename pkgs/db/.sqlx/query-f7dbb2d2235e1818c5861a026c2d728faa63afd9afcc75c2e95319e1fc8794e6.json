@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT summary_tx_total, summary_supply_total, summary_supply_included,\n                summary_supply_unspendable\n           FROM undo_blocks WHERE height = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "summary_tx_total",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "summary_supply_total",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "summary_supply_included",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "summary_supply_unspendable",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f7dbb2d2235e1818c5861a026c2d728faa63afd9afcc75c2e95319e1fc8794e6"
+}

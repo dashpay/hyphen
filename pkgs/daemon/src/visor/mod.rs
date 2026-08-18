@@ -7,7 +7,6 @@
 //! Shared supervision helpers and lifecycle contracts for long-lived daemon
 //! tasks.
 
-pub(crate) mod core;
 pub(crate) mod ipc;
 pub(crate) mod live;
 pub(crate) mod rest;

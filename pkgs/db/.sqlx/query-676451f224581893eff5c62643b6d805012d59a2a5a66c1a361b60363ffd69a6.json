@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tx_inputs\n             (block_height, txid, vin_index, prev_txid, prev_vout, script_sig, sequence,\n              prev_address, prev_value)\n           SELECT $1, t.txid, t.vin_index, t.prev_txid, t.prev_vout, t.script_sig, t.sequence,\n                  t.prev_address, t.prev_value\n             FROM UNNEST($2::bytea[], $3::int4[], $4::bytea[], $5::int4[], $6::bytea[],\n                         $7::int8[], $8::text[], $9::int8[])\n               AS t(txid, vin_index, prev_txid, prev_vout, script_sig, sequence,\n                    prev_address, prev_value)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "ByteaArray",
+        "Int4Array",
+        "ByteaArray",
+        "Int4Array",
+        "ByteaArray",
+        "Int8Array",
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "676451f224581893eff5c62643b6d805012d59a2a5a66c1a361b60363ffd69a6"
+}

@@ -32,7 +32,6 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
   match state.snapshot.as_ref() {
     Some(snap) => {
       let c = &snap.config;
-      let rocks = &snap.rocksdb_diag;
       let pg = &snap.postgres_diag;
 
       section_header(&mut lines, "General");
@@ -50,39 +49,35 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
       );
       lines.push(Line::from(""));
 
-      section_header(&mut lines, "RocksDB");
-      kv(
-        &mut lines,
-        "Write Buffer",
-        &rocks
-          .write_buffer_size_mb
-          .map(|mb| format!("{mb} MB"))
-          .unwrap_or_else(|| "--".into()),
-      );
-      kv(
-        &mut lines,
-        "Max Background",
-        &opt_val(rocks.max_background_jobs),
-      );
-      kv(&mut lines, "Max Open Files", &opt_val(rocks.max_open_files));
-      lines.push(Line::from(""));
-
       section_header(&mut lines, "PostgreSQL");
       kv(&mut lines, "Version", pg.version.as_deref().unwrap_or("--"));
       kv(
         &mut lines,
         "Write Pool",
-        &opt_val(c.sources.postgres_write_pool_size),
+        &opt_val(c.postgres.write_pool_size),
       );
       kv(
         &mut lines,
         "Query Pool",
-        &opt_val(c.sources.postgres_query_pool_size),
+        &opt_val(c.postgres.query_pool_size),
+      );
+      kv(
+        &mut lines,
+        "Heavy Query Pool",
+        &opt_val(c.postgres.heavy_query_pool_size),
       );
       kv(
         &mut lines,
         "Admin Pool",
-        &opt_val(c.sources.postgres_admin_pool_size),
+        &opt_val(c.postgres.admin_pool_size),
+      );
+      kv(
+        &mut lines,
+        "Slow Query",
+        &c.postgres
+          .slow_query_ms
+          .map(|ms| format!("{ms} ms"))
+          .unwrap_or_else(|| "--".into()),
       );
       kv(&mut lines, "Max Connections", &opt_val(pg.max_connections));
       kv(
@@ -100,8 +95,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         "Eff. Cache Size",
         pg.effective_cache_size.as_deref().unwrap_or("--"),
       );
-      if let Some(url) = c.sources.postgres_url.as_deref() {
-        kv(&mut lines, "Connection", &redact_url(url));
+      if let Some(url) = c.postgres.url_redacted.as_deref() {
+        kv(&mut lines, "Connection", url);
       }
       lines.push(Line::from(""));
 
@@ -173,73 +168,10 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
       kv(&mut lines, "ChainLock", &bool_str(c.overlays.chainlock));
       lines.push(Line::from(""));
 
-      section_header(&mut lines, "Cache");
-      kv(&mut lines, "Enabled", &bool_str(c.cache.enabled));
-      kv(
-        &mut lines,
-        "Address Cache",
-        &bool_str(c.cache.address_enabled),
-      );
-      kv(
-        &mut lines,
-        "Address Budget",
-        c.cache.address_budget.as_deref().unwrap_or("--"),
-      );
-      kv(
-        &mut lines,
-        "Readiness Cache",
-        &bool_str(c.cache.readiness_enabled),
-      );
-      kv(
-        &mut lines,
-        "Readiness Budget",
-        c.cache.readiness_budget.as_deref().unwrap_or("--"),
-      );
-      lines.push(Line::from(""));
-
       section_header(&mut lines, "Controls");
-      kv(&mut lines, "Compact Store", "Overview/Stores -> c");
       kv(&mut lines, "Reindex Index", "Overview/Indices -> r");
       kv(&mut lines, "Disconnect Tip", "Overview -> d");
       kv(&mut lines, "Rewind Height", "Overview -> w");
-      lines.push(Line::from(""));
-
-      section_header(&mut lines, "Performance");
-      kv(
-        &mut lines,
-        "Ingestion Batch",
-        &opt_val(c.performance.ingestion_batch_size),
-      );
-      kv(
-        &mut lines,
-        "Max Ingest Lead",
-        &opt_val(c.performance.max_ingestion_lead_blocks),
-      );
-      kv(
-        &mut lines,
-        "Prefetch Blocks",
-        &opt_val(c.performance.prefetch_blocks),
-      );
-      kv(
-        &mut lines,
-        "Commit Batch",
-        &opt_val(c.performance.commit_batch_blocks),
-      );
-      kv(
-        &mut lines,
-        "Batch Min",
-        &opt_val(c.performance.min_batch_size),
-      );
-      kv(
-        &mut lines,
-        "Batch Max",
-        &opt_val(c.performance.max_batch_size),
-      );
-      kv(
-        &mut lines,
-        "Target Batch ms",
-        &opt_val(c.performance.target_batch_ms),
-      );
       lines.push(Line::from(""));
 
       section_header(&mut lines, "Indices");

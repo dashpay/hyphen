@@ -8,40 +8,34 @@
 
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
 use async_trait::async_trait;
-use rocksdb::DB;
 
 use crate::api_metrics::ApiServerMetrics;
 use crate::error::DaemonError;
 use crate::lifecycle::Lifecycle;
-use crate::readiness::ReadinessCache;
 use crate::visor::{
   await_supervisable_task, spawn_supervised_task, InterruptGate, SupervisedHandle, Visor,
 };
 
-use crate::index::spent::cache::SpentQueryCache;
+use crate::live::state::LiveState;
 use crate::live::stream::StreamHub;
 use crate::rest::{AppState, IndexCapabilities, LiveCapabilities, OverlayCapabilities, RestWorker};
 
 /// Inputs needed to construct the REST supervisor.
 pub(crate) struct RestVisorConfig {
-  pub pool: SqlPool,
-  pub address_pool: SqlPool,
-  pub db: Arc<DB>,
-  pub secondary_stores: Option<Arc<crate::store::manager::SecondaryStoreSet>>,
-  pub readiness_cache: Arc<ReadinessCache>,
-  pub spent_cache: Arc<SpentQueryCache>,
-  pub address_hot_cache_threshold: i32,
-  pub address_summary_catchup_lag: i32,
+  pub hydb: hyphen_db::HyphenDb,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
+  pub block_time_secs: f64,
   pub indices: IndexCapabilities,
   pub live: LiveCapabilities,
   pub overlays: OverlayCapabilities,
   pub recent_mempool_txs: usize,
   pub stream_hub: Option<Arc<StreamHub>>,
+  pub live_state: Arc<LiveState>,
   pub stream_heartbeat_secs: u64,
+  pub node_tip: std::sync::Arc<std::sync::atomic::AtomicI64>,
+  pub ingest_progress_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
   pub bind: String,
   pub cors_origin: Option<String>,
   pub server_metrics: Arc<ApiServerMetrics>,
@@ -79,22 +73,19 @@ impl RestVisor {
 
   fn app_state(&self) -> AppState {
     AppState {
-      pool: self.cfg.pool.clone(),
-      address_pool: self.cfg.address_pool.clone(),
-      db: Arc::clone(&self.cfg.db),
-      secondary_stores: self.cfg.secondary_stores.clone(),
-      readiness_cache: Arc::clone(&self.cfg.readiness_cache),
-      spent_cache: Arc::clone(&self.cfg.spent_cache),
-      address_hot_cache_threshold: self.cfg.address_hot_cache_threshold,
-      address_summary_catchup_lag: self.cfg.address_summary_catchup_lag,
+      hydb: self.cfg.hydb.clone(),
       p2pkh_version: self.cfg.p2pkh_version,
       p2sh_version: self.cfg.p2sh_version,
+      block_time_secs: self.cfg.block_time_secs,
       indices: self.cfg.indices,
       live: self.cfg.live,
       overlays: self.cfg.overlays,
       recent_mempool_txs: self.cfg.recent_mempool_txs,
       stream_hub: self.cfg.stream_hub.clone(),
+      live_state: Arc::clone(&self.cfg.live_state),
       stream_heartbeat_secs: self.cfg.stream_heartbeat_secs,
+      node_tip: std::sync::Arc::clone(&self.cfg.node_tip),
+      ingest_progress_epoch: std::sync::Arc::clone(&self.cfg.ingest_progress_epoch),
     }
   }
 }
