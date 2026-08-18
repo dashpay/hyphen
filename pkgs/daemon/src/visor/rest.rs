@@ -35,6 +35,7 @@ pub(crate) struct RestVisorConfig {
   pub live_state: Arc<LiveState>,
   pub stream_heartbeat_secs: u64,
   pub node_tip: std::sync::Arc<std::sync::atomic::AtomicI64>,
+  pub sync_mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
   pub ingest_progress_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
   pub bind: String,
   pub cors_origin: Option<String>,
@@ -85,6 +86,7 @@ impl RestVisor {
       live_state: Arc::clone(&self.cfg.live_state),
       stream_heartbeat_secs: self.cfg.stream_heartbeat_secs,
       node_tip: std::sync::Arc::clone(&self.cfg.node_tip),
+      sync_mode: std::sync::Arc::clone(&self.cfg.sync_mode),
       ingest_progress_epoch: std::sync::Arc::clone(&self.cfg.ingest_progress_epoch),
     }
   }

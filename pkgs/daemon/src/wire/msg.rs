@@ -188,6 +188,10 @@ pub struct IngestionDiag {
   pub paused: bool,
   /// Ingestion is waiting for PostgreSQL indexing to catch up.
   pub throttled: bool,
+  /// Index-maintenance regime: `realtime` or `stepped` (task A3). Defaulted
+  /// so a console talking to an older daemon still decodes the frame.
+  #[serde(default)]
+  pub sync_mode: String,
   /// Most recent upstream tip observed by block ingestion polling.
   pub last_polled_tip: Option<u32>,
   /// Absorbed-block lead over the connected projection height.

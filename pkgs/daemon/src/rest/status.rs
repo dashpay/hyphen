@@ -70,8 +70,11 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse
   }
 
   let node_tip = state.node_tip.load(std::sync::atomic::Ordering::Relaxed);
+  let sync_mode =
+    crate::ingest::sync_mode_label(state.sync_mode.load(std::sync::atomic::Ordering::Relaxed));
   Ok(Json(StatusResponse {
     sync_status: sync_status(tip_height, node_tip).to_string(),
+    sync_mode: sync_mode.to_owned(),
     block_height: tip_height,
     indices,
     version: env!("CARGO_PKG_VERSION").to_string(),

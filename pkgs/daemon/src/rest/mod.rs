@@ -211,6 +211,10 @@ pub struct AppState {
   /// compare the local tip against the node instead of declaring any
   /// non-negative tip "synced".
   pub node_tip: Arc<std::sync::atomic::AtomicI64>,
+  /// Index-maintenance regime the ingest loop reports (`realtime`/`stepped`),
+  /// so `/api/v1/status` can say that a sync is deferring index builds rather
+  /// than leaving an operator to infer it from throughput.
+  pub sync_mode: Arc<std::sync::atomic::AtomicU8>,
   /// Unix epoch of the last ingest progress (0 = never), so `updated_at`
   /// reflects when indexing last advanced rather than "now".
   pub ingest_progress_epoch: Arc<std::sync::atomic::AtomicU64>,

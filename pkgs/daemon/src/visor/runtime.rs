@@ -271,6 +271,7 @@ impl ServeRuntime {
         live_state: live_handles.live_state.clone(),
         stream_heartbeat_secs: runtime_options.stream_heartbeat_secs,
         node_tip: ingest.status().network_tip_handle(),
+        sync_mode: ingest.status().sync_mode_handle(),
         ingest_progress_epoch: ingest.status().progress_epoch_handle(),
         bind,
         cors_origin: options.api.cors_origin.clone(),

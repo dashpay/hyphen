@@ -16,6 +16,14 @@ use ratatui::{
 use crate::model::{AppState, Focus, OverviewSubFocus, Section};
 use crate::theme;
 
+/// Stepped sync deferring index builds is a mode, not an event, so it belongs
+/// in the persistent bar rather than a log line the operator has to catch.
+fn stepped_status(state: &AppState) -> Option<String> {
+  let snap = state.snapshot.as_ref()?;
+  let mode = &snap.ingestion_diag.sync_mode;
+  (mode == "stepped").then(|| "mode=stepped".to_owned())
+}
+
 fn recovery_status(state: &AppState) -> Option<String> {
   let snap = state.snapshot.as_ref()?;
   let progress = &snap.chain_progress_diag;
@@ -90,6 +98,8 @@ fn draw_left(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     };
     vec![Span::styled(msg.as_str(), style)]
   } else if let Some(message) = recovery_status(state) {
+    vec![Span::styled(message, theme::info())]
+  } else if let Some(message) = stepped_status(state) {
     vec![Span::styled(message, theme::info())]
   } else if let Some(prompt) = state.prompt.as_ref() {
     let hint = match prompt {

@@ -843,6 +843,10 @@ pub struct StageStatus {
 #[serde(rename_all = "camelCase")]
 pub struct StatusResponse {
   pub sync_status: String,
+  /// Index-maintenance regime: `realtime` maintains every index per block,
+  /// `stepped` defers the open partition's query-only indexes until it closes.
+  /// Results are identical either way; only the cost of producing them moves.
+  pub sync_mode: String,
   pub block_height: i32,
   pub indices: std::collections::HashMap<String, StageStatus>,
   pub version: String,

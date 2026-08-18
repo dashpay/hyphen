@@ -175,6 +175,7 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
     state: ctx.ingest_status.state_name(),
     paused: false,
     throttled: false,
+    sync_mode: ctx.ingest_status.sync_mode().to_owned(),
     last_polled_tip: network_tip,
     lead_blocks: None,
     max_lead_blocks: 0,

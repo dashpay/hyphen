@@ -165,6 +165,17 @@ fn build_storage_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
       ),
       content_width,
     );
+    // Stepped sync defers the open partition's query-only indexes, so an
+    // operator seeing a fast sync and a slow explorer query has somewhere to
+    // look. Blank on an older daemon that does not report it.
+    if !snap.ingestion_diag.sync_mode.is_empty() {
+      kv(
+        &mut lines,
+        "Sync Mode",
+        &snap.ingestion_diag.sync_mode,
+        content_width,
+      );
+    }
     if snap.ingestion_diag.stalled {
       kv(&mut lines, "Watchdog", "Stalled", content_width);
     }

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use hyphen_db::{HyDbBlockSeen, HyDbHash, HyDbHeight, HyDbIngest, HyphenDb};
+use hyphen_db::{HyDbBlockSeen, HyDbHash, HyDbHeight, HyDbIngest, HyDbSyncMode, HyphenDb};
 use tracing::{info, warn};
 
 use crate::error::DaemonError;
@@ -58,6 +58,9 @@ pub(crate) struct IngestStatus {
   stalled: AtomicBool,
   network_tip: Arc<AtomicI64>,
   local_tip: AtomicI64,
+  /// Index-maintenance regime the storage engine reports (task A3), shared
+  /// with the REST status endpoint the same way the node tip is.
+  sync_mode: Arc<AtomicU8>,
   blocks_ingested_total: AtomicU64,
   last_progress_epoch: Arc<AtomicU64>,
   started_epoch: AtomicU64,
@@ -70,6 +73,22 @@ const STATE_COMMITTING: u8 = 3;
 const STATE_IDLE: u8 = 4;
 const STATE_BACKOFF: u8 = 5;
 
+/// Stepped-sync mode, encoded for the shared atomic. Kept as a `u8` rather
+/// than a lock so the status endpoint can read it on any thread without
+/// touching the ingest loop.
+pub(crate) const SYNC_MODE_REALTIME: u8 = 0;
+pub(crate) const SYNC_MODE_STEPPED: u8 = 1;
+
+/// Decode the shared sync-mode atomic. Unknown values read as `realtime`,
+/// which is the mode that promises nothing.
+pub(crate) fn sync_mode_label(raw: u8) -> &'static str {
+  if raw == SYNC_MODE_STEPPED {
+    HyDbSyncMode::Stepped.as_str()
+  } else {
+    HyDbSyncMode::Realtime.as_str()
+  }
+}
+
 impl IngestStatus {
   fn new() -> Self {
     Self {
@@ -77,6 +96,7 @@ impl IngestStatus {
       stalled: AtomicBool::new(false),
       network_tip: Arc::new(AtomicI64::new(-1)),
       local_tip: AtomicI64::new(-1),
+      sync_mode: Arc::new(AtomicU8::new(SYNC_MODE_REALTIME)),
       blocks_ingested_total: AtomicU64::new(0),
       last_progress_epoch: Arc::new(AtomicU64::new(0)),
       started_epoch: AtomicU64::new(unix_now()),
@@ -148,6 +168,16 @@ impl IngestStatus {
 
   /// Shared handle to the node tip observed by polling (-1 = unknown), for
   /// the REST status endpoint.
+  pub(crate) fn sync_mode(&self) -> &'static str {
+    sync_mode_label(self.sync_mode.load(Ordering::Relaxed))
+  }
+
+  /// Shared handle to the index-maintenance regime, for the REST status
+  /// endpoint.
+  pub(crate) fn sync_mode_handle(&self) -> Arc<AtomicU8> {
+    Arc::clone(&self.sync_mode)
+  }
+
   pub(crate) fn network_tip_handle(&self) -> Arc<AtomicI64> {
     Arc::clone(&self.network_tip)
   }
@@ -334,6 +364,13 @@ async fn advance_until_settled(
     if let Some(to) = report.to {
       status.local_tip.store(i64::from(to.0), Ordering::Relaxed);
     }
+    status.sync_mode.store(
+      match report.mode {
+        HyDbSyncMode::Stepped => SYNC_MODE_STEPPED,
+        HyDbSyncMode::Realtime => SYNC_MODE_REALTIME,
+      },
+      Ordering::Relaxed,
+    );
     let done = match (report.to, report.target) {
       (Some(to), Some(target)) => to >= target,
       _ => true,
