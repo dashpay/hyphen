@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM tx_outputs\n              WHERE block_height = $1 AND address IS NOT NULL\n             UNION ALL\n             SELECT 1 FROM spends s JOIN tx_outputs o ON o.outpoint = s.outpoint\n              WHERE s.spend_height = $1 AND o.address IS NOT NULL\n           ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "da470fc671f221d87045eea9c7d8b562ff4d0734ba52874ee98c2e18785947dc"
+}

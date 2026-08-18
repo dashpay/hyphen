@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO undo_address_stats (height, address, existed, last_seen_height)\n         SELECT $1, t.address, t.existed, t.last_seen_height\n           FROM UNNEST($2::text[], $3::bool[], $4::int4[])\n             AS t(address, existed, last_seen_height)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "TextArray",
+        "BoolArray",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a18b1e04a689c2344863978d945727d891d0916e1eec019a7ced103bced0d4ca"
+}

@@ -81,8 +81,15 @@ pub(super) trait IngestDerive: Send + Sync {
 
 /// A slice of the projection with both directions of its mutation. Stages run in
 /// order for a connect and in reverse for a disconnect; each is self-contained
-/// (its `disconnect` reverses exactly what its `connect` wrote), so the ordering
-/// between stages is immaterial to correctness — only within-stage order is.
+/// (its `disconnect` reverses exactly what its `connect` wrote).
+///
+/// The reverse order is not cosmetic. A stage may reverse itself by
+/// recomputing from base facts instead of from a stored pre-image — the
+/// balance stage does exactly that, and it is why `undo_address_stats` carries
+/// two columns rather than seven — which is sound precisely because
+/// `BaseStage`, being first on connect, is last on disconnect and so has not
+/// yet dropped the block's rows. Reordering the set, or reversing it in
+/// connect order, breaks that.
 #[async_trait]
 pub(super) trait IngestStage: Send + Sync {
   /// A short identifier this stage stamps into the typed errors it raises.
@@ -91,17 +98,18 @@ pub(super) trait IngestStage: Send + Sync {
   /// Apply this block to the stage's slice of the projection.
   async fn connect(&self, tx: &mut PgTx<'_>, scratch: &Scratch) -> Result<(), HyDbStageError>;
 
-  /// Reverse a previously-connected block at `height`, using the undo rows the
-  /// connect captured.
+  /// Reverse a previously-connected block at `height`, from the undo rows the
+  /// connect captured and — where a column is recomputable — the block's own
+  /// base facts, which are still in place (see the note on ordering above).
   async fn disconnect(&self, tx: &mut PgTx<'_>, height: i32) -> Result<(), HyDbStageError>;
 }
 
 // The stage set is a fixed, ordered quartet dispatched statically (the required
 // `IngestStage::NAME` associated const makes the trait not dyn-compatible, and a
-// fixed set needs no `dyn`): base facts first (every accumulation reads from them
-// conceptually, though each stage is write-independent), then balances,
-// summaries/metrics, and the validator registry. Connects run them in this
-// order; disconnects run them in reverse.
+// fixed set needs no `dyn`): base facts first (the balance stage reads them back
+// on the way out, and every other accumulation reads from them conceptually),
+// then balances, summaries/metrics, and the validator registry. Connects run
+// them in this order; disconnects run them in reverse.
 
 // ===========================================================================
 // Canonicalize, then connect/disconnect toward the node tip

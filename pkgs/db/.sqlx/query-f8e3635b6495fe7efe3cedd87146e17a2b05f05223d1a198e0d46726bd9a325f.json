@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM address_stats WHERE address = ANY($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f8e3635b6495fe7efe3cedd87146e17a2b05f05223d1a198e0d46726bd9a325f"
+}

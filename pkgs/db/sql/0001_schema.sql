@@ -231,8 +231,8 @@ CREATE INDEX idx_address_stats_prefix
 -- stay free of a balance-ordered index.
 --
 -- Membership needs no history scan: an address is only ever written here by a
--- block that already computed its new balance, and the reverse path recomputes
--- membership from the undo pre-image. See `layout::RICH_LIST_FLOOR`; changing
+-- block that already computed its new balance, and the reverse path re-reads
+-- it from `address_stats` once that table has been rewound. See `layout::RICH_LIST_FLOOR`; changing
 -- the floor requires an offline rebuild of this table (one scan of
 -- `address_stats`), not a resync.
 CREATE TABLE address_rich (
@@ -254,7 +254,8 @@ CREATE INDEX idx_address_rich_rank ON address_rich (balance DESC, address ASC);
 -- It lives in its own singleton rather than in `supply_summary` because the
 -- owning stage differs: `supply_summary` is read-modify-written by the stats
 -- stage, which snapshots it into `undo_blocks` for reversal, while this value
--- is derived from the balance stage's own pre-images in `undo_address_stats`.
+-- is maintained by the balance stage from the prior/new balance pair it holds
+-- in both directions (see `undo_address_stats`).
 -- Folding it into `supply_summary` would put two stages on the same row in the
 -- same block transaction and would make the stats stage's undo capture depend
 -- on the balance stage having already run.
@@ -402,25 +403,45 @@ CREATE TABLE undo_blocks (
   summary_supply_unspendable  BIGINT  NOT NULL
 );
 
--- The prior `address_stats` row for each address a block mutated. `existed` =
--- false means the block created the row, so disconnect deletes it instead of
--- restoring column values.
+-- What a disconnect cannot recompute about the `address_stats` rows a block
+-- touched -- and nothing else. This is the highest-volume undo table in the
+-- database (36,680,096 inserts and 93 autovacuum passes over a 967k-block
+-- mainnet sync, the most-vacuumed object there is), so every column it does
+-- not need is paid for on every block forever.
+--
+-- `balance`, `total_received`, `tx_count` and `utxo_count` are *additive*:
+-- connect adds a per-address delta to each and nothing clamps, saturates or
+-- conditions the addition, so a disconnect recovers the prior value by
+-- subtracting the same delta. The delta itself needs no storage either --
+-- it is a pure function of the block's own base facts (`tx_outputs` at this
+-- height for what the block created, `spends` joined back to `tx_outputs`
+-- for what it consumed), which are still in place when the balance stage
+-- reverses (stages disconnect in reverse order, and the base stage is first
+-- on connect, hence last on disconnect).
+--
+-- `first_seen_height` is written once, by the INSERT that creates the row,
+-- and is never touched by the ON CONFLICT branch -- so for a row that
+-- existed it is unchanged by definition, and for a row that did not the
+-- whole row goes away. It needs no pre-image either.
+--
+-- That leaves the two genuinely non-invertible facts:
+--   existed          -- whether the row predates this block, which decides
+--                       delete-versus-restore. Not derivable from the block.
+--   last_seen_height -- overwritten with this block's height unconditionally,
+--                       so arithmetic cannot recover what it was.
 CREATE TABLE undo_address_stats (
   height             INTEGER NOT NULL,
   address            TEXT    NOT NULL,
   existed            BOOLEAN NOT NULL,
-  balance            BIGINT,
-  total_received     BIGINT,
-  tx_count           INTEGER,
-  utxo_count         INTEGER,
-  first_seen_height  INTEGER,
   last_seen_height   INTEGER,
   PRIMARY KEY (height, address)
 );
 
--- The prior `validators` row for each validator a block mutated — same shape as
--- undo_address_stats. `existed` = false means the block registered it, so
--- disconnect deletes the row instead of restoring columns. (Populated once
+-- The prior `validators` row for each validator a block mutated. Unlike
+-- `undo_address_stats` above, none of these columns is additive — they are
+-- registry facts, not accumulations — so a full pre-image is the only way
+-- back. `existed` = false means the block registered it, so disconnect
+-- deletes the row instead of restoring columns. (Populated once
 -- validator ingest lands — task #7.)
 CREATE TABLE undo_validators (
   height                  INTEGER NOT NULL,
