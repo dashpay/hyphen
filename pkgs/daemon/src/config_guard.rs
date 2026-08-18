@@ -78,6 +78,14 @@
 //! cross-section check reading it: a key that only validates itself is still
 //! inert.
 //!
+//! One deliberate departure from `architecture.rs`: that file splits its
+//! detection patterns with `concat!` so a repo-wide grep for a forbidden
+//! crate name does not land in the guard. The patterns here are the config
+//! keys themselves, and hiding those would be the wrong trade — someone
+//! grepping for `prefetch_blocks` should land on the declaration that says it
+//! is inert and why. The guard excludes itself from the read-site scan
+//! instead, so naming a key here never makes it look consumed.
+//!
 //! The scan is coarse — a short field name such as `size` matches any
 //! struct's `.size` — and the coarseness runs in opposite directions for the
 //! two declarations. For `Consumed` it can only make a consumed key look
