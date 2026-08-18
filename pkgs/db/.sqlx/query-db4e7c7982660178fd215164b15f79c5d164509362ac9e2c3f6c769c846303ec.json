@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT address, balance, total_received,\n                  (total_received - balance)::bigint AS \"total_sent!\", tx_count\n             FROM address_stats\n            WHERE balance > 0\n              AND (balance < $1 OR (balance = $1 AND address > $2))\n            ORDER BY balance DESC, address ASC LIMIT $3",
+  "query": "SELECT r.address, a.balance, a.total_received,\n                  (a.total_received - a.balance)::bigint AS \"total_sent!\", a.tx_count\n             FROM address_rich AS r\n             JOIN address_stats AS a ON a.address = r.address\n            WHERE r.balance < $1 OR (r.balance = $1 AND r.address > $2)\n            ORDER BY r.balance DESC, r.address ASC LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -44,5 +44,5 @@
       false
     ]
   },
-  "hash": "ab607f49be63881a3c9623eb2012a1e73d7c0eda8ac189102ac5cd6bbd269032"
+  "hash": "db4e7c7982660178fd215164b15f79c5d164509362ac9e2c3f6c769c846303ec"
 }

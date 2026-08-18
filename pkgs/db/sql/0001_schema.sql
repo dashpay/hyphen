@@ -212,13 +212,34 @@ CREATE TABLE address_stats (
   first_seen_height  INTEGER,
   last_seen_height   INTEGER
 );
-CREATE INDEX idx_address_stats_balance_rank
-  ON address_stats (balance DESC, address ASC)
-  WHERE balance > 0;
+-- NOTE: no balance-ordered index lives here, deliberately. A HOT update
+-- requires that no indexed column change, and `balance` changes on almost
+-- every update of this table, so any index over it makes HOT impossible by
+-- construction: measured 12,498 HOT out of 25,687,483 updates (0.05%) on a
+-- 967k-block mainnet sync, 1.96M dead tuples and 35 autovacuum passes. The
+-- rich list is served from `address_rich` below instead.
+
 -- Address prefix search: LIKE 'prefix%' needs text_pattern_ops to use an
 -- index under a non-C collation (the PK's default btree opclass cannot).
 CREATE INDEX idx_address_stats_prefix
   ON address_stats (address text_pattern_ops);
+
+-- The rich list, maintained in the block transaction alongside the
+-- `address_stats` upsert. Holds only addresses whose balance is at or above
+-- the rich-list floor, so the dust majority (99%+ of addresses, and nearly all
+-- of the per-block update volume) never touches it and `address_stats` can
+-- stay free of a balance-ordered index.
+--
+-- Membership needs no history scan: an address is only ever written here by a
+-- block that already computed its new balance, and the reverse path recomputes
+-- membership from the undo pre-image. See `layout::RICH_LIST_FLOOR`; changing
+-- the floor requires an offline rebuild of this table (one scan of
+-- `address_stats`), not a resync.
+CREATE TABLE address_rich (
+  address  TEXT   PRIMARY KEY,
+  balance  BIGINT NOT NULL
+);
+CREATE INDEX idx_address_rich_rank ON address_rich (balance DESC, address ASC);
 
 CREATE TABLE transactions_summary (
   singleton  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),

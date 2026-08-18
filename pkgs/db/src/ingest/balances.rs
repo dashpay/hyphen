@@ -9,6 +9,15 @@
 //! `undo_address_stats` so a disconnect restores the exact prior state.
 //! Batched: three statements per block (snapshot read, undo insert, upsert)
 //! regardless of how many addresses the block touches.
+//!
+//! The same stage maintains `address_rich`, the rich-list side table. It
+//! exists so `address_stats` carries no balance-ordered index and its updates
+//! can be HOT; the ranked read is served from the side table instead. Both
+//! directions decide membership from the balance they already hold — connect
+//! from `prior + delta`, disconnect from the undo pre-image — so neither path
+//! ever sums history. Keeping the two directions symmetric is the whole
+//! correctness argument: a connect-only implementation would drift from
+//! `address_stats` on the first reorg with nothing to detect it.
 
 use std::collections::HashMap;
 
@@ -16,6 +25,7 @@ use async_trait::async_trait;
 
 use super::pipeline::IngestStage;
 use super::scratch::{HyDbStageError, Scratch};
+use crate::layout::RICH_LIST_FLOOR;
 use crate::records::PgTx;
 
 /// The `address_stats` accumulation stage.
@@ -88,6 +98,13 @@ impl IngestStage for BalancesStage {
     let mut s_received: Vec<i64> = Vec::with_capacity(n);
     let mut s_tx_delta: Vec<i32> = Vec::with_capacity(n);
     let mut s_utxo_delta: Vec<i32> = Vec::with_capacity(n);
+    // Rich-list membership, decided from the post-upsert balance computed
+    // here. `was_member` is derived from the prior balance rather than probed
+    // in `address_rich`: the two agree by construction, which is exactly what
+    // makes a floor change an offline rebuild rather than a resync.
+    let mut r_addr: Vec<String> = Vec::new();
+    let mut r_balance: Vec<i64> = Vec::new();
+    let mut r_drop: Vec<String> = Vec::new();
 
     for addr in &addr_vec {
       let p = prior.get(addr);
@@ -105,10 +122,20 @@ impl IngestStage for BalancesStage {
           what: format!("delta vanished for address {addr}"),
         });
       };
-      s_balance_delta.push(d.received - d.sent);
+      let delta = d.received - d.sent;
+      s_balance_delta.push(delta);
       s_received.push(d.received);
       s_tx_delta.push(d.txs.len() as i32);
       s_utxo_delta.push((d.created_utxos - d.spent_utxos) as i32);
+
+      let prior_balance = p.map_or(0, |p| p.balance);
+      let new_balance = prior_balance.saturating_add(delta);
+      if new_balance >= RICH_LIST_FLOOR {
+        r_addr.push(addr.clone());
+        r_balance.push(new_balance);
+      } else if prior_balance >= RICH_LIST_FLOOR {
+        r_drop.push(addr.clone());
+      }
     }
 
     sqlx::query!(
@@ -164,6 +191,34 @@ impl IngestStage for BalancesStage {
       Self::NAME,
       "connect: upsert address_stats",
     ))?;
+
+    // Rich-list side table. Both statements are skipped when the block moved
+    // no address across (or within) the floor, which is the common case.
+    if !r_addr.is_empty() {
+      sqlx::query!(
+        r#"INSERT INTO address_rich (address, balance)
+           SELECT t.address, t.balance
+             FROM UNNEST($1::text[], $2::int8[]) AS t(address, balance)
+           ON CONFLICT (address) DO UPDATE SET balance = EXCLUDED.balance"#,
+        &r_addr,
+        &r_balance,
+      )
+      .execute(&mut **tx)
+      .await
+      .map_err(HyDbStageError::sql(
+        Self::NAME,
+        "connect: upsert address_rich",
+      ))?;
+    }
+    if !r_drop.is_empty() {
+      sqlx::query!("DELETE FROM address_rich WHERE address = ANY($1)", &r_drop)
+        .execute(&mut **tx)
+        .await
+        .map_err(HyDbStageError::sql(
+          Self::NAME,
+          "connect: prune address_rich",
+        ))?;
+    }
     Ok(())
   }
 
@@ -197,6 +252,41 @@ impl IngestStage for BalancesStage {
     .map_err(HyDbStageError::sql(
       Self::NAME,
       "disconnect: restore address_stats",
+    ))?;
+
+    // Mirror the connect-side membership check against the restored balances,
+    // while the undo rows are still present. `NOT existed` means the block
+    // registered the address, so the post-disconnect state is "no row" and the
+    // side-table entry (if any) must go with it.
+    sqlx::query!(
+      r#"DELETE FROM address_rich AS r
+           USING undo_address_stats AS u
+          WHERE u.height = $1 AND r.address = u.address
+            AND (NOT u.existed OR u.balance < $2)"#,
+      height,
+      RICH_LIST_FLOOR,
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(HyDbStageError::sql(
+      Self::NAME,
+      "disconnect: prune address_rich",
+    ))?;
+
+    sqlx::query!(
+      r#"INSERT INTO address_rich (address, balance)
+         SELECT u.address, u.balance
+           FROM undo_address_stats AS u
+          WHERE u.height = $1 AND u.existed AND u.balance >= $2
+         ON CONFLICT (address) DO UPDATE SET balance = EXCLUDED.balance"#,
+      height,
+      RICH_LIST_FLOOR,
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(HyDbStageError::sql(
+      Self::NAME,
+      "disconnect: restore address_rich",
     ))?;
 
     sqlx::query!("DELETE FROM undo_address_stats WHERE height = $1", height)

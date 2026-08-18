@@ -195,6 +195,17 @@ async fn seed(pool: &PgPool) -> TestResult {
   .execute(pool)
   .await?;
 
+  // address_rich: the rich list is served from the side table, not from a
+  // balance-ordered index on address_stats (which no longer exists — it made
+  // every ingest update non-HOT). This fixture hand-seeds each projection, so
+  // it seeds this one too; the floor that governs *membership* is an ingest
+  // policy, exercised in `rich_list_side_table`, not a constraint on the table.
+  sqlx::query("INSERT INTO address_rich (address, balance) VALUES ($1,2000), ($2,1000)")
+    .bind(A)
+    .bind(B)
+    .execute(pool)
+    .await?;
+
   // Two validators: an evonode (registered) and a regular (revoked).
   sqlx::query(
     "INSERT INTO validators

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO address_rich (address, balance)\n           SELECT t.address, t.balance\n             FROM UNNEST($1::text[], $2::int8[]) AS t(address, balance)\n           ON CONFLICT (address) DO UPDATE SET balance = EXCLUDED.balance",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ffdf13dd83be02554a86e87db2a72d03951e60912d6accdcb5a29ef9da31a8df"
+}

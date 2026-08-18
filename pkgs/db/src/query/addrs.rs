@@ -441,17 +441,25 @@ impl HyDbAddrIdx for PgAddrIdx {
       }
     };
 
+    // Served from `address_rich`, the maintained side table of addresses at or
+    // above `layout::RICH_LIST_FLOOR`; `address_stats` deliberately carries no
+    // balance-ordered index (it would make every ingest update non-HOT). The
+    // ranked scan is over `address_rich`, then a PK join back to
+    // `address_stats` for the page's other columns — the two agree on
+    // `balance` by construction, and ordering by the side table's copy is what
+    // keeps the scan index-ordered.
+    //
     // Keyset on (balance DESC, address ASC). The equal-balance boundary needs
     // address > cursor; the strictly-lower boundary is any address.
     type Row = (String, i64, i64, i64, i32);
     let rows: Vec<Row> = match &before {
       Some((bal, addr)) => sqlx::query!(
-        r#"SELECT address, balance, total_received,
-                  (total_received - balance)::bigint AS "total_sent!", tx_count
-             FROM address_stats
-            WHERE balance > 0
-              AND (balance < $1 OR (balance = $1 AND address > $2))
-            ORDER BY balance DESC, address ASC LIMIT $3"#,
+        r#"SELECT r.address, a.balance, a.total_received,
+                  (a.total_received - a.balance)::bigint AS "total_sent!", a.tx_count
+             FROM address_rich AS r
+             JOIN address_stats AS a ON a.address = r.address
+            WHERE r.balance < $1 OR (r.balance = $1 AND r.address > $2)
+            ORDER BY r.balance DESC, r.address ASC LIMIT $3"#,
         bal,
         addr,
         fetch
@@ -471,11 +479,11 @@ impl HyDbAddrIdx for PgAddrIdx {
       })
       .collect(),
       None => sqlx::query!(
-        r#"SELECT address, balance, total_received,
-                  (total_received - balance)::bigint AS "total_sent!", tx_count
-             FROM address_stats
-            WHERE balance > 0
-            ORDER BY balance DESC, address ASC LIMIT $1"#,
+        r#"SELECT r.address, a.balance, a.total_received,
+                  (a.total_received - a.balance)::bigint AS "total_sent!", a.tx_count
+             FROM address_rich AS r
+             JOIN address_stats AS a ON a.address = r.address
+            ORDER BY r.balance DESC, r.address ASC LIMIT $1"#,
         fetch
       )
       .fetch_all(&self.pg.heavy)
