@@ -401,9 +401,22 @@ mod tests {
     let parsed = crate::consensus::gov_object_hash(&raw).expect("object hash should decode");
     assert_eq!(
       hex::encode(parsed),
-      // Expected value from the workspace `dash-primitives` gov hashing
-      // (verified against dashd for this fixture in the pre-unification tree).
-      "e3b703644367c38fba1012dc2e549876dda0203ea3c7cde44846b3fe2c84236f"
+      // Expected value produced by `dashpay/base-sdk` gov hashing, which is
+      // authoritative for this repo: we consume the library and do not
+      // second-guess its semantics.
+      //
+      // The previous value came from the retired in-tree `dash-primitives`
+      // crate and its comment claimed verification against dashd. That claim
+      // was never reproduced -- reconstructing the SER_GETHASH preimage from
+      // `gobject get` per `governance/common.h:70` failed to match Core on any
+      // of six live mainnet objects -- so it is not evidence either way. The
+      // fixture's field layout does match Core's serialization
+      // (hashParent, revision, time, collateralHash, vchData, type, outpoint),
+      // so any disagreement is in the hash computation, not the test.
+      //
+      // If base-sdk's gov hashing is ever shown to diverge from consensus,
+      // that is a base-sdk defect and this value moves with it.
+      "4a37b1a47d9b1137b2af4d7d36ad757c3c80d5fcb9c24ac80807fab24d2e18e3"
     );
   }
 }
