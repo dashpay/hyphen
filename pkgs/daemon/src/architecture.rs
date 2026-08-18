@@ -37,6 +37,15 @@ mod tests {
     concat!("rocks", "db::"),
   ];
 
+  /// Any daemon file naming the storage facade is treated as storage-facing.
+  const STORAGE_FACADE_MARKER: &str = concat!("Hy", "Db");
+
+  /// String-payload daemon error variants, which cannot carry a SQLSTATE.
+  const STRINGIFIED_ERROR_PATTERNS: &[&str] = &[
+    concat!("Daemon", "Error::Index(format!"),
+    concat!("Daemon", "Error::Db("),
+  ];
+
   #[test]
   fn runtime_primitive_work_stays_inside_primitives() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -80,6 +89,45 @@ mod tests {
     assert!(
       offenders.is_empty(),
       "the retired storage backends are gone; all chain storage must go through hyphen-db, with no direct SQL-driver or embedded key-value store usage in the daemon: {}",
+      offenders.join(", ")
+    );
+  }
+
+  /// Storage errors must cross the daemon boundary as typed values, not as
+  /// prose. `DaemonError::Storage` carries the `hyphen-db` error itself, which
+  /// is what keeps the SQLSTATE — and therefore the transient/permanent
+  /// verdict — alive all the way to the supervisor and the REST status code.
+  ///
+  /// Flattening one into `DaemonError::Index(format!("…{e}"))` is invisible to
+  /// the compiler and to every existing test: that is exactly how deadlocks
+  /// and "database system is starting up" came to be graded permanent. So any
+  /// file that talks to the storage facade is forbidden from constructing a
+  /// string-payload daemon error at all; files with no storage access (block
+  /// and consensus decoding) are unaffected.
+  #[test]
+  fn storage_errors_are_not_flattened_into_strings() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_rs_files(&root, &mut files);
+
+    let offenders: Vec<String> = files
+      .into_iter()
+      // This file names the patterns in string literals, so exempt it.
+      .filter(|path| !allowed_primitive_file(path))
+      .filter(|path| {
+        fs::read_to_string(path).is_ok_and(|contents| {
+          contents.contains(STORAGE_FACADE_MARKER)
+            && STRINGIFIED_ERROR_PATTERNS
+              .iter()
+              .any(|pattern| contents.contains(pattern))
+        })
+      })
+      .map(|path| path.display().to_string())
+      .collect();
+
+    assert!(
+      offenders.is_empty(),
+      "a storage failure must be carried as `DaemonError::storage(context, err)`, keeping the typed hyphen-db error (and its SQLSTATE) intact; these files flatten one into a string payload instead: {}",
       offenders.join(", ")
     );
   }
