@@ -254,16 +254,14 @@ struct MachineState {
   settled: Option<(i32, HyDbSyncMode)>,
 }
 
-/// The stepped-sync state machine and the index maintenance it drives.
+/// The mode decision, with no database attached.
 ///
-/// One per ingest handle, which is one per database: the ingest advisory lock
-/// already guarantees a single writer, so this needs no cross-process
-/// coordination. DDL runs on the admin pool, which is where
-/// `[db.client.admin] maint_work_mem` is set — the parameter that decides how
-/// fast a deferred build runs.
+/// Split out from [`SteppedSync`] because deciding and building are different
+/// jobs with different failure modes: this half is pure, synchronous and
+/// exhaustively testable without a server, and the half that issues DDL has
+/// nothing to decide.
 #[derive(Debug)]
-pub struct SteppedSync {
-  admin: PgPool,
+struct ModeMachine {
   enabled: bool,
   enter_gap: i64,
   exit_gap: i64,
@@ -272,24 +270,16 @@ pub struct SteppedSync {
   mode_tx: watch::Sender<HyDbSyncMode>,
 }
 
-impl SteppedSync {
-  /// Build from the process-wide `[db.ingest]` tunables.
-  #[must_use]
-  pub fn from_config(admin: PgPool) -> Self {
-    Self::with_params(admin, tuning::stepped_sync(), tuning::stepped_sync_gap())
-  }
-
-  /// Build with explicit parameters. The exit mark is derived rather than
-  /// configured: it is [`STEPPED_EXIT_GAP`], or a fifth of the entry gap when
-  /// that is smaller, so an operator who lowers `stepped_sync_gap` below 5,000
-  /// still gets two distinct marks instead of one threshold wearing two names.
-  #[must_use]
-  pub fn with_params(admin: PgPool, enabled: bool, enter_gap: i64) -> Self {
+impl ModeMachine {
+  /// The exit mark is derived rather than configured: it is
+  /// [`STEPPED_EXIT_GAP`], or a fifth of the entry gap when that is smaller,
+  /// so an operator who lowers `stepped_sync_gap` below 5,000 still gets two
+  /// distinct marks instead of one threshold wearing two names.
+  fn new(enabled: bool, enter_gap: i64) -> Self {
     let enter_gap = enter_gap.max(1);
     let exit_gap = STEPPED_EXIT_GAP.min(enter_gap / 5).max(1);
     let (mode_tx, _) = watch::channel(HyDbSyncMode::Realtime);
     Self {
-      admin,
       enabled,
       enter_gap,
       exit_gap,
@@ -314,13 +304,6 @@ impl SteppedSync {
   #[must_use]
   pub fn subscribe(&self) -> watch::Receiver<HyDbSyncMode> {
     self.mode_tx.subscribe()
-  }
-
-  /// The admin pool DDL runs on, for callers that must re-apply storage
-  /// tuning alongside a mode change.
-  #[must_use]
-  pub const fn admin(&self) -> &PgPool {
-    &self.admin
   }
 
   /// The gap at which stepped mode engages.
@@ -451,6 +434,78 @@ impl SteppedSync {
     );
     Some(HyDbSyncMode::Realtime)
   }
+}
+
+/// The stepped-sync state machine and the index maintenance it drives.
+///
+/// One per ingest handle, which is one per database: the ingest advisory lock
+/// already guarantees a single writer, so this needs no cross-process
+/// coordination. DDL runs on the admin pool, which is where
+/// `[db.client.admin] maint_work_mem` is set — the parameter that decides how
+/// fast a deferred build runs.
+#[derive(Debug)]
+pub struct SteppedSync {
+  admin: PgPool,
+  machine: ModeMachine,
+}
+
+impl SteppedSync {
+  /// Build from the process-wide `[db.ingest]` tunables.
+  #[must_use]
+  pub fn from_config(admin: PgPool) -> Self {
+    Self::with_params(admin, tuning::stepped_sync(), tuning::stepped_sync_gap())
+  }
+
+  /// Build with explicit parameters.
+  #[must_use]
+  pub fn with_params(admin: PgPool, enabled: bool, enter_gap: i64) -> Self {
+    Self {
+      admin,
+      machine: ModeMachine::new(enabled, enter_gap),
+    }
+  }
+
+  /// The admin pool DDL runs on, for callers that must re-apply storage
+  /// tuning alongside a mode change.
+  #[must_use]
+  pub const fn admin(&self) -> &PgPool {
+    &self.admin
+  }
+
+  /// The mode in force.
+  #[must_use]
+  pub fn mode(&self) -> HyDbSyncMode {
+    self.machine.mode()
+  }
+
+  /// Watch the mode, for the status endpoint and the TUI.
+  #[must_use]
+  pub fn subscribe(&self) -> watch::Receiver<HyDbSyncMode> {
+    self.machine.subscribe()
+  }
+
+  /// The gap at which stepped mode engages.
+  #[must_use]
+  pub const fn enter_gap(&self) -> i64 {
+    self.machine.enter_gap()
+  }
+
+  /// The gap below which it disengages.
+  #[must_use]
+  pub const fn exit_gap(&self) -> i64 {
+    self.machine.exit_gap()
+  }
+
+  /// Feed one advance's observation into the state machine. See
+  /// [`ModeMachine::observe`].
+  pub fn observe(&self, tip: Option<i32>, node_tip: i32) -> Option<SteppedTransition> {
+    self.machine.observe(tip, node_tip)
+  }
+
+  /// Leave stepped mode immediately. See [`ModeMachine::force_realtime`].
+  pub fn force_realtime(&self, reason: &str) -> Option<HyDbSyncMode> {
+    self.machine.force_realtime(reason)
+  }
 
   /// Act on a transition: log it, then reconcile the index set.
   ///
@@ -497,7 +552,7 @@ impl SteppedSync {
   pub async fn ensure_settled(&self, height: i32) -> HyDbResult<()> {
     let open = partition_of(height);
     let mode = {
-      let st = self.lock();
+      let st = self.machine.lock();
       if st.settled == Some((open, st.mode)) {
         return Ok(());
       }
@@ -548,7 +603,7 @@ impl SteppedSync {
       }
     }
 
-    let mut st = self.lock();
+    let mut st = self.machine.lock();
     st.settled = Some((open, mode));
     Ok(())
   }
@@ -689,6 +744,132 @@ mod tests {
       rows >= DEFERRED_INDEXES.len(),
       "the migration lists fewer indexes than the deferred set"
     );
+  }
+
+  /// The decision half, with no database attached — which is the whole point
+  /// of it being a separate type.
+  fn machine_or_fail(enter_gap: i64) -> ModeMachine {
+    ModeMachine::new(true, enter_gap)
+  }
+
+  #[tokio::test]
+  async fn enters_stepped_only_after_the_gap_holds() {
+    let sync = machine_or_fail(25_000);
+    // Two advances past the entry gap are not enough — the third is.
+    for advance in 1..STEPPED_HOLD_ADVANCES {
+      assert_eq!(
+        sync.observe(Some(900_000), 999_999),
+        None,
+        "advance {advance} should not have moved the mode yet"
+      );
+      assert_eq!(sync.mode(), HyDbSyncMode::Realtime);
+    }
+    let transition = sync.observe(Some(900_000), 999_999);
+    assert_eq!(
+      transition.map(|t| (t.to, t.gap)),
+      Some((HyDbSyncMode::Stepped, 99_999)),
+      "the condition has now held for the full hold"
+    );
+    assert_eq!(sync.mode(), HyDbSyncMode::Stepped);
+  }
+
+  #[tokio::test]
+  async fn leaves_stepped_only_after_the_exit_gap_holds() {
+    let sync = machine_or_fail(25_000);
+    for _ in 0..STEPPED_HOLD_ADVANCES {
+      sync.observe(Some(900_000), 999_999);
+    }
+    assert_eq!(sync.mode(), HyDbSyncMode::Stepped);
+
+    // Below the *entry* gap but above the exit gap: still stepped, because
+    // the band between the two marks is what stops the flapping.
+    for _ in 0..(STEPPED_HOLD_ADVANCES * 2) {
+      assert_eq!(sync.observe(Some(990_000), 1_000_000), None);
+      assert_eq!(sync.mode(), HyDbSyncMode::Stepped);
+    }
+
+    for _ in 1..STEPPED_HOLD_ADVANCES {
+      assert_eq!(sync.observe(Some(999_000), 1_000_000), None);
+    }
+    assert_eq!(
+      sync.observe(Some(999_000), 1_000_000).map(|t| t.to),
+      Some(HyDbSyncMode::Realtime),
+      "under the exit gap for the full hold"
+    );
+    assert_eq!(sync.mode(), HyDbSyncMode::Realtime);
+  }
+
+  /// The property the whole hysteresis exists for: a tip that crosses the
+  /// mark and comes back must not transition, because every transition drops
+  /// and rebuilds ~3 GB of index.
+  #[tokio::test]
+  async fn a_tip_oscillating_across_the_mark_never_flaps() {
+    let sync = machine_or_fail(25_000);
+    for _ in 0..40 {
+      // Alternate either side of the 25,000-block entry gap.
+      sync.observe(Some(975_001), 1_000_000); // gap 24,999 — under
+      sync.observe(Some(974_999), 1_000_000); // gap 25,001 — over
+      assert_eq!(
+        sync.mode(),
+        HyDbSyncMode::Realtime,
+        "an oscillating tip must not enter stepped mode"
+      );
+    }
+    // ...and a gap that stays over the mark still gets in.
+    for _ in 0..STEPPED_HOLD_ADVANCES {
+      sync.observe(Some(974_999), 1_000_000);
+    }
+    assert_eq!(sync.mode(), HyDbSyncMode::Stepped);
+  }
+
+  #[tokio::test]
+  async fn a_reorg_leaves_stepped_mode_and_resets_the_hold() {
+    let sync = machine_or_fail(25_000);
+    for _ in 0..STEPPED_HOLD_ADVANCES {
+      sync.observe(Some(900_000), 999_999);
+    }
+    assert_eq!(sync.mode(), HyDbSyncMode::Stepped);
+
+    assert_eq!(
+      sync.force_realtime("a reorg was planned"),
+      Some(HyDbSyncMode::Realtime)
+    );
+    assert_eq!(sync.mode(), HyDbSyncMode::Realtime);
+    // Already realtime: nothing to report the second time.
+    assert_eq!(sync.force_realtime("again"), None);
+
+    // Re-entry has to earn the full hold again rather than resuming a count
+    // the reorg interrupted.
+    for _ in 1..STEPPED_HOLD_ADVANCES {
+      assert_eq!(sync.observe(Some(900_000), 999_999), None);
+    }
+    assert!(sync.observe(Some(900_000), 999_999).is_some());
+  }
+
+  #[tokio::test]
+  async fn the_flag_off_means_the_mode_never_engages() {
+    let sync = ModeMachine::new(false, 25_000);
+    for _ in 0..50 {
+      assert_eq!(sync.observe(Some(0), 1_000_000), None);
+    }
+    assert_eq!(sync.mode(), HyDbSyncMode::Realtime);
+  }
+
+  /// The two marks must stay distinct even when an operator configures an
+  /// entry gap below the built-in exit mark, or the hysteresis collapses back
+  /// into the single threshold it exists to avoid.
+  #[tokio::test]
+  async fn the_exit_mark_stays_below_the_entry_mark() {
+    for enter in [1_i64, 10, 5_000, 25_000, 99_999] {
+      let sync = machine_or_fail(enter);
+      assert!(
+        sync.exit_gap() <= sync.enter_gap(),
+        "entry {enter} produced exit {} above it",
+        sync.exit_gap()
+      );
+      assert!(sync.exit_gap() >= 1);
+    }
+    assert_eq!(machine_or_fail(25_000).exit_gap(), STEPPED_EXIT_GAP);
   }
 
   #[test]
