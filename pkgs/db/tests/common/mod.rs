@@ -69,14 +69,57 @@ impl TempDb {
   /// Connect a `HyphenDb` (applies migrations) to the ephemeral database.
   pub async fn open(&self) -> Result<HyphenDb, Box<dyn std::error::Error>> {
     let cfg = HyDbConfig {
-      url: self.url.clone(),
-      write_pool_size: 2,
-      query_pool_size: 2,
-      heavy_query_pool_size: 1,
-      admin_pool_size: 1,
+      client: hyphen_db::HyDbClientCfg {
+        url: self.url.clone(),
+        write: hyphen_db::HyDbWriteCfg {
+          size: 2,
+          ..hyphen_db::HyDbWriteCfg::default()
+        },
+        query: hyphen_db::HyDbQueryCfg {
+          size: 2,
+          ..hyphen_db::HyDbQueryCfg::default()
+        },
+        heavy: hyphen_db::HyDbHeavyCfg {
+          size: 1,
+          ..hyphen_db::HyDbHeavyCfg::default()
+        },
+        admin: hyphen_db::HyDbAdminCfg {
+          size: 1,
+          ..hyphen_db::HyDbAdminCfg::default()
+        },
+        ..hyphen_db::HyDbClientCfg::default()
+      },
       ..HyDbConfig::default()
     };
     Ok(HyphenDb::connect(cfg).await?)
+  }
+
+  /// Connect a `HyphenDb` with a caller-supplied client config (applies
+  /// migrations and the layout contract).
+  pub async fn open_with(
+    &self,
+    client: hyphen_db::HyDbClientCfg,
+  ) -> Result<HyphenDb, Box<dyn std::error::Error>> {
+    Ok(
+      HyphenDb::connect(HyDbConfig {
+        client: hyphen_db::HyDbClientCfg {
+          url: self.url.clone(),
+          ..client
+        },
+        ..HyDbConfig::default()
+      })
+      .await?,
+    )
+  }
+
+  /// The client config pointing at this ephemeral database, for tests that
+  /// build their own pools.
+  pub fn client_cfg(&self) -> Result<hyphen_db::HyDbClientCfg, Box<dyn std::error::Error>> {
+    Ok(hyphen_db::HyDbClientCfg {
+      url: self.url.clone(),
+      app_name: format!("hyphend-test-{}", std::process::id()),
+      ..hyphen_db::HyDbClientCfg::default()
+    })
   }
 
   /// A raw pool to the ephemeral database, for seeding.

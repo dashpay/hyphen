@@ -26,12 +26,27 @@ pub const DEFAULT_TEST_URL: &str = "postgresql://postgres@127.0.0.1:5432/postgre
 pub async fn connect() -> crate::HyDbResult<Option<HyphenDb>> {
   let url = std::env::var(TEST_DB_URL_ENV).unwrap_or_else(|_| DEFAULT_TEST_URL.to_owned());
   let cfg = HyDbConfig {
-    url,
-    // Keep tests light: a couple of connections per workload.
-    write_pool_size: 2,
-    query_pool_size: 2,
-    heavy_query_pool_size: 1,
-    admin_pool_size: 1,
+    client: crate::HyDbClientCfg {
+      url,
+      // Keep tests light: a couple of connections per workload.
+      write: crate::HyDbWriteCfg {
+        size: 2,
+        ..crate::HyDbWriteCfg::default()
+      },
+      query: crate::HyDbQueryCfg {
+        size: 2,
+        ..crate::HyDbQueryCfg::default()
+      },
+      heavy: crate::HyDbHeavyCfg {
+        size: 1,
+        ..crate::HyDbHeavyCfg::default()
+      },
+      admin: crate::HyDbAdminCfg {
+        size: 1,
+        ..crate::HyDbAdminCfg::default()
+      },
+      ..crate::HyDbClientCfg::default()
+    },
     ..HyDbConfig::default()
   };
   HyphenDb::connect(cfg).await.map(Some)

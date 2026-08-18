@@ -288,11 +288,11 @@ impl ServeRuntime {
         .map_err(|e| DaemonError::Config(format!("build config snapshot: {e}")))?,
     );
     let pg_diag_base = Arc::new(hyphend::wire::msg::PostgresDiag {
-      write_pool_size: Some(cfg.postgres.write_pool_size),
-      query_pool_size: Some(cfg.postgres.query_pool_size),
-      heavy_query_pool_size: Some(cfg.postgres.heavy_query_pool_size),
-      admin_pool_size: Some(cfg.postgres.admin_pool_size),
-      slow_query_ms: Some(cfg.postgres.slow_query_ms),
+      write_pool_size: Some(cfg.db.client.write.size),
+      query_pool_size: Some(cfg.db.client.query.size),
+      heavy_query_pool_size: Some(cfg.db.client.heavy.size),
+      admin_pool_size: Some(cfg.db.client.admin.size),
+      slow_query_ms: Some(cfg.db.client.slow_query_ms),
       ..Default::default()
     });
     let ipc = super::ipc::IpcVisor::new(super::ipc::IpcVisorConfig {

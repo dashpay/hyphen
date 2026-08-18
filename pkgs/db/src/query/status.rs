@@ -47,6 +47,26 @@ pub struct HyDbQrPoolStat {
   pub idle: usize,
 }
 
+/// One pool's per-session settings, as the *server* reports them.
+///
+/// Read back rather than echoed from the config on purpose: what an operator
+/// needs to see is what the backends are actually running with. A `SET` that
+/// silently failed to apply, or a value Postgres normalised differently from
+/// what was written, is exactly the discrepancy this makes visible.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HyDbQrPoolSession {
+  /// Pool name, and the suffix on `application_name`.
+  pub name: String,
+  /// `application_name` as `pg_stat_activity` sees it.
+  pub app_name: String,
+  pub synchronous_commit: String,
+  /// Milliseconds, in the GUC's base unit (`0` is unbounded).
+  pub statement_timeout: String,
+  pub work_mem: String,
+  pub maintenance_work_mem: String,
+  pub jit: String,
+}
+
 /// Server-level storage diagnostics for the operator console.
 #[derive(Debug, Clone, Default)]
 pub struct HyDbQrStorageDiag {

@@ -30,7 +30,8 @@ pub use blocks::{
 pub use metrics::{HyDbMetricIdx, HyDbQrMetricPoint};
 pub use search::{HyDbQrSearchHit, HyDbSearch, HyDbSearchKind};
 pub use status::{
-  HyDbQrChainTip, HyDbQrHealth, HyDbQrPoolStat, HyDbQrSizeDiag, HyDbQrStorageDiag, HyDbStatus,
+  HyDbQrChainTip, HyDbQrHealth, HyDbQrPoolSession, HyDbQrPoolStat, HyDbQrSizeDiag,
+  HyDbQrStorageDiag, HyDbStatus,
 };
 pub use txs::{HyDbQrTxDetail, HyDbQrTxIn, HyDbQrTxOut, HyDbQrTxSummary, HyDbTxIdx};
 pub use validators::{HyDbQrValidator, HyDbQrVlCounts, HyDbQrVlHistory, HyDbVlIdx};

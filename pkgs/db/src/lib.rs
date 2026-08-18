@@ -41,7 +41,10 @@ pub mod tests;
 use core::fmt;
 use std::sync::Arc;
 
-pub use config::{HyDbConfig, DEFAULT_POSTGRES_URL};
+pub use config::{
+  HyDbAdminCfg, HyDbClientCfg, HyDbConfig, HyDbHeavyCfg, HyDbQueryCfg, HyDbWriteCfg,
+  DEFAULT_POSTGRES_URL,
+};
 pub use error::{HyDbError, HyDbResult, Outcome};
 pub use ingest::{HyDbBlockSeen, HyDbIngest, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport};
 pub use records::{
@@ -51,10 +54,10 @@ pub use records::{
 // The query surface is broad; rather than mirror every row type at the crate
 // root, consumers reach them through `hyphen_db::query::*` (re-exported by
 // `query/mod.rs`). Only the domain traits are pulled in here, for the facade.
-pub use query::HyDbQrPoolStat;
 use query::{
   HyDbAddrIdx, HyDbBlockIdx, HyDbMetricIdx, HyDbSearch, HyDbStatus, HyDbTxIdx, HyDbVlIdx,
 };
+pub use query::{HyDbQrPoolSession, HyDbQrPoolStat};
 pub use types::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbCursor, HyDbHash, HyDbHeight, HyDbOutpoint, HyDbPage,
   HyDbTxType, HyDbVlType,
@@ -75,7 +78,11 @@ use query::PgRead;
 /// [`HyDbError::Config`] if the URL is unparseable, [`HyDbError::Pg`] if the
 /// database cannot be read.
 pub async fn show_layout(cfg: &HyDbConfig) -> HyDbResult<String> {
-  let pool = pool::diagnostic_pool(cfg).await?;
+  // Same validation the serve path runs: a diagnostic that happily explains
+  // the layout while `[db.client]` holds a value that will refuse to start is
+  // answering the wrong question.
+  cfg.validate()?;
+  let pool = pool::diagnostic_pool(&cfg.client).await?;
   let mut layout_cfg = cfg.layout.clone();
   layout_cfg
     .schema_version
@@ -125,7 +132,7 @@ impl HyphenDb {
   /// or [`HyDbError::Layout`] if `[db.layout]` disagrees with the layout this
   /// database was created with.
   pub async fn connect(cfg: HyDbConfig) -> HyDbResult<Self> {
-    let pools = pool::HyDbPools::connect(&cfg).await?;
+    let pools = pool::HyDbPools::connect(&cfg.client).await?;
     migrate::apply(&pools.write).await?;
 
     // Immediately after the migrator, and before anything can read or write a
@@ -239,6 +246,54 @@ impl HyphenDb {
       stat("heavy_query", &pools.heavy_query),
       stat("admin", &pools.admin),
     ]
+  }
+
+  /// Per-pool session settings as the server reports them, for diagnostics
+  /// and for the tests that prove `[db.client.*]` actually reaches a backend.
+  ///
+  /// One round trip per pool, on the pool itself — the values are
+  /// session-scoped, so they can only be read from a connection that pool
+  /// owns. Empty on a mock facade.
+  ///
+  /// # Errors
+  ///
+  /// [`HyDbError::Pg`] if a pool cannot answer.
+  pub async fn pool_sessions(&self) -> HyDbResult<Vec<HyDbQrPoolSession>> {
+    let Some(pools) = self.pools.as_ref() else {
+      return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(4);
+    for (name, pool) in [
+      (pool::POOL_WRITE, &pools.write),
+      (pool::POOL_QUERY, &pools.query),
+      (pool::POOL_HEAVY, &pools.heavy_query),
+      (pool::POOL_ADMIN, &pools.admin),
+    ] {
+      // `pg_settings.setting` is the value in the GUC's own base unit, with no
+      // suffix: `current_setting('statement_timeout')` would render 5000ms as
+      // "5s", which is unhelpful to compare against a configured number.
+      let row: (String, String, String, String, String, String) = sqlx::query_as(
+        r#"SELECT current_setting('application_name'),
+                  current_setting('synchronous_commit'),
+                  (SELECT setting FROM pg_settings WHERE name = 'statement_timeout'),
+                  current_setting('work_mem'),
+                  current_setting('maintenance_work_mem'),
+                  current_setting('jit')"#,
+      )
+      .fetch_one(pool)
+      .await
+      .map_err(|e| HyDbError::pg(&format!("read {name} pool session settings"), e))?;
+      out.push(HyDbQrPoolSession {
+        name: name.to_owned(),
+        app_name: row.0,
+        synchronous_commit: row.1,
+        statement_timeout: row.2,
+        work_mem: row.3,
+        maintenance_work_mem: row.4,
+        jit: row.5,
+      });
+    }
+    Ok(out)
   }
 
   pub fn metrics(&self) -> &dyn HyDbMetricIdx {

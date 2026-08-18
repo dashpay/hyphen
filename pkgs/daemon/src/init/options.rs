@@ -203,9 +203,9 @@ impl Options {
       sources: ConfigSourcesSnapshot {
         rest_url: cfg.core.url.clone(),
         postgres_enabled: true,
-        postgres_write_pool_size: Some(cfg.postgres.write_pool_size),
-        postgres_query_pool_size: Some(cfg.postgres.query_pool_size),
-        postgres_admin_pool_size: Some(cfg.postgres.admin_pool_size),
+        postgres_write_pool_size: Some(cfg.db.client.write.size),
+        postgres_query_pool_size: Some(cfg.db.client.query.size),
+        postgres_admin_pool_size: Some(cfg.db.client.admin.size),
         rpc_enabled: cfg.core.rpc.as_ref().is_some_and(|rpc| rpc.enabled),
         rpc_url: cfg.core.rpc.as_ref().map(|rpc| rpc.url.clone()),
         rpc_auth_type: cfg
@@ -245,7 +245,7 @@ impl Options {
               .collect()
           })
           .unwrap_or_default(),
-        postgres_url: Some(redact_pg_url(&cfg.postgres.url)),
+        postgres_url: Some(cfg.db.client.endpoint()),
       },
       api: ConfigApiSnapshot {
         enabled: self.api.enabled,
@@ -274,32 +274,15 @@ impl Options {
         chainlock: self.overlays.chainlock,
       },
       postgres: ConfigPostgresSnapshot {
-        url_redacted: Some(redact_pg_url(&cfg.postgres.url)),
-        write_pool_size: Some(cfg.postgres.write_pool_size),
-        query_pool_size: Some(cfg.postgres.query_pool_size),
-        heavy_query_pool_size: Some(cfg.postgres.heavy_query_pool_size),
-        admin_pool_size: Some(cfg.postgres.admin_pool_size),
-        slow_query_ms: Some(cfg.postgres.slow_query_ms),
+        url_redacted: Some(cfg.db.client.endpoint()),
+        write_pool_size: Some(cfg.db.client.write.size),
+        query_pool_size: Some(cfg.db.client.query.size),
+        heavy_query_pool_size: Some(cfg.db.client.heavy.size),
+        admin_pool_size: Some(cfg.db.client.admin.size),
+        slow_query_ms: Some(cfg.db.client.slow_query_ms),
       },
     })
   }
-}
-
-/// Redact credentials from a Postgres URL for diagnostic snapshots.
-///
-/// Splits the authority at the LAST `@` (a password may itself contain `@`)
-/// and handles schemeless URLs too — `user:secret@host/db` without `://` must
-/// not pass through verbatim.
-fn redact_pg_url(url: &str) -> String {
-  let (proto, rest) = match url.find("://") {
-    Some(proto_end) => (&url[..proto_end + 3], &url[proto_end + 3..]),
-    None => ("", url),
-  };
-  let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
-  if let Some(at_pos) = rest[..authority_end].rfind('@') {
-    return format!("{proto}***:***{}", &rest[at_pos..]);
-  }
-  url.to_owned()
 }
 
 impl Default for ApiOptions {

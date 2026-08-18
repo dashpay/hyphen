@@ -13,23 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::DaemonError;
 use crate::rest::DEFAULT_API_BIND;
 use hyphen_db::layout::HyDbLayoutCfg;
-use hyphen_db::DEFAULT_POSTGRES_URL;
-
-// Postgres pool-tuning defaults, retained on `PostgresConfig` for config-file
-// compatibility. The storage engine now owns pool sizing via `HyDbConfig`.
-pub const DEFAULT_ADMIN_POOL_SIZE: usize = 4;
-pub const DEFAULT_HEAVY_QUERY_POOL_SIZE: usize = 4;
-pub const DEFAULT_QUERY_POOL_SIZE: usize = 8;
-pub const DEFAULT_SLOW_QUERY_MS: u64 = 500;
-pub const DEFAULT_WRITE_POOL_SIZE: usize = 20;
+use hyphen_db::HyDbClientCfg;
 
 /// Top-level daemon configuration loaded from `hyphen.conf`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
   pub core: CoreConfig,
-  #[serde(default)]
-  pub postgres: PostgresConfig,
   pub api: Option<ApiConfig>,
   pub indices: Option<IndicesConfig>,
   pub live: Option<LiveConfig>,
@@ -55,6 +45,10 @@ pub struct DbConfig {
   /// place for the key set to drift out of step with the contract that
   /// enforces it, and unlike the connection URL there is no secret to redact.
   pub layout: HyDbLayoutCfg,
+  /// Connection and per-pool settings. Also the engine's own type: it already
+  /// owns the redacting `Debug`/`Serialize` the daemon needs, and a mirrored
+  /// copy would have to be kept in step with four pool sub-sections by hand.
+  pub client: HyDbClientCfg,
 }
 
 /// Connection settings for the node REST interface.
@@ -259,32 +253,6 @@ pub const DEFAULT_BLOCK_TIME_SECS: f64 = 150.0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
-pub struct PostgresConfig {
-  pub url: String,
-  pub write_pool_size: usize,
-  pub query_pool_size: usize,
-  pub heavy_query_pool_size: usize,
-  pub admin_pool_size: usize,
-  /// Log queries slower than this threshold (milliseconds).
-  pub slow_query_ms: u64,
-}
-
-impl Default for PostgresConfig {
-  fn default() -> Self {
-    Self {
-      url: DEFAULT_POSTGRES_URL.to_owned(),
-      write_pool_size: DEFAULT_WRITE_POOL_SIZE,
-      query_pool_size: DEFAULT_QUERY_POOL_SIZE,
-      heavy_query_pool_size: DEFAULT_HEAVY_QUERY_POOL_SIZE,
-      admin_pool_size: DEFAULT_ADMIN_POOL_SIZE,
-      slow_query_ms: DEFAULT_SLOW_QUERY_MS,
-    }
-  }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
   pub bind: String,
   /// Allowed CORS origin. If unset, all origins are allowed.
@@ -360,20 +328,14 @@ pub struct OverlaysConfig {
 }
 
 impl Config {
-  /// Build the storage engine's configuration from `[db]` (and, until T3
-  /// lands, `[postgres]`).
+  /// Build the storage engine's configuration from `[db]`.
   ///
   /// One builder, used by both the serve path and `--show-layout`, so the
   /// diagnostic can never report against a different database than the one
   /// the daemon would open.
   pub fn hydb_config(&self) -> hyphen_db::HyDbConfig {
     hyphen_db::HyDbConfig {
-      url: self.postgres.url.clone(),
-      write_pool_size: self.postgres.write_pool_size,
-      query_pool_size: self.postgres.query_pool_size,
-      heavy_query_pool_size: self.postgres.heavy_query_pool_size,
-      admin_pool_size: self.postgres.admin_pool_size,
-      slow_query_ms: self.postgres.slow_query_ms,
+      client: self.db.client.clone(),
       layout: self.db.layout.clone(),
       created_by: format!("hyphend/{}", env!("CARGO_PKG_VERSION")),
     }
