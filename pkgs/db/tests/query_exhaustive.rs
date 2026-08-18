@@ -245,6 +245,12 @@ async fn seed(pool: &PgPool) -> TestResult {
   )
   .execute(pool)
   .await?;
+  // Seeded directly, like the other summaries: this fixture writes
+  // `address_stats` rather than ingesting blocks, so the maintained counter
+  // has nothing to accumulate from.
+  sqlx::query("UPDATE address_summary SET positive_balance_count = 2 WHERE singleton = TRUE")
+    .execute(pool)
+    .await?;
   Ok(())
 }
 

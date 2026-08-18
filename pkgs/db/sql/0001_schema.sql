@@ -241,6 +241,29 @@ CREATE TABLE address_rich (
 );
 CREATE INDEX idx_address_rich_rank ON address_rich (balance DESC, address ASC);
 
+-- The number of addresses with a positive balance, maintained in the block
+-- transaction by the same stage that writes `address_stats`, from the same
+-- prior/new balance pair the rich-list membership check already computes.
+--
+-- It is a counter and not a `COUNT(*)` because `address_stats` deliberately
+-- carries no index over `balance` (see above): the count was an index-only
+-- scan of `idx_address_stats_balance_rank` and became a parallel sequential
+-- scan of the whole 2 GB table the moment that index went away, on a read the
+-- balances endpoint issues once per request.
+--
+-- It lives in its own singleton rather than in `supply_summary` because the
+-- owning stage differs: `supply_summary` is read-modify-written by the stats
+-- stage, which snapshots it into `undo_blocks` for reversal, while this value
+-- is derived from the balance stage's own pre-images in `undo_address_stats`.
+-- Folding it into `supply_summary` would put two stages on the same row in the
+-- same block transaction and would make the stats stage's undo capture depend
+-- on the balance stage having already run.
+CREATE TABLE address_summary (
+  singleton              BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  positive_balance_count BIGINT  NOT NULL DEFAULT 0 CHECK (positive_balance_count >= 0)
+);
+INSERT INTO address_summary (singleton) VALUES (TRUE);
+
 CREATE TABLE transactions_summary (
   singleton  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
   total      BIGINT  NOT NULL DEFAULT 0 CHECK (total >= 0)

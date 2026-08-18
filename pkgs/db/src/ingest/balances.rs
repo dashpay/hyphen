@@ -18,6 +18,14 @@
 //! ever sums history. Keeping the two directions symmetric is the whole
 //! correctness argument: a connect-only implementation would drift from
 //! `address_stats` on the first reorg with nothing to detect it.
+//!
+//! The same two balances also drive `address_summary.positive_balance_count`,
+//! the count of addresses with a positive balance. That count has no index to
+//! ride since the balance index was removed, so it is accumulated here instead
+//! of scanned at read time: connect adds one per address that crosses zero
+//! upward and subtracts one per address that crosses it downward, and
+//! disconnect applies the inverse, computed from the undo pre-image against
+//! the still-current row before either is touched.
 
 use std::collections::HashMap;
 
@@ -105,6 +113,11 @@ impl IngestStage for BalancesStage {
     let mut r_addr: Vec<String> = Vec::new();
     let mut r_balance: Vec<i64> = Vec::new();
     let mut r_drop: Vec<String> = Vec::new();
+    // Net change in the number of positive-balance addresses. Same derivation
+    // as `was_member` above and for the same reason: the prior balance read
+    // here is the authority, so the counter cannot disagree with the rows it
+    // counts.
+    let mut positive_delta: i64 = 0;
 
     for addr in &addr_vec {
       let p = prior.get(addr);
@@ -136,6 +149,7 @@ impl IngestStage for BalancesStage {
       } else if prior_balance >= RICH_LIST_FLOOR {
         r_drop.push(addr.clone());
       }
+      positive_delta += i64::from(new_balance > 0) - i64::from(prior_balance > 0);
     }
 
     sqlx::query!(
@@ -192,6 +206,23 @@ impl IngestStage for BalancesStage {
       "connect: upsert address_stats",
     ))?;
 
+    // Positive-balance counter. Skipped when the block moved no address across
+    // zero, which keeps the singleton row out of most block transactions.
+    if positive_delta != 0 {
+      sqlx::query!(
+        r#"UPDATE address_summary
+              SET positive_balance_count = positive_balance_count + $1
+            WHERE singleton"#,
+        positive_delta,
+      )
+      .execute(&mut **tx)
+      .await
+      .map_err(HyDbStageError::sql(
+        Self::NAME,
+        "connect: bump address_summary",
+      ))?;
+    }
+
     // Rich-list side table. Both statements are skipped when the block moved
     // no address across (or within) the floor, which is the common case.
     if !r_addr.is_empty() {
@@ -223,6 +254,30 @@ impl IngestStage for BalancesStage {
   }
 
   async fn disconnect(&self, tx: &mut PgTx<'_>, height: i32) -> Result<(), HyDbStageError> {
+    // Positive-balance counter, mirrored from the pre-image. This has to run
+    // first: it compares each undo row against the address_stats row as the
+    // block left it, and the two statements below overwrite exactly those
+    // rows. A missing `address_stats` row counts as non-positive on both
+    // sides, so the arithmetic is the exact inverse of the connect path's.
+    sqlx::query!(
+      r#"UPDATE address_summary AS s
+            SET positive_balance_count = s.positive_balance_count + d.delta
+           FROM (SELECT COALESCE(SUM(
+                          (CASE WHEN u.existed AND u.balance > 0 THEN 1 ELSE 0 END)
+                        - (CASE WHEN a.balance > 0 THEN 1 ELSE 0 END)), 0) AS delta
+                   FROM undo_address_stats AS u
+                   LEFT JOIN address_stats AS a ON a.address = u.address
+                  WHERE u.height = $1) AS d
+          WHERE s.singleton AND d.delta <> 0"#,
+      height
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(HyDbStageError::sql(
+      Self::NAME,
+      "disconnect: unwind address_summary",
+    ))?;
+
     // Delete the address_stats rows this block created (no pre-image to restore).
     sqlx::query!(
       r#"DELETE FROM address_stats WHERE address IN

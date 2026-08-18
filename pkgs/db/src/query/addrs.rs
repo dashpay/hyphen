@@ -522,11 +522,17 @@ impl HyDbAddrIdx for PgAddrIdx {
   }
 
   async fn bal_count(&self) -> HyDbResult<u64> {
-    let count =
-      sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!" FROM address_stats WHERE balance > 0"#)
-        .fetch_one(&self.pg.query)
-        .await
-        .map_err(|e| HyDbError::pg("positive-balance address count", e))?;
+    // A maintained counter, not a `COUNT(*)`: `address_stats` carries no index
+    // over `balance`, so counting the predicate means a parallel sequential
+    // scan of the whole table (measured in seconds on mainnet) on a read the
+    // balances endpoint issues once per request. `BalancesStage` keeps this
+    // row exact in both directions inside the block transaction.
+    let count = sqlx::query_scalar!(
+      "SELECT positive_balance_count FROM address_summary WHERE singleton = TRUE"
+    )
+    .fetch_one(&self.pg.query)
+    .await
+    .map_err(|e| HyDbError::pg("positive-balance address count", e))?;
     Ok(count.max(0) as u64)
   }
 
