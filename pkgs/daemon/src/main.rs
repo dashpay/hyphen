@@ -64,6 +64,7 @@ fn run() -> Result<(), DaemonError> {
   let cfg = init::load_config(&dir)?;
   let options = Options::resolve(&args, &cfg)?;
 
+  datadir::check_free_space(&dir)?;
   info!("disk space OK");
 
   let lock = lockfile::acquire(&dir)?;
