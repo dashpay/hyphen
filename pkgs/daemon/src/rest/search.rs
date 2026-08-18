@@ -18,7 +18,63 @@ use super::AppState;
 use crate::utils::{self, HashEndian};
 
 const MAX_SEARCH_RESULTS: usize = 10;
-const MIN_AUTOCOMPLETE_QUERY_LEN: usize = 3;
+/// Minimum query length for every arm except the numeric block-height lookup.
+///
+/// Four, not three: at mainnet scale a 3-character hex prefix matches ~17,200
+/// transactions against ~1,080 at four, and every one of those rows is a wasted
+/// index entry the user will never see past `MAX_SEARCH_RESULTS`.
+const MIN_AUTOCOMPLETE_QUERY_LEN: usize = 4;
+
+/// Which pools a query could possibly match, derived from its shape.
+///
+/// This is a CANDIDATE SET, not a precedence winner. Hex and base58 overlap on
+/// `[1-9a-f]`, and mainnet p2sh addresses start with `7` (testnet `8`/`9`) —
+/// all hex digits — so a query can legitimately be both a hash prefix and an
+/// address prefix, and both arms must run. Only `X`/`y` (p2pkh) and the
+/// non-hex base58 letters are unambiguous.
+///
+/// `other` (governance) is served from the in-memory live state, not a
+/// Postgres pool, and matches both object hashes and free text; it therefore
+/// stays on for any printable query rather than only the "neither" shape,
+/// which costs no database work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SearchArms {
+  /// Numeric block height: a primary-key hit, so no length minimum.
+  height: bool,
+  /// Hex charset: blocks + transactions + validators.
+  hex: bool,
+  /// Base58 charset: addresses.
+  address: bool,
+  /// Governance and other free-text surfaces (in-memory).
+  other: bool,
+}
+
+impl SearchArms {
+  /// Whether any arm past the free height lookup is reachable.
+  fn has_prefix_arm(self) -> bool {
+    self.hex || self.address || self.other
+  }
+}
+
+/// Classify a query into the set of arms that could possibly match it.
+fn classify(query: &str) -> SearchArms {
+  let mut arms = SearchArms::default();
+  // All digits and inside `i32`: a block-height candidate. The `0 <= n <= tip`
+  // bound is enforced by the lookup itself (genesis is a real block, and a
+  // height past the tip simply misses), and the probe is a primary-key hit, so
+  // it is always worth including regardless of length.
+  if !query.is_empty() && query.bytes().all(|b| b.is_ascii_digit()) && query.parse::<i32>().is_ok()
+  {
+    arms.height = true;
+  }
+  if query.chars().count() < MIN_AUTOCOMPLETE_QUERY_LEN {
+    return arms;
+  }
+  arms.hex = is_base16(query);
+  arms.address = is_base58(query);
+  arms.other = is_ascii_printable(query);
+  arms
+}
 
 /// Query parameters for global search.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -36,7 +92,7 @@ pub struct SearchParams {
 #[utoipa::path(
   get,
   path = "/api/v1/search",
-  description = "Server-specific cross-domain autocomplete over indexed and live-backed data. Exact full 64-hex queries may resolve either stored-endian form, but partial matching only uses canonical display identifiers. Suggestions are capped at 10 results and shorter than 3 characters return an empty list.",
+  description = "Server-specific cross-domain autocomplete over indexed and live-backed data. Exact full 64-hex queries may resolve either stored-endian form, but partial matching only uses canonical display identifiers. Queries are dispatched by shape so only the pools that could match are probed; hex and base58 overlap, so both arms may run. Suggestions are capped at 10 results and, apart from numeric block heights, queries shorter than 4 characters are rejected.",
   params(SearchParams),
   responses(
     (status = 200, description = "Autocomplete results", body = SearchListResponse),
@@ -53,22 +109,23 @@ pub async fn search(
   if query.is_empty() {
     return Err(ApiError::bad_request("search query must not be empty"));
   }
+  let arms = classify(query);
   let mut results = Vec::new();
   let mut seen = HashSet::new();
-  if let Ok(height) = query.parse::<i32>() {
-    if let Some(result) = crate::index::block::rest::search_by_height(&state, height).await? {
-      push_unique(&mut results, &mut seen, result);
-      return Ok(Json(SearchListResponse { value: results }));
+  // The height probe is a primary-key lookup: free, and a hit is an
+  // unambiguous answer, so it short-circuits the fan-out entirely.
+  if arms.height {
+    if let Ok(height) = query.parse::<i32>() {
+      if let Some(result) = crate::index::block::rest::search_by_height(&state, height).await? {
+        push_unique(&mut results, &mut seen, result);
+        return Ok(Json(SearchListResponse { value: results }));
+      }
     }
   }
-  if is_base58(query) {
-    if let Some(result) = crate::index::spent::rest::search_address(&state, query).await? {
-      push_unique(&mut results, &mut seen, result);
-      return Ok(Json(SearchListResponse { value: results }));
-    }
-  }
-  if query.chars().count() < MIN_AUTOCOMPLETE_QUERY_LEN {
-    return Ok(Json(SearchListResponse { value: Vec::new() }));
+  if !arms.has_prefix_arm() {
+    return Err(ApiError::bad_request(&format!(
+      "search query must be at least {MIN_AUTOCOMPLETE_QUERY_LEN} characters"
+    )));
   }
 
   if query.len() == 64 {
@@ -114,7 +171,7 @@ pub async fn search(
   }
 
   let hex_query = query.to_ascii_lowercase();
-  if is_base16(query) {
+  if arms.hex {
     append_results(
       &mut results,
       &mut seen,
@@ -142,7 +199,7 @@ pub async fn search(
       .await?,
     );
   }
-  if is_base58(query) {
+  if arms.address {
     if let Some(result) = crate::index::spent::rest::search_address(&state, query).await? {
       push_unique(&mut results, &mut seen, result);
     }
@@ -157,7 +214,7 @@ pub async fn search(
       .await?,
     );
   }
-  if is_ascii_printable(query) {
+  if arms.other {
     append_results(
       &mut results,
       &mut seen,
@@ -223,6 +280,7 @@ fn is_ascii_printable(query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+  use super::{classify, MIN_AUTOCOMPLETE_QUERY_LEN};
   use crate::rest::openapi::{
     SearchAddressResult, SearchBlockResult, SearchProposalResult, SearchResponse,
     SearchValidatorResult,
@@ -234,6 +292,71 @@ mod tests {
 
   fn tx_tags(mined: bool, coinbase: bool) -> crate::rest::openapi::TxTags {
     crate::rest::openapi::TxTags { mined, coinbase }
+  }
+
+  #[test]
+  fn numeric_queries_reach_the_height_arm_at_any_length() {
+    // Genesis: one character, and the pkey probe is free.
+    let zero = classify("0");
+    assert!(zero.height, "q=0 must still resolve as a block height");
+    assert!(
+      !zero.has_prefix_arm(),
+      "a one-character query must not fan out to prefix pools"
+    );
+    assert!(classify("967013").height);
+    // Wider than i32: not a height, but still a hex prefix.
+    let huge = classify("99999999999999999999");
+    assert!(!huge.height);
+    assert!(huge.hex);
+  }
+
+  #[test]
+  fn p2sh_and_p2pkh_prefixes_both_reach_the_address_arm() {
+    // Mainnet p2sh starts with `7`, a hex digit: strict precedence would send
+    // this to the hash pools only and silently drop the address.
+    let p2sh = classify("7abc");
+    assert!(
+      p2sh.address,
+      "a `7`-prefixed p2sh query must reach addresses"
+    );
+    assert!(p2sh.hex, "it is also a valid hash prefix, so hex runs too");
+    // Testnet p2sh: `8`/`9` are hex digits as well.
+    assert!(classify("8abc").address);
+    assert!(classify("9abc").address);
+    // Mainnet p2pkh `X` and testnet `y` are unambiguous: address only.
+    let p2pkh = classify("Xabc");
+    assert!(p2pkh.address);
+    assert!(!p2pkh.hex);
+    let testnet = classify("yabc");
+    assert!(testnet.address);
+    assert!(!testnet.hex);
+  }
+
+  #[test]
+  fn unambiguous_and_ambiguous_shapes_pick_the_right_pools() {
+    // Contains `0`, which is hex but not base58: hash pools only.
+    let hex_only = classify("dead0");
+    assert!(hex_only.hex);
+    assert!(!hex_only.address);
+    // The overlap charset [1-9a-f]: both arms.
+    let ambiguous = classify("dead");
+    assert!(ambiguous.hex && ambiguous.address);
+    // Neither charset: governance / other only, no database pool.
+    let text = classify("treasury proposal");
+    assert!(!text.hex && !text.address);
+    assert!(text.other);
+  }
+
+  #[test]
+  fn short_non_numeric_queries_reach_no_arm() {
+    for query in ["abc", "Xa", "%", "de"] {
+      let arms = classify(query);
+      assert!(
+        !arms.has_prefix_arm(),
+        "{query:?} is under the {MIN_AUTOCOMPLETE_QUERY_LEN}-character minimum"
+      );
+      assert!(!arms.height, "{query:?} is not numeric");
+    }
   }
 
   #[test]
