@@ -65,6 +65,55 @@
 //! produces an `Append` that index-scans every partition that has one and
 //! falls back only on the one that does not.
 //!
+//! The fallback is graceful rather than catastrophic, which was checked on
+//! real data rather than assumed. The address-history query against a 3.4 GB
+//! `address_txs_p8` plans as an `Index Only Scan using
+//! idx_address_txs_addr_height_desc_p8` when the index is there, and as an
+//! `Index Scan Backward using address_txs_p8_pkey` under an `Incremental Sort`
+//! when it is not — the partition's primary key leads with `address`, so even
+//! the deferred case is an index scan, not a sequential one.
+//!
+//! # What it is worth
+//!
+//! Measured by replaying the real mainnet heights 860,000-869,999 (10,000
+//! blocks, 179,870 transactions) into a `p8` already holding 800,000-859,999,
+//! one transaction per block, `synchronous_commit` off, against the same
+//! template database both times:
+//!
+//! | | wall | blocks/s |
+//! |---|---|---|
+//! | realtime | 179.30 s | 55.8 |
+//! | stepped  | 113.78 s | 87.9 |
+//!
+//! 1.58x, or 37% less wall time, for the seven indexes alone — the primary
+//! keys, `idx_tx_inputs_txid` and `idx_spends_outpoint` were maintained in
+//! both runs. The build that pays for it, on a partition holding 70,000
+//! blocks with `maintenance_work_mem` at 2 GB:
+//!
+//! | index | build | size |
+//! |---|---|---|
+//! | `idx_address_txs_addr_height_desc` | 49.01 s | 983 MB |
+//! | `idx_tx_outputs_txid_vout`         | 27.17 s | 340 MB |
+//! | `idx_tx_outputs_outpoint`          |  6.26 s | 340 MB |
+//! | `idx_tx_outputs_address`           |  5.61 s | 187 MB |
+//! | `idx_transactions_display_txid`    |  5.14 s | 107 MB |
+//! | `idx_transactions_txid`            |  1.89 s |  66 MB |
+//! | `idx_transactions_list`            |  1.37 s |  75 MB |
+//! | **total**                          | **96.44 s** | **2,098 MB** |
+//!
+//! So the saving runs at ~6.6 s per 1,000 blocks against a one-off build of
+//! ~96 s per partition — the trade only works because it is charged once per
+//! partition and not once per interval. Over a full 100,000-block partition
+//! that is roughly 11 minutes saved against something under 2.5 minutes spent.
+//! Read the per-block figure as an upper bound rather than an average: the
+//! window measured sits 60,000 blocks into the partition, where the indexes
+//! being maintained are already near their final size.
+//!
+//! A second, unbudgeted-for effect: an index built in one pass is denser than
+//! the same index grown by random insertion. Total relation size after the
+//! same 10,000 blocks came out 3,444 MB against 3,790 MB for `address_txs_p8`
+//! and 2,602 MB against 2,921 MB for `tx_outputs_p8` — 9-11% smaller.
+//!
 //! # Builds are plain, not `CONCURRENTLY`
 //!
 //! Measured on 3M real rows: 6.47 s plain against 32.76 s concurrent, a 5.1x
@@ -359,14 +408,23 @@ impl ModeMachine {
     let Some(target) = want else {
       st.toward_stepped = 0;
       st.toward_realtime = 0;
-      tracing::debug!(
-        mode = st.mode.as_str(),
-        gap,
-        enter_gap = self.enter_gap,
-        exit_gap = self.exit_gap,
-        "stepped sync holds mode={} — gap sits in the hysteresis band",
-        st.mode.as_str()
-      );
+      // Only worth a line when the gap is actually *between* the two marks —
+      // that is the case where the mode looks wrong and is not. A gap of
+      // nothing in realtime mode, which is every advance at the tip, is not a
+      // refusal and does not need reporting.
+      if (self.exit_gap..self.enter_gap).contains(&gap) {
+        tracing::debug!(
+          mode = st.mode.as_str(),
+          gap,
+          enter_gap = self.enter_gap,
+          exit_gap = self.exit_gap,
+          "stepped sync refuses to flap: mode={} holds because the gap sits in \
+           the hysteresis band between {} and {}",
+          st.mode.as_str(),
+          self.exit_gap,
+          self.enter_gap
+        );
+      }
       return None;
     };
 
