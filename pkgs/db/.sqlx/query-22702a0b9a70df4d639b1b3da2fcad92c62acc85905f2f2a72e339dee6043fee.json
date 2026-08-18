@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT display_hex(hash) AS \"hex!\" FROM blocks\n          WHERE display_hex(hash) LIKE $1 ESCAPE '\\' ORDER BY height DESC LIMIT $2",
+  "query": "SELECT display_hex(hash) AS \"hex!\" FROM blocks\n            WHERE display_hex(hash) LIKE $1 ESCAPE '\\' ORDER BY height DESC LIMIT $2",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       null
     ]
   },
-  "hash": "2817779edda4781618bc6fa22062506d963291d6024a2d3e5367656a6ddf10b8"
+  "hash": "22702a0b9a70df4d639b1b3da2fcad92c62acc85905f2f2a72e339dee6043fee"
 }

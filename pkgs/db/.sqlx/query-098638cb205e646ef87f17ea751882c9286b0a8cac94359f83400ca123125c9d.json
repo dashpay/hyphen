@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT address AS \"address!\" FROM address_stats\n          WHERE address LIKE $1 ESCAPE '\\'\n          ORDER BY last_seen_height DESC NULLS LAST, tx_count DESC, address ASC LIMIT $2",
+  "query": "SELECT address AS \"address!\" FROM address_stats\n          WHERE address LIKE $1 ESCAPE '\\' LIMIT $2",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       false
     ]
   },
-  "hash": "a5f0b790fb15563033a1ec083a7028a141f5e086d8a225d0d1e6835a21e555ec"
+  "hash": "098638cb205e646ef87f17ea751882c9286b0a8cac94359f83400ca123125c9d"
 }

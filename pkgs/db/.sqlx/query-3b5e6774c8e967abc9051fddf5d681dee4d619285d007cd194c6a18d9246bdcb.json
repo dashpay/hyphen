@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT txid AS \"txid!\" FROM transactions\n          WHERE display_hex(txid) LIKE $1 ESCAPE '\\'\n          ORDER BY block_height DESC, block_pos DESC, txid ASC LIMIT $2",
+  "query": "SELECT txid AS \"txid!\" FROM transactions\n          WHERE display_hex(txid) LIKE $1 ESCAPE '\\' LIMIT $2",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       false
     ]
   },
-  "hash": "f0ef4fb6d813f112e8d329db442ed619b6479577f5d1ddecc182d9a9e88a32b0"
+  "hash": "3b5e6774c8e967abc9051fddf5d681dee4d619285d007cd194c6a18d9246bdcb"
 }

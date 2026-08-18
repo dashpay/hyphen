@@ -355,11 +355,16 @@ impl HyDbTxIdx for PgTxIdx {
     let limit = limit.clamp(1, 100) as i64;
     // DISPLAY-order hex match (see the search contract in the schema), backed
     // by the display_hex expression index.
+    //
+    // No ORDER BY, deliberately: `LIMIT n` lets the index scan stop after n
+    // matches, while ordering by recency forces every match to be enumerated
+    // and heap-fetched first. On the retained mainnet database a 4-character
+    // prefix costs 39-48 ms ordered against 0.4 ms unordered, and txids are
+    // random, so "most recent among prefix matches" is arbitrary UX anyway.
     let pattern = hex_prefix_pattern(&prefix);
     let rows = sqlx::query_scalar!(
       r#"SELECT txid AS "txid!" FROM transactions
-          WHERE display_hex(txid) LIKE $1 ESCAPE '\'
-          ORDER BY block_height DESC, block_pos DESC, txid ASC LIMIT $2"#,
+          WHERE display_hex(txid) LIKE $1 ESCAPE '\' LIMIT $2"#,
       pattern,
       limit
     )
