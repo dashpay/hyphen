@@ -26,7 +26,7 @@ use crate::utils::{self, HashEndian};
 /// # Errors
 ///
 /// Returns `DaemonError::RestSource` when the transaction cannot be decoded and
-/// `DaemonError::Index` when a prevout lookup fails.
+/// `DaemonError::Storage` when a prevout lookup fails.
 pub async fn normalize_tx(
   db: &HyphenDb,
   txid_bytes: &[u8],
@@ -345,12 +345,12 @@ async fn load_prevouts(
     let prev_txid = input.prevout.hash.as_bytes().to_vec();
     let vout = input.prevout.index as i32;
     let hash = hyphen_db::HyDbHash::from_slice(&prev_txid)
-      .map_err(|e| DaemonError::Index(format!("mempool prevout hash: {e}")))?;
+      .map_err(|e| DaemonError::storage("mempool prevout hash", e))?;
     let detail = db
       .txs()
       .get(hash)
       .await
-      .map_err(|e| DaemonError::Index(format!("mempool prevout lookup: {e}")))?;
+      .map_err(|e| DaemonError::storage("mempool prevout lookup", e))?;
     if let Some(output) = detail.as_ref().and_then(|detail| {
       detail
         .outputs

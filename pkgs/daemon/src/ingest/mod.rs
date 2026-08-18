@@ -316,7 +316,7 @@ async fn advance_until_settled(
     let report = ingest
       .on_tip(tip)
       .await
-      .map_err(|e| DaemonError::Index(format!("advance to tip: {e}")))?;
+      .map_err(|e| DaemonError::storage("advance to tip", e))?;
     if let Some(reorg) = &report.reorg {
       info!(
         fork_height = reorg.fork_height.0,
@@ -361,7 +361,7 @@ async fn read_local_tip(db: &HyphenDb) -> Result<i64, DaemonError> {
     db.status()
       .tip()
       .await
-      .map_err(|e| DaemonError::Index(format!("read canonical tip: {e}")))?
+      .map_err(|e| DaemonError::storage("read canonical tip", e))?
       .map_or(-1i64, |tip| i64::from(tip.height.0)),
   )
 }
@@ -378,7 +378,7 @@ async fn absorb_with_ancestors(
     match ingest
       .on_block(Bytes::from(raw.clone()))
       .await
-      .map_err(|e| DaemonError::Index(format!("absorb block: {e}")))?
+      .map_err(|e| DaemonError::storage("absorb block", e))?
     {
       HyDbBlockSeen::MissingParent(parent) => {
         let parent_hex = utils::view_hex(parent.as_bytes(), HashEndian::Ser);
@@ -393,7 +393,7 @@ async fn absorb_with_ancestors(
 }
 
 fn block_hash(raw: &[u8]) -> Result<HyDbHash, DaemonError> {
-  crate::consensus::block_hash(raw)
-    .map(|h| HyDbHash(h.to_bytes()))
-    .map_err(|e| DaemonError::Index(format!("hash block: {e}")))
+  // The inner error is already a `DaemonError`; re-formatting it into a new
+  // one would flatten a typed failure into a sentence for no gain.
+  crate::consensus::block_hash(raw).map(|h| HyDbHash(h.to_bytes()))
 }

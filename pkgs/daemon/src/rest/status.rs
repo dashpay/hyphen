@@ -40,7 +40,7 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse
     .await
     .map_err(|e| {
       ApiError::from_daemon(
-        crate::error::DaemonError::Index(format!("query status tip: {e}")),
+        crate::error::DaemonError::storage("query status tip", e),
         "query status tip",
       )
     })?
