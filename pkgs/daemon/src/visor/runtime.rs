@@ -6,8 +6,10 @@
 
 //! Serve-mode runtime assembly for daemon supervisors.
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::broadcast;
 
@@ -16,7 +18,7 @@ use tracing::{info, warn};
 
 use crate::api_metrics::ApiServerMetrics;
 use crate::config;
-use crate::error::DaemonError;
+use crate::error::{DaemonError, Outcome};
 use crate::index;
 use crate::init::Options;
 use crate::lifecycle::Lifecycle;
@@ -24,6 +26,54 @@ use crate::rest;
 use crate::sources::{self, RestSource};
 
 use super::Visor;
+
+/// How long startup keeps waiting on a storage engine whose failures are
+/// transient. Sized for the common case this exists for: daemon and Postgres
+/// restarting together, where PG answers `57P03 the database system is
+/// starting up` for a few seconds. Past the deadline the error is returned
+/// and the daemon exits, so a genuinely absent database still fails loudly.
+const STORAGE_READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// First backoff between startup attempts; doubles up to [`STORAGE_RETRY_MAX`].
+const STORAGE_RETRY_BASE: Duration = Duration::from_secs(1);
+const STORAGE_RETRY_MAX: Duration = Duration::from_secs(10);
+
+/// Run a storage-engine startup step, retrying for as long as its failures
+/// classify as transient.
+///
+/// The decision is structural: `DaemonError::Storage` defers to the storage
+/// crate's SQLSTATE classification, so "PG is still starting up" is waited on
+/// while "the URL is wrong" or "the schema failed to migrate" comes straight
+/// back as fatal. Nothing here inspects a message.
+async fn await_storage<T, F, Fut>(context: &'static str, mut step: F) -> Result<T, DaemonError>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = hyphen_db::HyDbResult<T>>,
+{
+  let deadline = Instant::now() + STORAGE_READY_TIMEOUT;
+  let mut backoff = STORAGE_RETRY_BASE;
+  loop {
+    let error = match step().await {
+      Ok(value) => return Ok(value),
+      Err(error) => DaemonError::storage(context, error),
+    };
+    if error.classify() != Outcome::Warning {
+      return Err(error);
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+      return Err(error);
+    }
+    let pause = backoff.min(remaining);
+    warn!(
+      context,
+      error = %error,
+      retry_in_secs = pause.as_secs(),
+      "storage engine not ready yet, waiting"
+    );
+    tokio::time::sleep(pause).await;
+    backoff = (backoff * 2).min(STORAGE_RETRY_MAX);
+  }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SourceAvailability {
@@ -146,19 +196,16 @@ impl ServeRuntime {
       slow_query_ms: cfg.postgres.slow_query_ms,
     };
     info!(config = ?db_cfg, "connecting to storage engine");
-    let db = HyphenDb::connect(db_cfg)
-      .await
-      .map_err(|e| DaemonError::Config(format!("connect storage engine: {e}")))?;
+    let db = await_storage("connect storage engine", || {
+      HyphenDb::connect(db_cfg.clone())
+    })
+    .await?;
     info!("storage engine ready, schema migrated");
 
-    let data_src = Arc::new(crate::ingest::datasrc::HyDbBlockSource::new(
-      cfg.chain.p2pkh_version,
-      cfg.chain.p2sh_version,
-    ));
-    let ingest_handle = db
-      .ingest(data_src)
-      .await
-      .map_err(|e| DaemonError::Config(format!("start ingest: {e}")))?;
+    let data_src: Arc<dyn hyphen_db::HyDbDataSrc> = Arc::new(
+      crate::ingest::datasrc::HyDbBlockSource::new(cfg.chain.p2pkh_version, cfg.chain.p2sh_version),
+    );
+    let ingest_handle = await_storage("start ingest", || db.ingest(Arc::clone(&data_src))).await?;
     let ingest = crate::ingest::IngestVisor::new(
       db.clone(),
       ingest_handle,
