@@ -17,8 +17,16 @@
 //! chunk is connected (`on_tip`) before the next is fetched, so the
 //! projection — and the operator's progress view — advances continuously
 //! instead of only after the entire chain has been absorbed.
+//!
+//! Within a chunk the fetch runs *ahead* of the absorb ([`prefetch`], task
+//! A4): the node is answering the next block's two round trips while the
+//! engine is still writing the previous one. The engine runs its own
+//! read-and-decode look-ahead in front of the writer, so the two halves of the
+//! seam are pipelined the same way and bounded by the same
+//! `[db.ingest] max_lead_blocks`.
 
 pub(crate) mod datasrc;
+pub(crate) mod prefetch;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -62,6 +70,10 @@ pub(crate) struct IngestStatus {
   /// with the REST status endpoint the same way the node tip is.
   sync_mode: Arc<AtomicU8>,
   blocks_ingested_total: AtomicU64,
+  /// Blocks the fetch look-ahead is currently holding for the absorb (task
+  /// A4). Surfaced so an operator can see whether the pipeline is running
+  /// ahead or starved, rather than inferring it from throughput.
+  lead_blocks: AtomicU64,
   last_progress_epoch: Arc<AtomicU64>,
   started_epoch: AtomicU64,
 }
@@ -98,6 +110,7 @@ impl IngestStatus {
       local_tip: AtomicI64::new(-1),
       sync_mode: Arc::new(AtomicU8::new(SYNC_MODE_REALTIME)),
       blocks_ingested_total: AtomicU64::new(0),
+      lead_blocks: AtomicU64::new(0),
       last_progress_epoch: Arc::new(AtomicU64::new(0)),
       started_epoch: AtomicU64::new(unix_now()),
     }
@@ -159,6 +172,16 @@ impl IngestStatus {
 
   pub(crate) fn blocks_ingested_total(&self) -> u64 {
     self.blocks_ingested_total.load(Ordering::Relaxed)
+  }
+
+  /// Blocks the fetch look-ahead is holding right now.
+  pub(crate) fn lead_blocks(&self) -> u32 {
+    u32::try_from(self.lead_blocks.load(Ordering::Relaxed)).unwrap_or(u32::MAX)
+  }
+
+  /// The configured ceiling on that lead, `[db.ingest] max_lead_blocks`.
+  pub(crate) fn max_lead_blocks(&self) -> u32 {
+    u32::try_from(hyphen_db::tuning::max_lead_blocks()).unwrap_or(u32::MAX)
   }
 
   pub(crate) fn last_progress_epoch(&self) -> Option<u64> {
@@ -252,7 +275,7 @@ impl IngestVisor {
     self.task = Some(tokio::spawn(async move {
       info!("ingest loop started");
       while lifecycle.running() {
-        match ingest_once(&db, &ingest, source.as_ref(), &status, &lifecycle).await {
+        match ingest_once(&db, &ingest, &source, &status, &lifecycle).await {
           Ok(()) => status.set_state(STATE_IDLE),
           Err(error) => {
             warn!(%error, "ingest cycle failed");
@@ -280,7 +303,7 @@ impl IngestVisor {
 async fn ingest_once(
   db: &HyphenDb,
   ingest: &HyDbIngest,
-  source: &dyn RestSource,
+  source: &Arc<dyn RestSource>,
   status: &IngestStatus,
   lifecycle: &Lifecycle,
 ) -> Result<(), DaemonError> {
@@ -300,7 +323,7 @@ async fn ingest_once(
     let raw = source.raw_block(&node_tip_hex).await?;
     let tip = block_hash(&raw)?;
     status.set_state(STATE_FETCHING);
-    absorb_with_ancestors(ingest, source, raw).await?;
+    absorb_with_ancestors(ingest, source.as_ref(), raw).await?;
     status.set_state(STATE_COMMITTING);
     advance_until_settled(db, ingest, status, tip).await?;
     return Ok(());
@@ -313,18 +336,7 @@ async fn ingest_once(
       .saturating_add(ABSORB_CHUNK_BLOCKS - 1)
       .min(node_height);
     status.set_state(STATE_FETCHING);
-    let mut chunk_tip: Option<HyDbHash> = None;
-    for h in height..=chunk_end {
-      if !lifecycle.running() {
-        return Ok(());
-      }
-      let hash = source.block_hash(h).await?;
-      let raw = source.raw_block(&hash).await?;
-      if h == chunk_end {
-        chunk_tip = Some(block_hash(&raw)?);
-      }
-      absorb_with_ancestors(ingest, source, raw).await?;
-    }
+    let chunk_tip = absorb_chunk(ingest, source, status, lifecycle, height, chunk_end).await?;
     if let Some(tip) = chunk_tip {
       status.set_state(STATE_COMMITTING);
       advance_until_settled(db, ingest, status, tip).await?;
@@ -332,6 +344,77 @@ async fn ingest_once(
     height = chunk_end.saturating_add(1);
   }
   Ok(())
+}
+
+/// Absorb `[lo, hi]` with the fetch running ahead of the absorb, and return
+/// the chunk tip's hash.
+///
+/// The queue is dropped — and with it every block still queued behind the
+/// current one — the moment the engine reports a missing parent. That report
+/// is the reorg seam: it means the engine cannot place this block on the chain
+/// it has, so the heights queued behind it were fetched against an assumption
+/// that no longer holds. They are refetched after the ancestor walk, from
+/// wherever the walk left the chain, rather than absorbed from a stale queue.
+async fn absorb_chunk(
+  ingest: &HyDbIngest,
+  source: &Arc<dyn RestSource>,
+  status: &IngestStatus,
+  lifecycle: &Lifecycle,
+  lo: u32,
+  hi: u32,
+) -> Result<Option<HyDbHash>, DaemonError> {
+  let mut next = lo;
+  let mut chunk_tip: Option<HyDbHash> = None;
+  while next <= hi {
+    let mut queue = prefetch::FetchQueue::spawn(Arc::clone(source), next, hi);
+    let mut discarded = false;
+    while let Some(item) = queue.next().await {
+      if !lifecycle.running() {
+        return Ok(None);
+      }
+      status
+        .lead_blocks
+        .store(queue.in_flight() as u64, Ordering::Relaxed);
+      let block = item?;
+      let height = block.height;
+      if height == hi {
+        chunk_tip = Some(block_hash(&block.raw)?);
+      }
+      next = height.saturating_add(1);
+      if absorb_one(ingest, source.as_ref(), block.raw).await? {
+        // An ancestor walk ran. Everything still queued was fetched on the
+        // superseded assumption; discard and refill from here.
+        discarded = true;
+        break;
+      }
+    }
+    if !discarded {
+      break;
+    }
+  }
+  status.lead_blocks.store(0, Ordering::Relaxed);
+  Ok(chunk_tip)
+}
+
+/// Absorb one block, walking to fetch any ancestor the engine reports missing.
+/// Returns whether a walk was needed — the caller treats that as a signal to
+/// discard its look-ahead.
+async fn absorb_one(
+  ingest: &HyDbIngest,
+  source: &dyn RestSource,
+  raw: Vec<u8>,
+) -> Result<bool, DaemonError> {
+  match ingest
+    .on_block(Bytes::from(raw.clone()))
+    .await
+    .map_err(|e| DaemonError::storage("absorb block", e))?
+  {
+    HyDbBlockSeen::New | HyDbBlockSeen::Known => Ok(false),
+    HyDbBlockSeen::MissingParent(_) => {
+      absorb_with_ancestors(ingest, source, raw).await?;
+      Ok(true)
+    }
+  }
 }
 
 /// Drive `on_tip` until the projection reaches the engine's reported target
