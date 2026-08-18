@@ -41,12 +41,18 @@ pub(super) struct MetricInputs {
   pub raw_len: i64,
 }
 
-/// The block-scoped scratchpad. The spine seeds `height` + `raw`; the deriver
-/// fills the rest read-only; stages consume it through the `require`-style
-/// accessors below.
+/// The block-scoped scratchpad. The spine seeds `height`, the block's
+/// serialized length and the decoded block itself; the deriver fills the rest
+/// read-only; stages consume it through the `require`-style accessors below.
+///
+/// The raw bytes are deliberately *not* here. Decoding moved off the write
+/// transaction in A4, so by the time a scratch exists the bytes have already
+/// served their only purpose and the length is all that survives them — which
+/// is also all the projection ever wanted (`blocks.size`, and the metric
+/// inputs).
 pub(super) struct Scratch {
   pub height: i32,
-  pub raw: Vec<u8>,
+  pub raw_len: i64,
   block: Option<HyDbBlock>,
   /// Resolved prevout per input, indexed `[tx][vin]`; `None` for a coinbase
   /// input.
@@ -62,10 +68,10 @@ pub(super) struct Scratch {
 }
 
 impl Scratch {
-  pub(super) fn new(height: i32, raw: Vec<u8>) -> Self {
+  pub(super) fn new(height: i32, raw_len: i64) -> Self {
     Self {
       height,
-      raw,
+      raw_len,
       block: None,
       resolved: None,
       fees: None,
@@ -360,7 +366,7 @@ mod tests {
   #[case("spent_outpoints")]
   #[case("metrics")]
   fn empty_scratch_reports_missing_field(#[case] field: &'static str) {
-    let s = Scratch::new(0, Vec::new());
+    let s = Scratch::new(0, 0);
     let err = match field {
       "block" => s.block("stg").err(),
       "resolved" => s.resolved("stg").err(),

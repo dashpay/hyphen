@@ -265,21 +265,9 @@ mod tests {
     consumed("HyDbIngestCfg", "fillfactor"),
     consumed("HyDbIngestCfg", "stepped_sync"),
     consumed("HyDbIngestCfg", "stepped_sync_gap"),
-    pending(
-      "HyDbIngestCfg", "prefetch_blocks", "A4",
-      "the prefetch pipeline does not exist. This is the same key name that \
-       shipped inert under [performance]; it is declared here rather than \
-       quietly reintroduced",
-    ),
-    pending(
-      "HyDbIngestCfg", "decode_workers", "A4",
-      "no decode stage exists to have workers until the prefetch pipeline lands",
-    ),
-    pending(
-      "HyDbIngestCfg", "max_lead_blocks", "A4",
-      "the bound on how far the prefetcher may run ahead of the writer; there \
-       is nothing to bound yet",
-    ),
+    consumed("HyDbIngestCfg", "prefetch_blocks"),
+    consumed("HyDbIngestCfg", "decode_workers"),
+    consumed("HyDbIngestCfg", "max_lead_blocks"),
     pending(
       "HyDbIngestCfg", "batch_rows", "A6",
       "the writer emits one UNNEST per table per block with no row cap, so a \

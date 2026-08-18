@@ -515,6 +515,23 @@ pub fn stepped_sync_gap() -> i64 {
   resolved().stepped_sync_gap
 }
 
+/// Blocks the look-ahead may run ahead of the writer (task A4). Read on both
+/// sides of the seam: the daemon sizes its fetch-ahead with it, the engine its
+/// read-and-decode-ahead.
+pub fn prefetch_blocks() -> usize {
+  resolved().prefetch_blocks
+}
+
+/// Concurrent block decodes (task A4).
+pub fn decode_workers() -> usize {
+  resolved().decode_workers
+}
+
+/// Hard bound on blocks fetched-or-decoded but not yet written (task A4).
+pub fn max_lead_blocks() -> usize {
+  resolved().max_lead_blocks
+}
+
 /// Deepest reorg the pipeline will unwind.
 pub fn max_reorg_depth() -> i64 {
   resolved().max_reorg_depth

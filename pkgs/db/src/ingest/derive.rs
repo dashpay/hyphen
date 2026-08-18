@@ -4,10 +4,11 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! The read-only fact-derivation layer. Given a block's raw bytes, the
-//! [`PgDeriver`] decodes it, resolves every non-coinbase input against this
-//! block's own outputs then the persisted UTXO set (one batched `= ANY`
-//! query, never per-input probes), accumulates chainwork from the parent
+//! The read-only fact-derivation layer. Given a block *already decoded* by the
+//! look-ahead (task A4 — the decode is pure, so it does not belong inside a
+//! write transaction), the [`PgDeriver`] resolves every non-coinbase input
+//! against this block's own outputs then the persisted UTXO set (one batched
+//! `= ANY` query, never per-input probes), accumulates chainwork from the parent
 //! block's stored value, and records the per-address deltas, per-tx fees,
 //! spent outpoints, and cumulative metric inputs on the [`Scratch`]. It
 //! performs **no writes** — every mutation and its undo live in the
@@ -21,12 +22,12 @@ use async_trait::async_trait;
 
 use super::pipeline::IngestDerive;
 use super::scratch::{AddrDelta, HyDbDeriveError, MetricInputs, Scratch};
-use crate::records::{HyDbDataSrc, PgTx, SpentOutput};
+use crate::records::{HyDbBlock, PgTx, SpentOutput};
 use crate::types::HyDbOutpoint;
 use crate::util::accumulate_chainwork;
 
-/// The Postgres-backed deriver: decode via the caller's data source, resolve
-/// spends read-only, fill the scratch.
+/// The Postgres-backed deriver: resolve spends read-only against the
+/// transaction's own view, fill the scratch.
 pub(super) struct PgDeriver;
 
 #[async_trait]
@@ -34,14 +35,11 @@ impl IngestDerive for PgDeriver {
   async fn derive(
     &self,
     tx: &mut PgTx<'_>,
-    data_src: &dyn HyDbDataSrc,
+    block: HyDbBlock,
     scratch: &mut Scratch,
   ) -> Result<(), HyDbDeriveError> {
     let height = scratch.height;
-    let raw_len = scratch.raw.len() as i64;
-    let block = data_src
-      .decode(&scratch.raw)
-      .map_err(|e| HyDbDeriveError::Decode(e.to_string()))?;
+    let raw_len = scratch.raw_len;
 
     // Chainwork: parent's cumulative work (from the canonical row below this
     // block, which a reorg transaction has already put in place) plus this
