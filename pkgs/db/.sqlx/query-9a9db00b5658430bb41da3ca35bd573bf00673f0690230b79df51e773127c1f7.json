@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.relname AS \"parent!\", c.relname AS \"child!\"\n         FROM pg_inherits i\n         JOIN pg_class c ON c.oid = i.inhrelid\n         JOIN pg_class p ON p.oid = i.inhparent\n        WHERE p.relname = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "parent!",
+        "type_info": "Name"
+      },
+      {
+        "ordinal": 1,
+        "name": "child!",
+        "type_info": "Name"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "NameArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9a9db00b5658430bb41da3ca35bd573bf00673f0690230b79df51e773127c1f7"
+}

@@ -49,6 +49,14 @@ const MAX_REORG_DEPTH: i64 = 1_000;
 /// How many blocks of undo pre-images to retain below the tip. Anything
 /// deeper than the reorg bound can never be replayed, so it is pruned after
 /// each successful advance to keep the undo tables bounded.
+///
+/// This is a *floor*, not an exact figure: the prune drops whole height
+/// partitions rather than deleting rows (see [`chain::prune_undo`]), so up to
+/// one `UNDO_PARTITION_SPAN` of already-unreplayable undo survives below it.
+/// Raising the depth can only retain more — the drop rule is keyed on the
+/// cutoff this produces.
+///
+/// Becomes `[db.ingest] undo_keep_depth` under task T2.
 const UNDO_KEEP_DEPTH: i32 = 1_000;
 
 /// Store a block's raw bytes and parent link in `ser_blocks` (the absorb stage).

@@ -25,3 +25,26 @@
 /// `address_rich` is derivable from `address_stats` in a single scan —
 /// it requires an offline rebuild of this one table.
 pub const RICH_LIST_FLOOR: i64 = 1_000_000_000;
+
+/// Height span of one *undo* partition.
+///
+/// The undo family is pruned by dropping whole partitions rather than by
+/// deleting rows, so the span is a straight trade between retention and DDL
+/// rate — nothing else. A partition may only be dropped once its highest
+/// possible height is below the reorg horizon, so the retained window is
+/// `keep_depth` blocks plus up to one span of overshoot.
+///
+/// At 500 against the 1000-block horizon that is 1000–1499 blocks retained
+/// (~1.5x the strict minimum, ~145 MB at mainnet's measured 97 MB/1000
+/// blocks) held in three or four live partitions, with one create and one
+/// drop per 500 blocks. Matching the span to the horizon (1000) would double
+/// retention for no reduction in work worth having; a quarter of it (250)
+/// would buy 0.25x of retention back at double the DDL rate and twice the
+/// relation count on a table the ingest inserts into on every block. Neither
+/// end of that trade pays, so the span sits in the middle.
+///
+/// It is deliberately *not* derived from the keep depth: the drop rule is
+/// keyed on the prune cutoff, so a larger configured depth lowers the cutoff
+/// and drops strictly fewer partitions. Span and depth cannot conspire to
+/// drop a partition early.
+pub const UNDO_PARTITION_SPAN: i32 = 500;

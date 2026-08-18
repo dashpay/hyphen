@@ -401,7 +401,7 @@ CREATE TABLE undo_blocks (
   summary_supply_total        BIGINT  NOT NULL,
   summary_supply_included     BIGINT  NOT NULL,
   summary_supply_unspendable  BIGINT  NOT NULL
-);
+) PARTITION BY RANGE (height);
 
 -- What a disconnect cannot recompute about the `address_stats` rows a block
 -- touched -- and nothing else. This is the highest-volume undo table in the
@@ -435,7 +435,7 @@ CREATE TABLE undo_address_stats (
   existed            BOOLEAN NOT NULL,
   last_seen_height   INTEGER,
   PRIMARY KEY (height, address)
-);
+) PARTITION BY RANGE (height);
 
 -- The prior `validators` row for each validator a block mutated. Unlike
 -- `undo_address_stats` above, none of these columns is additive — they are
@@ -464,4 +464,4 @@ CREATE TABLE undo_validators (
   registered_height       INTEGER,
   last_updated_height     INTEGER,
   PRIMARY KEY (height, protx_hash)
-);
+) PARTITION BY RANGE (height);

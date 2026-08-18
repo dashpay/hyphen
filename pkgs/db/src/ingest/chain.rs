@@ -14,11 +14,30 @@ use sqlx::PgPool;
 
 use super::HyDbBlockSeen;
 use crate::error::{HyDbError, HyDbResult};
+use crate::layout::UNDO_PARTITION_SPAN;
 use crate::records::HyDbDataSrc;
 use crate::types::HyDbHash;
 
 pub(super) const GENESIS_PREV: [u8; 32] = [0u8; 32];
 pub(super) const PARTITION_SPAN: i32 = 100_000;
+
+/// The height-partitioned base tables, created ahead of the tip.
+const PARTITIONED_TABLES: [&str; 5] = [
+  "transactions",
+  "tx_inputs",
+  "tx_outputs",
+  "address_txs",
+  "spends",
+];
+
+/// The height-partitioned undo tables, created ahead of the tip and pruned by
+/// `DROP TABLE` on a whole partition. All three have the same shape — one row
+/// per (height, key) written by connect and dead the moment the height falls
+/// out of the reorg horizon — so all three are converted; `undo_blocks` and
+/// `undo_validators` are lower-volume than `undo_address_stats` but their
+/// prune is the same delete-everything-below-the-cutoff sweep, and leaving
+/// them on it would mean two prune mechanisms for one horizon.
+const UNDO_TABLES: [&str; 3] = ["undo_address_stats", "undo_blocks", "undo_validators"];
 
 /// Store a block's raw bytes and parent link in `ser_blocks`, assigning its
 /// height as `parent.height + 1` (genesis is 0). A block whose parent is not
@@ -71,23 +90,23 @@ pub(super) async fn absorb(
 }
 
 /// Ensure the height-range partitions covering `[lo, hi]` exist for every
-/// partitioned base table. Runs *outside* any block write transaction — the
-/// `CREATE TABLE ... PARTITION OF` takes `ACCESS EXCLUSIVE` on the parent, so
-/// it must never ride inside the per-block transaction — and probes
-/// `to_regclass` first so the steady state issues no DDL at all.
+/// partitioned base table and every undo table. Runs *outside* any block
+/// write transaction — the `CREATE TABLE ... PARTITION OF` takes
+/// `ACCESS EXCLUSIVE` on the parent, so it must never ride inside the
+/// per-block transaction — and probes `to_regclass` first so the steady state
+/// issues no DDL at all.
+///
+/// The undo family is probed with a single round trip for the whole set,
+/// because its span is small enough that an advance of one block still spans
+/// a partition boundary now and then: a per-name probe would put three extra
+/// queries on the per-block path to answer "nothing to do" almost every time.
 pub(super) async fn ensure_partitions_for_range(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
   let lo_idx = lo.max(0) / PARTITION_SPAN;
   let hi_idx = hi.max(0) / PARTITION_SPAN;
   for idx in lo_idx..=hi_idx {
     let range_lo = idx * PARTITION_SPAN;
     let range_hi = range_lo + PARTITION_SPAN;
-    for parent in [
-      "transactions",
-      "tx_inputs",
-      "tx_outputs",
-      "address_txs",
-      "spends",
-    ] {
+    for parent in PARTITIONED_TABLES {
       let name = format!("{parent}_p{idx}");
       let exists = sqlx::query_scalar!(r#"SELECT to_regclass($1) IS NOT NULL AS "exists!""#, &name)
         .fetch_one(pool)
@@ -103,6 +122,47 @@ pub(super) async fn ensure_partitions_for_range(pool: &PgPool, lo: i32, hi: i32)
         .execute(pool)
         .await
         .map_err(|e| HyDbError::pg("ensure partitions", e))?;
+    }
+  }
+  ensure_undo_partitions(pool, lo, hi).await
+}
+
+/// Create the undo partitions covering `[lo, hi]` that do not yet exist.
+async fn ensure_undo_partitions(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
+  let lo_idx = lo.max(0) / UNDO_PARTITION_SPAN;
+  let hi_idx = hi.max(0) / UNDO_PARTITION_SPAN;
+  let wanted: Vec<String> = (lo_idx..=hi_idx)
+    .flat_map(|idx| UNDO_TABLES.map(move |parent| format!("{parent}_p{idx}")))
+    .collect();
+
+  // One probe for the whole set: the boundary check that keeps DDL — and all
+  // but this single query — off the per-block path.
+  let present: Vec<String> = sqlx::query_scalar!(
+    r#"SELECT n AS "n!" FROM UNNEST($1::text[]) AS n WHERE to_regclass(n) IS NOT NULL"#,
+    &wanted
+  )
+  .fetch_all(pool)
+  .await
+  .map_err(|e| HyDbError::pg("check undo partitions", e))?;
+  if present.len() == wanted.len() {
+    return Ok(());
+  }
+
+  for idx in lo_idx..=hi_idx {
+    let range_lo = idx * UNDO_PARTITION_SPAN;
+    let range_hi = range_lo + UNDO_PARTITION_SPAN;
+    for parent in UNDO_TABLES {
+      let name = format!("{parent}_p{idx}");
+      if present.contains(&name) {
+        continue;
+      }
+      let sql = format!(
+        "CREATE TABLE IF NOT EXISTS {name} PARTITION OF {parent} FOR VALUES FROM ({range_lo}) TO ({range_hi})"
+      );
+      sqlx::query(&sql)
+        .execute(pool)
+        .await
+        .map_err(|e| HyDbError::pg("ensure undo partitions", e))?;
     }
   }
   Ok(())
@@ -273,19 +333,108 @@ pub(super) async fn raw_bytes<'e>(
     .ok_or_else(|| HyDbError::Derive("connect: block missing from ser_blocks".to_owned()))
 }
 
-/// Depth-bounded pruning of the undo tables: rows at or below `cutoff` can no
-/// longer be replayed (the reorg bound is shallower), so they are dead weight.
+/// Depth-bounded pruning of the undo tables, by dropping whole height
+/// partitions.
+///
+/// Rows at or below `cutoff` can no longer be replayed (the reorg bound is
+/// shallower), so they are dead weight — but deleting them was the single
+/// most expensive thing this database did: 36.68M deletes against
+/// `undo_address_stats` over a 967k-block mainnet sync, and the 93 autovacuum
+/// passes needed to reclaim them, more than any other object. A dropped
+/// partition leaves no dead tuples to reclaim; the space comes back as an
+/// unlink.
+///
+/// **The horizon rule.** A partition is dropped only when the *highest height
+/// it could possibly hold* — `(idx + 1) * span - 1`, not the highest height
+/// actually in it — is at or below the cutoff. The bound is a property of the
+/// partition's declared range, so it holds whether or not the partition is
+/// fully populated, and it can never be satisfied by a partition containing a
+/// height the reorg bound still reaches. That is what makes the coarser
+/// granularity safe: the cost of a partial partition is retention, never
+/// reversibility.
+///
+/// Runs outside the block transaction (from `finish_advance`, after the
+/// commit). `DROP TABLE` on a partition takes `ACCESS EXCLUSIVE` on the
+/// parent, so each drop is fenced by a short `lock_timeout` and simply
+/// deferred to the next advance if a reader holds the parent — the partition
+/// is already past the horizon and no correctness depends on when it goes.
 pub(super) async fn prune_undo(pool: &PgPool, cutoff: i32) -> HyDbResult<()> {
   if cutoff < 0 {
     return Ok(());
   }
-  for table in ["undo_address_stats", "undo_blocks", "undo_validators"] {
-    let sql = format!("DELETE FROM {table} WHERE height <= $1");
-    sqlx::query(&sql)
-      .bind(cutoff)
-      .execute(pool)
-      .await
-      .map_err(|e| HyDbError::pg("prune undo", e))?;
+  let parents: Vec<String> = UNDO_TABLES.iter().map(|t| (*t).to_owned()).collect();
+  let children = sqlx::query!(
+    r#"SELECT p.relname AS "parent!", c.relname AS "child!"
+         FROM pg_inherits i
+         JOIN pg_class c ON c.oid = i.inhrelid
+         JOIN pg_class p ON p.oid = i.inhparent
+        WHERE p.relname = ANY($1)"#,
+    &parents
+  )
+  .fetch_all(pool)
+  .await
+  .map_err(|e| HyDbError::pg("list undo partitions", e))?;
+
+  for row in children {
+    let Some(idx) = row
+      .child
+      .strip_prefix(&format!("{}_p", row.parent))
+      .and_then(|suffix| suffix.parse::<i64>().ok())
+    else {
+      // Not one of ours: leave it alone rather than guess its range.
+      continue;
+    };
+    let highest = (idx + 1) * i64::from(UNDO_PARTITION_SPAN) - 1;
+    if highest > i64::from(cutoff) {
+      continue;
+    }
+    drop_partition(pool, &row.child).await?;
   }
   Ok(())
+}
+
+/// Drop one undo partition under a short lock timeout, treating a lock
+/// timeout or deadlock as "try again next advance" rather than an error.
+async fn drop_partition(pool: &PgPool, name: &str) -> HyDbResult<()> {
+  let mut tx = pool
+    .begin()
+    .await
+    .map_err(|e| HyDbError::pg("prune undo: begin", e))?;
+  let attempt = async {
+    sqlx::query("SET LOCAL lock_timeout = '3s'")
+      .execute(&mut *tx)
+      .await?;
+    sqlx::query(&format!("DROP TABLE IF EXISTS {name}"))
+      .execute(&mut *tx)
+      .await?;
+    Ok::<(), sqlx::Error>(())
+  }
+  .await;
+
+  match attempt {
+    Ok(()) => {
+      tx.commit()
+        .await
+        .map_err(|e| HyDbError::pg("prune undo: commit", e))?;
+      tracing::debug!(partition = name, "dropped undo partition below the horizon");
+      Ok(())
+    }
+    Err(e) if contended(&e) => {
+      tracing::debug!(
+        partition = name,
+        "undo partition drop deferred: parent is locked by a reader"
+      );
+      Ok(())
+    }
+    Err(e) => Err(HyDbError::pg("prune undo: drop partition", e)),
+  }
+}
+
+/// `lock_timeout` (55P03) and `deadlock_detected` (40P01) — the two ways the
+/// `ACCESS EXCLUSIVE` on the parent can lose a race with a reader.
+fn contended(e: &sqlx::Error) -> bool {
+  matches!(
+    e.as_database_error().and_then(|d| d.code()).as_deref(),
+    Some("55P03" | "40P01")
+  )
 }

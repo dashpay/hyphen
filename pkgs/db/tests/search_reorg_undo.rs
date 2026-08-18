@@ -13,7 +13,8 @@
 //! 2. **Multi-block reorgs** — including the same-height reorg the original
 //!    height-only comparison could not see.
 //! 3. **Undo-table pruning** — the undo tables must stay depth-bounded
-//!    instead of growing with the chain.
+//!    instead of growing with the chain, and must never shed a height the
+//!    reorg bound can still reach.
 
 mod common;
 
@@ -21,11 +22,13 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use common::TempDb;
+use hyphen_db::layout::UNDO_PARTITION_SPAN;
 use hyphen_db::query::HyDbSearchKind;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
   HyDbHeight, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut,
 };
+use sqlx::PgPool;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -287,11 +290,82 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
 }
 
 // ===========================================================================
-// 3. Undo tables stay depth-bounded
+// 3. Undo retention: pruned by dropping partitions, never below the horizon
 // ===========================================================================
+//
+// The undo family is partitioned by height and pruned with `DROP TABLE` on a
+// whole partition, so retention is the horizon plus up to one partition span
+// of overshoot rather than exactly the horizon. What must hold regardless of
+// where the boundary happens to fall is that nothing the reorg bound can
+// still reach is ever dropped — the three tests below assert the retention
+// window, exercise a reorg at the deepest still-reversible height after two
+// prunes have run, and pin the two refusals that catch a disconnect whose
+// undo is gone.
+
+/// Heights 0..=2099. With a 1000-block horizon and a 500-block partition span
+/// the prune has fired twice by this tip (`_p0` and `_p1` are gone), so a
+/// reorg down to the deepest reversible height crosses ground the prune has
+/// already worked over. The tip is deliberately not a multiple of the span:
+/// the cutoff lands mid-partition, which is the case where retention
+/// overshoots the horizon and the drop rule has to hold the line.
+const PRUNE_BLOCKS: u64 = 2_100;
+
+/// Undo horizon, mirrored from `pipeline::UNDO_KEEP_DEPTH` (private).
+const KEEP_DEPTH: i32 = 1_000;
+
+/// Connect `count` blocks of value 10 from `seed` and advance the projection
+/// onto them, returning their hashes in height order. An advance is capped at
+/// `MAX_SEGMENT_BLOCKS`, so the tip is announced until it stops moving.
+async fn build_chain(
+  ingest: &hyphen_db::HyDbIngest,
+  seed: u64,
+  count: u64,
+) -> Result<Vec<[u8; 32]>, Box<dyn std::error::Error>> {
+  let mut chain = Vec::with_capacity(count as usize);
+  let mut prev = [0u8; 32];
+  for i in 0..count {
+    let hash = seeded(seed + i);
+    ingest.on_block(raw_seeded(hash, prev, 10)).await?;
+    chain.push(hash);
+    prev = hash;
+  }
+  let tip = HyDbHash(prev);
+  let target = Some(HyDbHeight(count as u32 - 1));
+  loop {
+    let report = ingest.on_tip(tip).await?;
+    if report.to == target {
+      return Ok(chain);
+    }
+    if report.from == report.to {
+      return Err(format!("advance stalled at {:?}", report.to).into());
+    }
+  }
+}
+
+/// Which `_pN` partitions of `parent` currently exist.
+async fn partitions_of(pool: &PgPool, parent: &str) -> Result<Vec<i32>, sqlx::Error> {
+  let rows: Vec<(String,)> = sqlx::query_as(
+    "SELECT c.relname
+       FROM pg_inherits i
+       JOIN pg_class c ON c.oid = i.inhrelid
+       JOIN pg_class p ON p.oid = i.inhparent
+      WHERE p.relname = $1
+      ORDER BY 1",
+  )
+  .bind(parent)
+  .fetch_all(pool)
+  .await?;
+  let prefix = format!("{parent}_p");
+  let mut idx: Vec<i32> = rows
+    .iter()
+    .filter_map(|(n,)| n.strip_prefix(&prefix)?.parse().ok())
+    .collect();
+  idx.sort_unstable();
+  Ok(idx)
+}
 
 #[tokio::test]
-async fn undo_tables_are_pruned() -> TestResult {
+async fn undo_is_pruned_by_dropping_partitions() -> TestResult {
   let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
   let result = run_prune(&tmp).await;
   tmp.drop_now().await;
@@ -302,44 +376,254 @@ async fn run_prune(tmp: &TempDb) -> TestResult {
   let db = tmp.open().await?;
   let ingest = db.ingest(Arc::new(TestSrc)).await?;
 
-  // 1,100 blocks: comfortably past the 1,000-block undo retention depth.
-  const BLOCKS: u64 = 1_100;
-  let mut prev = [0u8; 32];
-  let mut tip = [0u8; 32];
-  for i in 0..BLOCKS {
-    tip = seeded(0x9000 + i);
-    ingest.on_block(raw_seeded(tip, prev, 10)).await?;
-    prev = tip;
-  }
-  let report = ingest.on_tip(HyDbHash(tip)).await?;
-  assert_eq!(report.to, Some(HyDbHeight(BLOCKS as u32 - 1)));
+  build_chain(&ingest, 0x9000, PRUNE_BLOCKS).await?;
+  let tip_h = (PRUNE_BLOCKS - 1) as i32;
+  assert_eq!(
+    db.status().tip().await?.map(|t| t.height),
+    Some(HyDbHeight(tip_h as u32))
+  );
 
-  // Undo rows exist only within the retention window below the tip.
   let pool = tmp.seed_pool().await?;
+  let cutoff = tip_h - KEEP_DEPTH;
+  let span = UNDO_PARTITION_SPAN;
+
+  // Every undo parent is pruned the same way, and pruned to the same place:
+  // partitions whose highest possible height is at or below the cutoff are
+  // gone, everything a reorg could still reach is present.
+  for parent in ["undo_address_stats", "undo_blocks", "undo_validators"] {
+    let live = partitions_of(&pool, parent).await?;
+    assert!(
+      !live.is_empty(),
+      "{parent} must have partitions covering the tip"
+    );
+    for idx in &live {
+      let lowest = idx * span;
+      assert!(
+        (idx + 1) * span - 1 > cutoff,
+        "{parent}_p{idx} is entirely below the cutoff {cutoff} and should have been dropped"
+      );
+      assert!(
+        lowest <= tip_h,
+        "{parent}_p{idx} sits above the tip {tip_h}"
+      );
+    }
+    let oldest = live.first().copied().ok_or("no live partitions")?;
+    assert!(
+      oldest * span > cutoff - span,
+      "{parent} retains more than one span of overshoot below the cutoff"
+    );
+  }
+
+  // The undo rows themselves: everything within the horizon is there, the
+  // overshoot below it is bounded by one span, and nothing older survives.
   let (count, min_h, max_h): (i64, Option<i32>, Option<i32>) =
     sqlx::query_as("SELECT COUNT(*), MIN(height), MAX(height) FROM undo_blocks")
       .fetch_one(&pool)
       .await?;
-  let tip_h = (BLOCKS - 1) as i32;
   assert_eq!(max_h, Some(tip_h));
   assert!(
-    count <= 1_000,
-    "undo_blocks must stay depth-bounded; got {count} rows (min {min_h:?})"
+    min_h > Some(cutoff - span),
+    "retention must not exceed the horizon by more than one partition span; min {min_h:?}"
   );
   assert!(
-    min_h > Some(tip_h - 1_001),
-    "rows below the retention window must be pruned; min {min_h:?}"
+    min_h <= Some(cutoff + 1),
+    "every height inside the horizon must still be reversible; min {min_h:?}"
   );
-  let (addr_count,): (i64,) =
+  assert!(
+    count <= i64::from(KEEP_DEPTH + span),
+    "undo_blocks must stay bounded; got {count} rows"
+  );
+
+  // The pruning mechanism, asserted as such: rows below the cutoff *do*
+  // survive (they are the overshoot a partition drop cannot avoid), which is
+  // exactly what a row-by-row DELETE prune would have removed. Reading zero
+  // here would mean the deletes came back.
+  let (stale,): (i64,) =
     sqlx::query_as("SELECT COUNT(*) FROM undo_address_stats WHERE height <= $1")
-      .bind(tip_h - 1_001)
+      .bind(cutoff)
       .fetch_one(&pool)
       .await?;
-  assert_eq!(addr_count, 0, "undo_address_stats pruned below the window");
+  assert!(
+    stale > 0,
+    "the prune drops whole partitions; sub-cutoff rows inside a live partition are kept"
+  );
+
+  // Nothing was deleted from the undo family to get here. `n_tup_del` is
+  // maintained per relation by the statistics collector and the prune path is
+  // the only writer that could raise it on a chain that never disconnected.
+  sqlx::query("SELECT pg_stat_force_next_flush()")
+    .execute(&pool)
+    .await?;
+  let (deleted,): (i64,) = sqlx::query_as(
+    "SELECT COALESCE(SUM(n_tup_del), 0)::int8 FROM pg_stat_all_tables
+      WHERE relname LIKE 'undo\\_%'",
+  )
+  .fetch_one(&pool)
+  .await?;
+  assert_eq!(deleted, 0, "the prune path must issue no DELETE");
 
   // And the retained window still disconnects: rewind a few blocks.
   let report = ingest.rewind_to(HyDbHeight(tip_h as u32 - 3)).await?;
   assert_eq!(report.to, Some(HyDbHeight(tip_h as u32 - 3)));
+
+  Ok(())
+}
+
+/// The horizon itself: after two prunes have run, a branch switch forking at
+/// exactly `tip - UNDO_KEEP_DEPTH` — the deepest fork the reorg bound admits,
+/// and so the deepest undo row that must still exist — has to succeed.
+#[tokio::test]
+async fn deepest_reversible_reorg_survives_the_prune() -> TestResult {
+  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let result = run_deep_reorg(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn run_deep_reorg(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let ingest = db.ingest(Arc::new(TestSrc)).await?;
+
+  let chain = build_chain(&ingest, 0xA000, PRUNE_BLOCKS).await?;
+  let tip_h = (PRUNE_BLOCKS - 1) as i32;
+
+  // Two prunes have fired by now — the test is only worth anything if the
+  // drop path has actually run more than once.
+  let pool = tmp.seed_pool().await?;
+  let ever_created = tip_h / UNDO_PARTITION_SPAN + 1;
+  let dropped = ever_created - partitions_of(&pool, "undo_address_stats").await?.len() as i32;
+  assert!(
+    dropped >= 2,
+    "the scenario must exercise at least two prunes; only {dropped} partitions were dropped"
+  );
+
+  // Fork at the deepest height the reorg bound allows: the replacement block
+  // sits at `fork + 1`, so the disconnect unwinds exactly KEEP_DEPTH blocks
+  // and the oldest undo row it reads is at `tip - KEEP_DEPTH + 1`.
+  let fork = tip_h - KEEP_DEPTH;
+  let alt = seeded(0xB000);
+  ingest
+    .on_block(raw_seeded(alt, chain[fork as usize], 25))
+    .await?;
+  let report = ingest.on_tip(HyDbHash(alt)).await?;
+  let reorg = report
+    .reorg
+    .ok_or("the deepest admissible fork must reorg, not no-op")?;
+  assert_eq!(reorg.fork_height, HyDbHeight(fork as u32));
+  assert_eq!(
+    reorg.disconnected.len(),
+    KEEP_DEPTH as usize,
+    "every block above the fork must be disconnected"
+  );
+  assert_eq!(report.to, Some(HyDbHeight(fork as u32 + 1)));
+
+  // The projection is the replacement branch exactly: heights 0..=fork at 10
+  // each, plus the one replacement block at 25.
+  let expected = i64::from(fork + 1) * 10 + 25;
+  assert_eq!(db.addrs().supply().await?.total, expected);
+  assert_eq!(
+    db.status().tip().await?.map(|t| t.hash),
+    Some(HyDbHash(alt))
+  );
+
+  Ok(())
+}
+
+/// Below the horizon the answer must be a refusal. A disconnect that finds no
+/// undo cannot reverse the block, and the one thing it must never do is
+/// return success having left the projection where the block put it.
+#[tokio::test]
+async fn disconnect_below_the_horizon_is_refused() -> TestResult {
+  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let result = run_below_horizon(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn run_below_horizon(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let ingest = db.ingest(Arc::new(TestSrc)).await?;
+
+  build_chain(&ingest, 0xC000, PRUNE_BLOCKS).await?;
+  let tip_h = (PRUNE_BLOCKS - 1) as i32;
+
+  // A rewind that walks past the retention window: it unwinds the blocks it
+  // can and then refuses, naming the height it could not reverse.
+  let Err(err) = ingest.rewind_to(HyDbHeight(0)).await else {
+    return Err("a rewind past the retention window must fail, not silently no-op".into());
+  };
+  let msg = err.to_string();
+  assert!(
+    msg.contains("undo"),
+    "the refusal must name its cause; got {msg}"
+  );
+
+  // It stopped at the first height whose undo partition is gone, and it
+  // stopped *before* that height's projection was touched.
+  let tip = db
+    .status()
+    .tip()
+    .await?
+    .ok_or("the rewind must not unwind the whole chain")?;
+  assert!(
+    tip.height.0 as i32 <= tip_h - KEEP_DEPTH,
+    "the rewind must get at least to the horizon before refusing"
+  );
+  let (undo_rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM undo_blocks WHERE height = $1")
+    .bind(tip.height.0 as i32)
+    .fetch_one(&tmp.seed_pool().await?)
+    .await?;
+  assert_eq!(
+    undo_rows, 0,
+    "the block it refused to reverse is the one whose undo was dropped"
+  );
+
+  Ok(())
+}
+
+/// A2's own guard, reached directly: the address undo for a height inside the
+/// horizon is missing while the block demonstrably moved balances. This is the
+/// case that used to disconnect silently, leaving every balance the block
+/// moved exactly where the block put it.
+#[tokio::test]
+async fn missing_address_undo_is_refused_by_name() -> TestResult {
+  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let result = run_missing_address_undo(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn run_missing_address_undo(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let ingest = db.ingest(Arc::new(TestSrc)).await?;
+
+  build_chain(&ingest, 0xD000, 6).await?;
+
+  // Every block here pays an address, so the balance stage captured undo for
+  // height 5. Take it away and leave the rest of the undo intact, so the
+  // refusal has to come from the balance stage rather than from the summary
+  // stage that disconnects ahead of it.
+  let pool = tmp.seed_pool().await?;
+  let removed = sqlx::query("DELETE FROM undo_address_stats WHERE height = 5")
+    .execute(&pool)
+    .await?
+    .rows_affected();
+  assert!(removed > 0, "height 5 must have had address undo to remove");
+
+  let Err(err) = ingest.rewind_to(HyDbHeight(4)).await else {
+    return Err("a disconnect with no address undo must refuse".into());
+  };
+  let msg = err.to_string();
+  assert!(
+    msg.contains("balances") && msg.contains("cannot be reversed"),
+    "the balance stage must name itself and its cause; got {msg}"
+  );
+
+  // And it refused instead of half-reversing: the tip is untouched.
+  assert_eq!(
+    db.status().tip().await?.map(|t| t.height),
+    Some(HyDbHeight(5))
+  );
 
   Ok(())
 }
