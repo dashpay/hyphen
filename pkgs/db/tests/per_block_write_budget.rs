@@ -62,7 +62,7 @@ use bytes::Bytes;
 use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
+  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
 };
 use sqlx::PgPool;
 
@@ -541,6 +541,179 @@ async fn run(tmp: &TempDb) -> TestResult {
   assert!(
     per_block > 100.0,
     "the synthetic chain should touch mainnet-tail-many addresses per block, got {per_block:.1}"
+  );
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The arm that skips the write
+// ---------------------------------------------------------------------------
+
+/// A chain whose last block carries no transactions at all, so nothing moves
+/// either singleton. Unreachable on a chain with a coinbase, and reachable here
+/// on purpose: the stats stage now has an arm that writes no `UPDATE` when a
+/// block moves nothing, and an arm no test enters is an arm that can rot. It
+/// still has to write the `undo_blocks` pre-image — a height with no pre-image
+/// is a height that cannot be disconnected — so this asserts both halves: the
+/// singletons do not move, and the block reverses.
+struct EmptyTail;
+
+impl EmptyTail {
+  /// Heights 0..=1 carry a coinbase; height 2 carries nothing.
+  fn empty_at() -> u32 {
+    2
+  }
+}
+
+impl HyDbDataSrc for EmptyTail {
+  fn identify(&self, raw: &[u8]) -> HyDbResult<HyDbBlockId> {
+    Ok(HyDbBlockId {
+      hash: HyDbHash::from_slice(&raw[..32])?,
+      prev_hash: HyDbHash::from_slice(&raw[32..64])?,
+    })
+  }
+
+  fn decode(&self, raw: &[u8]) -> HyDbResult<HyDbBlock> {
+    let hash = HyDbHash::from_slice(&raw[..32])?;
+    let prev = HyDbHash::from_slice(&raw[32..64])?;
+    let height = Chain::height_of(&hash.0);
+    let txs = if height >= Self::empty_at() {
+      Vec::new()
+    } else {
+      vec![HyDbTx {
+        txid: coinbase_txid(height),
+        block_pos: 0,
+        version: 1,
+        tx_type: HyDbTxType::Coinbase,
+        lock_time: 0,
+        size: 250,
+        value_out: HyDbAmount(COINBASE_VALUE),
+        inputs: vec![HyDbTxIn {
+          vin_index: 0,
+          prev_outpoint: None,
+          coinbase: true,
+          script_sig: vec![1],
+          sequence: 0xffff_ffff,
+        }],
+        outputs: vec![out_to(0, COINBASE_VALUE, pick(height, 0, 0))],
+        payload: None,
+        validator_events: Vec::new(),
+      }]
+    };
+    let tx_count = txs.len() as u32;
+    Ok(HyDbBlock {
+      header: HyDbHeader {
+        hash,
+        prev_hash: prev,
+        merkle_root: hash,
+        time: 1_600_000_000 + height * 150,
+        bits: 0x1e0f_ffff,
+        difficulty: 1.0,
+        nonce: height,
+        version: 1,
+        size: 500,
+        tx_count,
+        chainwork: None,
+        coinbase: None,
+      },
+      txs,
+    })
+  }
+}
+
+/// The two singletons, as one tuple.
+async fn summaries(pool: &PgPool) -> Result<(i64, i64, i64, i64), Box<dyn std::error::Error>> {
+  Ok(
+    sqlx::query_as(
+      r#"SELECT (SELECT total FROM transactions_summary WHERE singleton),
+                (SELECT total FROM supply_summary WHERE singleton),
+                (SELECT included_supply FROM supply_summary WHERE singleton),
+                (SELECT unspendable_value FROM supply_summary WHERE singleton)"#,
+    )
+    .fetch_one(pool)
+    .await?,
+  )
+}
+
+#[tokio::test]
+async fn a_block_that_moves_nothing_writes_no_update_and_still_reverses() -> TestResult {
+  let Some(tmp) = TempDb::create().await? else {
+    return Ok(());
+  };
+  let result = empty_tail(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn empty_tail(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let pool = tmp.seed_pool().await?;
+  let ingest = db.ingest(Arc::new(EmptyTail)).await?;
+
+  for h in 0..EmptyTail::empty_at() {
+    ingest.on_block(Chain::raw(h)).await?;
+  }
+  ingest
+    .on_tip(HyDbHash(block_hash(EmptyTail::empty_at() - 1)))
+    .await?;
+  let before = summaries(&pool).await?;
+  flush_writer_stats(&pool).await?;
+  let upd_before = (
+    counters(&pool, "transactions_summary").await?.n_tup_upd,
+    counters(&pool, "supply_summary").await?.n_tup_upd,
+  );
+
+  // The block that moves nothing.
+  let empty = EmptyTail::empty_at();
+  ingest.on_block(Chain::raw(empty)).await?;
+  ingest.on_tip(HyDbHash(block_hash(empty))).await?;
+  let (tip,): (Option<i32>,) = sqlx::query_as("SELECT MAX(height) FROM blocks")
+    .fetch_one(&pool)
+    .await?;
+  assert_eq!(
+    tip,
+    Some(empty as i32),
+    "a transactionless block still has to connect"
+  );
+  assert_eq!(
+    summaries(&pool).await?,
+    before,
+    "a block that moves nothing must leave both singletons exactly as they were"
+  );
+
+  flush_writer_stats(&pool).await?;
+  let upd_after = (
+    counters(&pool, "transactions_summary").await?.n_tup_upd,
+    counters(&pool, "supply_summary").await?.n_tup_upd,
+  );
+  assert_eq!(
+    upd_after, upd_before,
+    "and it must leave no dead tuple behind either: no UPDATE at all"
+  );
+
+  // The pre-image is still recorded, and it is what a disconnect restores.
+  let (undo,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM undo_blocks WHERE height = $1")
+    .bind(empty as i32)
+    .fetch_one(&pool)
+    .await?;
+  assert_eq!(
+    undo, 1,
+    "a height with no undo row is a height that cannot be disconnected"
+  );
+
+  ingest.rewind_to(HyDbHeight(empty - 1)).await?;
+  assert_eq!(
+    summaries(&pool).await?,
+    before,
+    "and the rewind restores the same values it captured"
+  );
+  let (tip,): (Option<i32>,) = sqlx::query_as("SELECT MAX(height) FROM blocks")
+    .fetch_one(&pool)
+    .await?;
+  assert_eq!(
+    tip,
+    Some(empty as i32 - 1),
+    "the rewind took the block away"
   );
   Ok(())
 }
