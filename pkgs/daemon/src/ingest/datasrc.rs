@@ -141,18 +141,21 @@ impl HyDbBlockSource {
       .enumerate()
       .map(|(vout, output)| {
         let script = output.script_pubkey.as_bytes();
-        HyDbTxOut {
+        Ok(HyDbTxOut {
           vout: vout as u32,
-          value: HyDbAmount(output.value.to_sat() as i64),
+          // Checked, not cast: a malformed transaction claiming more than
+          // `i64::MAX` duffs would otherwise arrive as a negative value and be
+          // summed into the supply and every address balance that touches it.
+          value: HyDbAmount::from_sat(output.value.to_sat())?,
           script_pubkey: script.to_vec(),
           address: dash_script::derive_address(script, self.p2pkh_version, self.p2sh_version)
             .map(HyDbAddress),
           address_type: addr_type(script),
-        }
+        })
       })
-      .collect::<Vec<_>>();
+      .collect::<HyDbResult<Vec<_>>>()?;
 
-    let value_out = outputs.iter().map(|o| o.value.0).sum::<i64>();
+    let value_out = HyDbAmount::try_sum(outputs.iter().map(|o| o.value))?.0;
     let (payload, validator_events) = self.decode_special(transaction, txid.0);
 
     Ok(HyDbTx {

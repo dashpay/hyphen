@@ -38,11 +38,7 @@ pub async fn normalize_tx(
 ) -> Result<MempoolTx, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(db, &tx).await?;
-  let value_out = tx
-    .outputs
-    .iter()
-    .map(|output| output.value.to_sat() as i64)
-    .sum::<i64>();
+  let value_out = total_duffs(tx.outputs.iter().map(|output| output.value.to_sat()))?;
   let tx_type = crate::tx::tx_type_str(tx.tx_type).to_owned();
   let payload = decode_payload(&tx, txid_bytes);
   let fee = tx
@@ -91,17 +87,19 @@ pub async fn normalize_tx(
     .outputs
     .iter()
     .enumerate()
-    .map(|(index, output)| MempoolTxOutput {
-      vout_index: index as i32,
-      value: output.value.to_sat() as i64,
-      script_pubkey: output.script_pubkey.as_bytes().to_vec(),
-      address: dash_script::derive_address(
-        output.script_pubkey.as_bytes(),
-        p2pkh_version,
-        p2sh_version,
-      ),
+    .map(|(index, output)| {
+      Ok(MempoolTxOutput {
+        vout_index: index as i32,
+        value: duffs(output.value.to_sat())?,
+        script_pubkey: output.script_pubkey.as_bytes().to_vec(),
+        address: dash_script::derive_address(
+          output.script_pubkey.as_bytes(),
+          p2pkh_version,
+          p2sh_version,
+        ),
+      })
     })
-    .collect::<Vec<_>>();
+    .collect::<Result<Vec<_>, DaemonError>>()?;
 
   Ok(MempoolTx {
     txid: txid_bytes.to_vec(),
@@ -140,11 +138,7 @@ pub async fn build_tx_value(
 ) -> Result<TxDetail, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(db, &tx).await?;
-  let value_out = tx
-    .outputs
-    .iter()
-    .map(|output| output.value.to_sat() as i64)
-    .sum::<i64>();
+  let value_out = total_duffs(tx.outputs.iter().map(|output| output.value.to_sat()))?;
   let stored_tx_type = crate::tx::tx_type_str(tx.tx_type);
   let public_tx_type = crate::tx::public_tx_type(
     stored_tx_type,
@@ -185,20 +179,22 @@ pub async fn build_tx_value(
     .outputs
     .iter()
     .enumerate()
-    .map(|(index, output)| TxOutput {
-      n: index as i32,
-      value: output.value.to_sat() as i64,
-      script_pub_key: TxScriptPubKey {
-        hex: hex::encode(&output.script_pubkey.0),
-      },
-      address: dash_script::derive_address(
-        output.script_pubkey.as_bytes(),
-        p2pkh_version,
-        p2sh_version,
-      ),
-      spent: false,
+    .map(|(index, output)| {
+      Ok(TxOutput {
+        n: index as i32,
+        value: duffs(output.value.to_sat())?,
+        script_pub_key: TxScriptPubKey {
+          hex: hex::encode(&output.script_pubkey.0),
+        },
+        address: dash_script::derive_address(
+          output.script_pubkey.as_bytes(),
+          p2pkh_version,
+          p2sh_version,
+        ),
+        spent: false,
+      })
     })
-    .collect::<Vec<TxOutput>>();
+    .collect::<Result<Vec<TxOutput>, DaemonError>>()?;
 
   Ok(TxDetail {
     as_of_height: None,
@@ -312,6 +308,41 @@ fn decode_tx(raw_tx: &[u8]) -> Result<DecodedTransaction, DaemonError> {
       kind: RestErrorKind::Other,
     }
   })
+}
+
+/// A satoshi count as the signed width the API renders amounts at.
+///
+/// Checked rather than cast. The release profile turns off overflow checks, so
+/// `as i64` on a malformed value above `i64::MAX` yields a negative amount that
+/// is then summed into a fee and served as fact.
+///
+/// # Errors
+///
+/// `RestSource` when the value cannot be represented, which is the same class as
+/// the decode failure it sits beside — the node sent something unusable.
+fn duffs(sats: u64) -> Result<i64, DaemonError> {
+  i64::try_from(sats).map_err(|_| DaemonError::RestSource {
+    message: format!("transaction claims {sats} duffs, beyond the representable range"),
+    kind: RestErrorKind::Other,
+  })
+}
+
+/// Sum satoshi counts, refusing an overflow rather than wrapping.
+///
+/// # Errors
+///
+/// `RestSource` when a value or the running total cannot be represented.
+fn total_duffs(sats: impl IntoIterator<Item = u64>) -> Result<i64, DaemonError> {
+  let mut total: i64 = 0;
+  for value in sats {
+    total = total
+      .checked_add(duffs(value)?)
+      .ok_or_else(|| DaemonError::RestSource {
+        message: "transaction output total is beyond the representable range".to_owned(),
+        kind: RestErrorKind::Other,
+      })?;
+  }
+  Ok(total)
 }
 
 fn decode_payload(tx: &DecodedTransaction, txid_bytes: &[u8]) -> Value {

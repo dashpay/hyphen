@@ -39,6 +39,42 @@ pub enum HyDbAddrType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct HyDbAmount(pub i64);
 
+impl HyDbAmount {
+  /// Convert an unsigned satoshi count from a decoder into the signed width
+  /// amounts are stored at.
+  ///
+  /// # Errors
+  ///
+  /// Returns `Decode` above `i64::MAX`. No real amount reaches it — the whole
+  /// money supply is some three thousand times smaller — but a decoder reading
+  /// a malformed transaction can produce one, and an `as i64` cast would hand
+  /// on a negative amount that then flows into every accumulation that sums it.
+  pub fn from_sat(sats: u64) -> Result<Self, HyDbError> {
+    i64::try_from(sats)
+      .map(Self)
+      .map_err(|_| HyDbError::Decode(format!("amount {sats} duffs exceeds the storable range")))
+  }
+
+  /// Sum amounts, refusing an overflow rather than wrapping into a negative
+  /// total.
+  ///
+  /// The release profile enables neither overflow checks nor panics on
+  /// arithmetic, so a plain `sum()` wraps silently.
+  ///
+  /// # Errors
+  ///
+  /// Returns `Decode` when the running total would overflow.
+  pub fn try_sum(amounts: impl IntoIterator<Item = Self>) -> Result<Self, HyDbError> {
+    let mut total: i64 = 0;
+    for amount in amounts {
+      total = total.checked_add(amount.0).ok_or_else(|| {
+        HyDbError::Decode("summing amounts overflowed the storable range".to_owned())
+      })?;
+    }
+    Ok(Self(total))
+  }
+}
+
 /// An opaque keyset-pagination cursor. Encodes the composite sort key of the
 /// last row returned; callers pass it back verbatim to fetch the next page and
 /// never construct or inspect it.
@@ -279,6 +315,36 @@ mod tests {
     let s = format!("{:?}", HyDbHash(bytes));
     assert!(s.ends_with("ab"));
     assert_eq!(s.len(), 64);
+  }
+
+  #[test]
+  fn amount_conversion_refuses_what_a_cast_would_negate() {
+    assert_eq!(HyDbAmount::from_sat(0).ok(), Some(HyDbAmount(0)));
+    assert_eq!(
+      HyDbAmount::from_sat(i64::MAX as u64).ok(),
+      Some(HyDbAmount(i64::MAX))
+    );
+    // The values `as i64` turns into a negative amount, which then sums into
+    // the supply and every balance that touches the output.
+    for wide in [u64::MAX, 1 << 63, i64::MAX as u64 + 1] {
+      assert!(
+        HyDbAmount::from_sat(wide).is_err(),
+        "amount {wide} must not convert"
+      );
+    }
+  }
+
+  #[test]
+  fn summing_amounts_refuses_an_overflow() {
+    assert_eq!(
+      HyDbAmount::try_sum([HyDbAmount(2), HyDbAmount(3)]).ok(),
+      Some(HyDbAmount(5))
+    );
+    assert!(HyDbAmount::try_sum([]).is_ok());
+    assert!(
+      HyDbAmount::try_sum([HyDbAmount(i64::MAX), HyDbAmount(1)]).is_err(),
+      "a total past the range must refuse rather than wrap negative"
+    );
   }
 
   #[test]
