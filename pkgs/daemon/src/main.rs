@@ -149,7 +149,10 @@ async fn run_docs_only(options: &Options) -> Result<(), DaemonError> {
         &mut server,
       )
       .await
-      .map_err(|_| DaemonError::Config("timed out shutting down docs-only server".to_owned()))?
+      .map_err(|_| DaemonError::ShutdownTimeout {
+        subsystem: "docs-only server",
+        secs: GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
+      })?
     }
     _ = async {
       let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -167,7 +170,10 @@ async fn run_docs_only(options: &Options) -> Result<(), DaemonError> {
         &mut server,
       )
       .await
-      .map_err(|_| DaemonError::Config("timed out shutting down docs-only server".to_owned()))?
+      .map_err(|_| DaemonError::ShutdownTimeout {
+        subsystem: "docs-only server",
+        secs: GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
+      })?
     }
   }
 }

@@ -19,7 +19,7 @@ use hyphen_db::HyphenDb;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::api_metrics::ApiServerMetrics;
-use crate::error::DaemonError;
+use crate::error::{DaemonError, SupervisorFailure};
 use crate::ingest::IngestStatus;
 use crate::init::Options;
 use crate::ipc::verb::CommandCtx;
@@ -209,15 +209,18 @@ impl Supervisable for IpcWorker {
   async fn recover(&self, run_id: Option<Self::RunId>) -> Result<(), DaemonError> {
     match self.runtime.begin_recovery(run_id) {
       RecoveryDisposition::NotNeeded | RecoveryDisposition::Eligible => Ok(()),
-      RecoveryDisposition::Blocked(reason) => Err(DaemonError::Config(format!(
-        "ipc worker recovery blocked: {reason}"
-      ))),
-      RecoveryDisposition::Exhausted => Err(DaemonError::Config(
-        "ipc worker recovery exhausted retry budget".to_owned(),
-      )),
-      RecoveryDisposition::Fatal(reason) => Err(DaemonError::Config(format!(
-        "ipc worker recovery unavailable: {reason}"
-      ))),
+      RecoveryDisposition::Blocked(reason) => Err(DaemonError::Supervisor {
+        subsystem: "ipc worker",
+        failure: SupervisorFailure::Blocked(reason),
+      }),
+      RecoveryDisposition::Exhausted => Err(DaemonError::Supervisor {
+        subsystem: "ipc worker",
+        failure: SupervisorFailure::Exhausted,
+      }),
+      RecoveryDisposition::Fatal(reason) => Err(DaemonError::Supervisor {
+        subsystem: "ipc worker",
+        failure: SupervisorFailure::Unavailable(reason),
+      }),
     }
   }
 }
@@ -337,9 +340,10 @@ pub(crate) fn command_supervised_task(
 ) -> SupervisedTaskSpec<IpcWorker> {
   let initial = command_worker_task(cfg);
   SupervisedTaskSpec::new("ipc command loop", initial, move || {
-    Err(DaemonError::Config(
-      "ipc command loop is not restartable".to_owned(),
-    ))
+    Err(DaemonError::Supervisor {
+      subsystem: "ipc command loop",
+      failure: SupervisorFailure::Unavailable("not restartable"),
+    })
   })
 }
 

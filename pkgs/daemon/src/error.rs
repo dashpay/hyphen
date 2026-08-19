@@ -49,8 +49,52 @@ pub enum DaemonError {
     message: String,
     kind: RestErrorKind,
   },
+  /// An operator-facing configuration problem: `[section] key` requires
+  /// something the file does not provide.
+  ///
+  /// The payload stays a sentence deliberately. Every surviving constructor is
+  /// a startup validation message whose only consumer is the operator reading
+  /// stderr, which is the one place prose is the right representation. What
+  /// used to also travel through here — supervisor and shutdown failures — has
+  /// its own variants below (task E2.15).
   Config(String),
+  /// A supervised subsystem could not be brought back up.
+  ///
+  /// Previously smuggled through `Config(String)`, which it never was: the
+  /// configuration is fine, the worker is not. Keeping the subsystem and the
+  /// disposition typed means a supervisor decision can be read without parsing
+  /// the sentence it was rendered into (task E2.15).
+  Supervisor {
+    subsystem: &'static str,
+    failure: SupervisorFailure,
+  },
+  /// A subsystem did not finish shutting down inside its grace period.
+  ShutdownTimeout {
+    subsystem: &'static str,
+    secs: u64,
+  },
   Index(String),
+}
+
+/// Why a supervised subsystem could not be brought back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupervisorFailure {
+  /// Recovery was declined: the run state does not permit a restart.
+  Blocked(&'static str),
+  /// The retry budget is spent.
+  Exhausted,
+  /// This worker cannot be restarted at all.
+  Unavailable(&'static str),
+}
+
+impl fmt::Display for SupervisorFailure {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      Self::Blocked(reason) => write!(f, "recovery blocked: {reason}"),
+      Self::Exhausted => write!(f, "recovery exhausted its retry budget"),
+      Self::Unavailable(reason) => write!(f, "recovery unavailable: {reason}"),
+    }
+  }
 }
 
 impl fmt::Display for DaemonError {
@@ -71,6 +115,12 @@ impl fmt::Display for DaemonError {
       Self::Storage { context, source } => write!(f, "storage error ({context}): {source}"),
       Self::RestSource { message, .. } => write!(f, "data source error: {message}"),
       Self::Config(msg) => write!(f, "config error: {msg}"),
+      Self::Supervisor { subsystem, failure } => {
+        write!(f, "{subsystem} subsystem: {failure}")
+      }
+      Self::ShutdownTimeout { subsystem, secs } => {
+        write!(f, "{subsystem} did not shut down within {secs}s")
+      }
       Self::Index(msg) => write!(f, "index error: {msg}"),
     }
   }
@@ -110,7 +160,12 @@ impl DaemonError {
       Self::NoPlatformDataDir
       | Self::AlreadyRunning
       | Self::InsufficientDisk { .. }
-      | Self::Config(_) => Outcome::Fatal,
+      | Self::Config(_)
+      // A supervisor that has given up is the end of the road for the process:
+      // graded exactly as the `Config(_)` these used to be built from, so the
+      // typing changes what can be read off the error, not what happens.
+      | Self::Supervisor { .. }
+      | Self::ShutdownTimeout { .. } => Outcome::Fatal,
 
       // Delegate rather than re-derive: the storage crate owns the
       // SQLSTATE policy and is the only place it is written down.
@@ -310,6 +365,45 @@ mod tests {
   fn from_impl_matches_tagged_constructor() {
     let err: DaemonError = pg(Some("40P01"), "deadlock").into();
     assert_eq!(err.classify(), Outcome::Warning);
+  }
+
+  /// E2.15: supervisor and shutdown failures were built from `format!` into
+  /// the config variant. They keep their Fatal grade — the point is that the
+  /// subsystem and the disposition survive as values.
+  #[test]
+  fn supervisor_failures_are_typed_and_still_fatal() {
+    let err = DaemonError::Supervisor {
+      subsystem: "ipc",
+      failure: SupervisorFailure::Blocked("run mismatch"),
+    };
+    assert_eq!(err.classify(), Outcome::Fatal);
+    assert_eq!(
+      err.to_string(),
+      "ipc subsystem: recovery blocked: run mismatch"
+    );
+
+    let err = DaemonError::Supervisor {
+      subsystem: "live",
+      failure: SupervisorFailure::Exhausted,
+    };
+    assert_eq!(err.classify(), Outcome::Fatal);
+    match &err {
+      DaemonError::Supervisor { subsystem, failure } => {
+        assert_eq!(*subsystem, "live");
+        assert_eq!(*failure, SupervisorFailure::Exhausted);
+      }
+      other => assert!(false, "unexpected variant: {other:?}"),
+    }
+
+    let err = DaemonError::ShutdownTimeout {
+      subsystem: "docs-only server",
+      secs: 5,
+    };
+    assert_eq!(err.classify(), Outcome::Fatal);
+    assert_eq!(
+      err.to_string(),
+      "docs-only server did not shut down within 5s"
+    );
   }
 
   #[test]

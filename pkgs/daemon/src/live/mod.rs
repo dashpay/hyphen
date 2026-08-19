@@ -14,7 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use crate::error::DaemonError;
+use crate::error::{DaemonError, SupervisorFailure};
 use crate::lifecycle::Lifecycle;
 use crate::policy::watchdog::{
   WATCHDOG_ACTIVITY_STALE_SECS, WATCHDOG_STARTING_STALE_SECS, WATCHDOG_TICK_SECS,
@@ -239,15 +239,18 @@ impl Supervisable for LiveWorker {
   async fn recover(&self, run_id: Option<Self::RunId>) -> Result<(), DaemonError> {
     match self.runtime.begin_recovery(run_id) {
       RecoveryDisposition::NotNeeded | RecoveryDisposition::Eligible => Ok(()),
-      RecoveryDisposition::Blocked(reason) => Err(DaemonError::Config(format!(
-        "live worker recovery blocked: {reason}"
-      ))),
-      RecoveryDisposition::Exhausted => Err(DaemonError::Config(
-        "live worker recovery exhausted retry budget".to_owned(),
-      )),
-      RecoveryDisposition::Fatal(reason) => Err(DaemonError::Config(format!(
-        "live worker recovery unavailable: {reason}"
-      ))),
+      RecoveryDisposition::Blocked(reason) => Err(DaemonError::Supervisor {
+        subsystem: "live worker",
+        failure: SupervisorFailure::Blocked(reason),
+      }),
+      RecoveryDisposition::Exhausted => Err(DaemonError::Supervisor {
+        subsystem: "live worker",
+        failure: SupervisorFailure::Exhausted,
+      }),
+      RecoveryDisposition::Fatal(reason) => Err(DaemonError::Supervisor {
+        subsystem: "live worker",
+        failure: SupervisorFailure::Unavailable(reason),
+      }),
     }
   }
 }

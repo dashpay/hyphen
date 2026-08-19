@@ -31,7 +31,7 @@ use time::OffsetDateTime;
 use utoipa::IntoParams;
 
 use crate::api_metrics::ApiServerMetrics;
-use crate::error::DaemonError;
+use crate::error::{DaemonError, SupervisorFailure};
 use crate::index::block::rest as block_rest;
 use crate::index::metrics::rest as metrics_rest;
 use crate::index::spent::rest as spent_rest;
@@ -341,15 +341,18 @@ impl Supervisable for RestWorker {
   async fn recover(&self, run_id: Option<Self::RunId>) -> Result<(), DaemonError> {
     match self.runtime.begin_recovery(run_id) {
       RecoveryDisposition::NotNeeded | RecoveryDisposition::Eligible => Ok(()),
-      RecoveryDisposition::Blocked(reason) => Err(DaemonError::Config(format!(
-        "api server recovery blocked: {reason}"
-      ))),
-      RecoveryDisposition::Exhausted => Err(DaemonError::Config(
-        "api server recovery exhausted retry budget".to_owned(),
-      )),
-      RecoveryDisposition::Fatal(reason) => Err(DaemonError::Config(format!(
-        "api server recovery unavailable: {reason}"
-      ))),
+      RecoveryDisposition::Blocked(reason) => Err(DaemonError::Supervisor {
+        subsystem: "api server",
+        failure: SupervisorFailure::Blocked(reason),
+      }),
+      RecoveryDisposition::Exhausted => Err(DaemonError::Supervisor {
+        subsystem: "api server",
+        failure: SupervisorFailure::Exhausted,
+      }),
+      RecoveryDisposition::Fatal(reason) => Err(DaemonError::Supervisor {
+        subsystem: "api server",
+        failure: SupervisorFailure::Unavailable(reason),
+      }),
     }
   }
 }

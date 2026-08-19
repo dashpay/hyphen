@@ -155,10 +155,10 @@ impl Visor for IpcVisor {
     }
 
     if self.command_task.is_none() {
-      let cmd_rx = self
-        .cmd_rx
-        .take()
-        .ok_or_else(|| DaemonError::Config("ipc command receiver already consumed".to_owned()))?;
+      let cmd_rx = self.cmd_rx.take().ok_or_else(|| DaemonError::Supervisor {
+        subsystem: "ipc command loop",
+        failure: crate::error::SupervisorFailure::Unavailable("command receiver already consumed"),
+      })?;
       let ctx = CommandCtx {
         hydb: self.cfg.hydb.clone(),
         ingest: Arc::clone(&self.cfg.ingest),
