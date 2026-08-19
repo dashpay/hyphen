@@ -157,7 +157,30 @@ pub fn review(diag: &HyDbQrStorageDiag, pool_total: usize) -> Vec<SettingWarning
     }
   }
 
-  // 4. Settings the daemon could not read at all. Named explicitly: a check
+  // 4. `shared_buffers` against the database it has to cache. This is the
+  // first-class one: the measured constraint on the projection write path is
+  // server-side random page reads, with `IO:DataFileWrite` appearing inside
+  // client backends — buffer pressure, not client starvation. A 63 GB database
+  // against 8 GB of buffers is that shape, and it is invisible from any
+  // client-side wait metric.
+  if let Some(buffers) = shared_buffers {
+    let database = u64::try_from(diag.database_bytes).unwrap_or(0);
+    if database > 0 && buffers > 0 {
+      let ratio = database as f64 / buffers as f64;
+      if ratio >= 4.0 {
+        out.push(SettingWarning {
+          setting: "shared_buffers",
+          message: format!(
+            "the database is {} against {} of shared_buffers ({ratio:.1}x): the              projection write path will be doing random page reads, which shows              up as server-side IO waits and not as client idleness",
+            human_bytes(database),
+            human_bytes(buffers)
+          ),
+        });
+      }
+    }
+  }
+
+  // 5. Settings the daemon could not read at all. Named explicitly: a check
   // that silently does not run is how the disk-space check went missing.
   if shared_buffers.is_none() {
     out.push(SettingWarning {
@@ -309,6 +332,27 @@ mod tests {
     // 64MB x 300 = 18.75GB, over half of 24GB.
     let findings = review(&diag("8GB", "24GB", "64MB", 400), 300);
     assert!(findings.iter().any(|f| f.setting == "work_mem"));
+  }
+
+  /// The measured constraint: a database several times `shared_buffers` means
+  /// the write path is doing random page reads, which no client-side wait
+  /// metric reveals. 63 GB against 8 GB is the shape that was measured.
+  #[test]
+  fn a_database_far_larger_than_shared_buffers_is_reported() {
+    let mut d = diag("8GB", "24GB", "64MB", 200);
+    d.database_bytes = 63 * 1024 * 1024 * 1024;
+    let findings = review(&d, 40);
+    assert!(
+      findings
+        .iter()
+        .any(|f| f.setting == "shared_buffers" && f.message.contains("random page reads")),
+      "unexpected findings: {findings:?}"
+    );
+
+    // A database that still fits the buffers comfortably says nothing.
+    let mut d = diag("8GB", "24GB", "64MB", 200);
+    d.database_bytes = 16 * 1024 * 1024 * 1024;
+    assert!(review(&d, 40).is_empty());
   }
 
   #[test]

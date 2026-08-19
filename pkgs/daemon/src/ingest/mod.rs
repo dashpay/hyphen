@@ -715,7 +715,7 @@ async fn ingest_once(
     let raw = source.raw_block(&node_tip_hex).await?;
     let tip = block_hash(&raw)?;
     status.set_state(STATE_FETCHING);
-    absorb_with_ancestors(ingest, source, raw).await?;
+    absorb_with_ancestors(ingest, source, status, raw).await?;
     status.set_state(STATE_COMMITTING);
     advance_until_settled(db, ingest, status, tip).await?;
     return Ok(());
@@ -738,13 +738,7 @@ async fn ingest_once(
       if h == chunk_end {
         chunk_tip = Some(block_hash(&raw)?);
       }
-      // Transaction-side progress (task F2): counted from the block's own
-      // CompactSize as it is absorbed, so the figure tracks the linear
-      // catch-up without a second pass over what was just written.
-      if let Some(txs) = block_tx_count(&raw) {
-        status.note_block_txs(txs);
-      }
-      absorb_with_ancestors(ingest, source, raw).await?;
+      absorb_with_ancestors(ingest, source, status, raw).await?;
     }
     if let Some(tip) = chunk_tip {
       status.set_state(STATE_COMMITTING);
@@ -831,6 +825,7 @@ async fn read_local_tip(db: &HyphenDb) -> Result<i64, DaemonError> {
 async fn absorb_with_ancestors(
   ingest: &HyDbIngest,
   source: &dyn RestSource,
+  status: &IngestStatus,
   raw: Vec<u8>,
 ) -> Result<(), DaemonError> {
   let mut stack = vec![raw];
@@ -846,7 +841,13 @@ async fn absorb_with_ancestors(
         stack.push(raw);
         stack.push(parent_raw);
       }
-      HyDbBlockSeen::New | HyDbBlockSeen::Known => {}
+      // Counted on this arm only: a `MissingParent` block is pushed back and
+      // seen again, so counting on the way in would double it (task F2).
+      HyDbBlockSeen::New | HyDbBlockSeen::Known => {
+        if let Some(txs) = block_tx_count(&raw) {
+          status.note_block_txs(txs);
+        }
+      }
     }
   }
   Ok(())
