@@ -404,9 +404,7 @@ async fn io(pool: &PgPool) -> Result<BTreeMap<String, Io>, Box<dyn std::error::E
 
 #[tokio::test]
 async fn a_block_costs_one_write_per_singleton_and_no_read() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result
@@ -637,9 +635,7 @@ async fn summaries(pool: &PgPool) -> Result<(i64, i64, i64, i64), Box<dyn std::e
 
 #[tokio::test]
 async fn a_block_that_moves_nothing_writes_no_update_and_still_reverses() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = empty_tail(&tmp).await;
   tmp.drop_now().await;
   result
