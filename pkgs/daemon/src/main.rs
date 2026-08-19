@@ -73,8 +73,10 @@ fn run() -> Result<(), DaemonError> {
   let options = Options::resolve(&args, &cfg)?;
   options.log_capabilities();
 
-  datadir::check_free_space(&dir)?;
-  info!("disk space OK");
+  // The number, not a reassurance: "disk space OK" once survived the check it
+  // was reporting on (E2.13).
+  let free_bytes = datadir::check_free_space(&dir)?;
+  info!(free_bytes, "datadir free space");
 
   let lock = lockfile::acquire(&dir)?;
   info!("lockfile acquired");
