@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT block_height FROM transactions WHERE txid = $1 ORDER BY block_height DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "block_height",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0c8e5f2f725b463a1a88c8c9d2befa44cb175dc1ce70ae02e60d8f3a0c5ade97"
+}

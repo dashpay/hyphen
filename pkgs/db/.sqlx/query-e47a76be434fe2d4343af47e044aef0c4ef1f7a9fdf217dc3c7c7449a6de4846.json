@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT o.vout_index, o.value, o.script_pubkey, o.address,\n                o.address_type AS \"address_type: HyDbAddrType\",\n                s.spending_txid AS \"spending_txid?\", s.spending_vin AS \"spending_vin?\"\n           FROM tx_outputs o\n           LEFT JOIN spends s ON s.outpoint = o.outpoint\n          WHERE o.txid = $1 AND o.block_height = $2 ORDER BY o.vout_index",
+  "query": "SELECT o.vout_index, o.value, o.script_pubkey, o.address,\n                o.address_type AS \"address_type: HyDbAddrType\",\n                s.spending_txid AS \"spending_txid?\", s.spending_vin AS \"spending_vin?\"\n           FROM (SELECT vout_index, value, script_pubkey, address, address_type, outpoint\n                   FROM tx_outputs\n                  WHERE txid = $1 AND block_height = $2 AND vout_index >= $3\n                  ORDER BY vout_index LIMIT $4) o\n           LEFT JOIN spends s ON s.outpoint = o.outpoint\n          ORDER BY o.vout_index",
   "describe": {
     "columns": [
       {
@@ -54,7 +54,9 @@
     "parameters": {
       "Left": [
         "Bytea",
-        "Int4"
+        "Int4",
+        "Int4",
+        "Int8"
       ]
     },
     "nullable": [
@@ -63,9 +65,9 @@
       false,
       true,
       true,
-      false,
-      false
+      true,
+      true
     ]
   },
-  "hash": "ec1f8a08995237eeffdd25f3d33ef524c8b13358bfc32f93d229f8bb7a314677"
+  "hash": "e47a76be434fe2d4343af47e044aef0c4ef1f7a9fdf217dc3c7c7449a6de4846"
 }
