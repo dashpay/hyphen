@@ -11,7 +11,8 @@ use sqlx::PgPool;
 
 use crate::error::HyDbError;
 
-/// The embedded migration set (`sql/0001_schema.sql`, ...).
+/// The embedded migration set: one file, `sql/0001_schema.sql`, which states
+/// the whole schema as an end state rather than a history.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./sql");
 
 /// The highest migration version embedded in this build. The health check

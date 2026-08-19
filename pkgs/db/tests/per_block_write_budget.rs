@@ -46,8 +46,8 @@
 //! be complete at every block, so the write cannot be deferred or coalesced
 //! across blocks. What went away is the reading and re-reading around it.
 //!
-//! It then lost a third of what remained to
-//! `0006_address_txs_one_index.sql`, which collapsed its two btrees into one — `address_txs_pkey (address, block_height, txid)` was a
+//! It then lost a third of what remained to the collapse of its two btrees
+//! into one — `address_txs_pkey (address, block_height, txid)` was a
 //! strict key prefix of `idx_address_txs_addr_height_desc`, so the second
 //! descent it cost per row bought nothing. Same machine, same 400 blocks, the
 //! pkey the only difference:

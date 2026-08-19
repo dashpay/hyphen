@@ -1,11 +1,32 @@
+--
+-- Copyright (c) 2026-present, The Dash Core developers
+-- SPDX-License-Identifier: MIT
+-- See the accompanying file LICENSE or https://opensource.org/license/MIT
+--
+
 -- hyphen-db schema — PostgreSQL 18.
 --
 -- Chain-derivable data only. Every row here is rebuildable from `ser_blocks`
 -- plus the caller-supplied deriver; nothing that is application state or live
 -- node state lives in this database.
 --
--- Applied once by sqlx as migration 0001. Do not add IF NOT EXISTS guards —
--- migrations run exactly once and are tracked in `_sqlx_migrations`.
+-- This is the whole schema, in one file, and it is the only migration. sqlx
+-- applies it once and records it in `_sqlx_migrations`. Do not add
+-- IF NOT EXISTS guards — it runs exactly once, against a database that has
+-- never held Hyphen state.
+--
+-- It states the END STATE, deliberately. An earlier revision shipped six
+-- incremental migrations (0001-0006); some of them existed only to take away
+-- what an earlier one had added. They were collapsed here once the RocksDB
+-- removal made every deployment a fresh sync, leaving no database for an
+-- incremental step to migrate and no reader served by replaying the history.
+--
+-- So where the collapsed set removed an object, that object simply does not
+-- appear below and a comment says why. Two of those absences are load-bearing
+-- and must not be "fixed" by adding the obvious index back:
+--   * the seven deferred indexes have no partitioned parent (see the deferred
+--     index set below);
+--   * `address_txs` has no primary key (see that table).
 --
 -- Layout follows the five-layer model, narrowed to layers 1-3 plus an
 -- internal undo family:
@@ -69,6 +90,140 @@ CREATE TYPE validator_type AS ENUM (
   'evonode',
   'unknown'
 );
+
+-- ---------------------------------------------------------------------------
+-- The storage-layout contract
+-- ---------------------------------------------------------------------------
+--
+-- `[db.layout]` as it stood when this database was created.
+--
+-- The rows are the record of what the bytes in this database *mean*. They are
+-- written once, on the first startup against a fresh database, and after that
+-- a disagreement between them and the configuration refuses startup rather
+-- than reinterpreting data already on disk. See `src/layout.rs` for the
+-- grades (hard / rebuildable / managed) and their remedies.
+--
+-- The table has to exist before any block is written, which it does by
+-- construction: `hyphen-db` resolves the layout immediately after
+-- `MIGRATOR.run` returns, on a table this file has just created. (It was its
+-- own migration, 0002, only because sqlx checksums applied migrations and
+-- editing an already-applied 0001 would have locked out the databases of the
+-- day. There are none of those left, so it lives here.)
+--
+-- Key/value rather than one column per parameter, deliberately: a newer daemon
+-- must be able to record a key an older one has never heard of, and an older
+-- daemon must be able to read the table and ignore that key, without a
+-- migration on either side.
+
+CREATE TABLE init_params (
+  -- Layout key, matching the `[db.layout]` config key exactly.
+  key        text        PRIMARY KEY,
+  -- Its value, rendered as text. The Rust side owns parsing and validation;
+  -- storing text keeps one column type across integers, bytes and names.
+  value      text        NOT NULL,
+  -- The daemon version that first recorded this key. An operator diagnosing a
+  -- refusal needs to know which build's idea of the layout they are looking
+  -- at, especially for keys adopted later than the database was created.
+  created_by text        NOT NULL,
+  -- When it was recorded. Not updated when a managed key advances; the
+  -- creation time is the useful fact.
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE init_params IS
+  'Immutable storage-layout parameters recorded at database creation; compared against [db.layout] on every startup.';
+
+-- ---------------------------------------------------------------------------
+-- The deferred index set
+-- ---------------------------------------------------------------------------
+--
+-- Seven query-only indexes on the height-partitioned tables are NOT created
+-- on their partitioned parents anywhere in this file. That absence is the
+-- feature. Stepped sync (task A3) defers these indexes on the partition that
+-- is currently being filled and builds them in one pass when that partition
+-- closes. Building an index costs O(table), not O(delta), so paying it once
+-- per partition (~25 times over the chain) beats paying random-write index
+-- maintenance on every one of ~3 GB of index per partition.
+--
+-- Why there can be no parent index
+-- --------------------------------
+-- Postgres will not let a partition of a partitioned index be dropped:
+--
+--   ERROR:  cannot drop index tx_outputs_p9_outpoint_idx
+--           because index idx_tx_outputs_outpoint requires it
+--
+-- and it re-creates the child unconditionally whenever a partition is added,
+-- whether by CREATE TABLE ... PARTITION OF or by ALTER TABLE ... ATTACH
+-- PARTITION, and whether the parent index is valid or (having been made with
+-- ON ONLY) invalid. All four combinations were measured on PostgreSQL 18.3;
+-- there is no state in which an attached partition can lack a child of an
+-- existing parent index. So "the open partition has no such index" is only
+-- reachable if the index has no partitioned parent at all. Declaring any of
+-- the seven below on the parent would silently disable stepped sync.
+--
+-- That costs nothing at query time. Postgres has no global indexes: a
+-- partitioned index is a metadata umbrella that guarantees presence and
+-- backs partition-spanning uniqueness, and plans are per-partition either
+-- way. Measured on the same server, a parent-level query with p0/p1 indexed
+-- and p2 not produces an Append of `Index Scan using w_p0_v_idx`,
+-- `Index Scan using w_p1_v_idx`, and a fallback scan on p2 — identical
+-- whether the umbrella index is absent, present-and-invalid, or valid. Only
+-- the partition that actually lacks the index degrades; the rest of the table
+-- is untouched.
+--
+-- None of the seven is read by the block-connect path, which resolves
+-- prevouts through utxo_set's primary key and otherwise only inserts into
+-- these tables. idx_tx_outputs_outpoint is read on *disconnect* (the UTXO
+-- restore join), which is why stepped mode drops back to realtime before
+-- servicing a reorg. The indexes the ingest path does read —
+-- address_stats_pkey, the utxo_set keys, every partitioned table's own
+-- primary key, and idx_address_txs_block_height — are deliberately not in
+-- this list and are created on their parents in the normal way below.
+--
+-- The daemon creates each of these per partition at close, naming it with the
+-- stem plus the partition's own `_pN` suffix
+-- (`idx_tx_outputs_outpoint_p9`, and so on).
+--
+-- DEFERRED INDEX SET — mirrored by `stepped.rs::DEFERRED_INDEXES`, and pinned
+-- to this block by `deferred_set_matches_the_migration`. The two are one list
+-- written twice; if they drift, a daemon-built database and this schema carry
+-- different indexes under the same names. Definitions are quoted exactly as
+-- the Rust constant spells them.
+--
+--   'idx_transactions_txid'            on 'transactions'
+--     '(txid)'
+--     Lookup a transaction by txid alone (the PK leads with block_height).
+--
+--   'idx_transactions_list'            on 'transactions'
+--     '(block_height DESC, block_pos DESC, txid DESC)'
+--     Newest-first keyset pagination of the global transaction list.
+--
+--   'idx_transactions_display_txid'    on 'transactions'
+--     '(display_hex(txid) text_pattern_ops)'
+--     Prefix search on the display-order hex txid (see the search contract
+--     above).
+--
+--   'idx_tx_outputs_txid_vout'         on 'tx_outputs'
+--     '(txid, vout_index)'
+--     A transaction's outputs, and input resolution by consumed (txid, vout).
+--
+--   'idx_tx_outputs_address'           on 'tx_outputs'
+--     '(address) WHERE address IS NOT NULL'
+--     An address's outputs.
+--
+--   'idx_tx_outputs_outpoint'          on 'tx_outputs'
+--     '(outpoint)'
+--     The generated packed key exists to be joined on (spent-status lookups
+--     and the UTXO-restore step of every disconnect); without this index
+--     those joins full-scan every partition.
+--
+--   'idx_address_txs_addr_height_desc' on 'address_txs'   [UNIQUE]
+--     '(address, block_height DESC, block_pos DESC, txid DESC)'
+--     The address paginator's ordering, and the only uniqueness constraint
+--     `address_txs` has. Built with CREATE UNIQUE INDEX at partition close —
+--     see the `address_txs` commentary for what that does and does not prove.
+--
+-- END DEFERRED INDEX SET
 
 -- ===========================================================================
 -- L1 — Base facts (append-only)
@@ -135,14 +290,11 @@ CREATE TABLE transactions (
   PRIMARY KEY (block_height, txid)
 ) PARTITION BY RANGE (block_height);
 
--- Lookup a transaction by txid alone (the PK leads with block_height).
-CREATE INDEX idx_transactions_txid ON transactions (txid);
--- Newest-first keyset pagination of the global transaction list.
-CREATE INDEX idx_transactions_list
-  ON transactions (block_height DESC, block_pos DESC, txid DESC);
--- Prefix search on the display-order hex txid (see the search contract above).
-CREATE INDEX idx_transactions_display_txid
-  ON transactions (display_hex(txid) text_pattern_ops);
+-- No parent indexes here. `transactions`' three query-only indexes
+-- (idx_transactions_txid, idx_transactions_list, idx_transactions_display_txid)
+-- are in the deferred set above and exist only per partition, created by the
+-- daemon when the partition closes. The primary key stays on the parent: the
+-- ingest path reads it.
 
 -- Transaction inputs, partitioned alongside transactions. `prev_address` and
 -- `prev_value` are resolved at derive time and stored inline, so reading a
@@ -174,13 +326,11 @@ CREATE TABLE tx_outputs (
   outpoint      bytea        GENERATED ALWAYS AS (txid || int4send(vout_index)) STORED,
   PRIMARY KEY (block_height, txid, vout_index)
 ) PARTITION BY RANGE (block_height);
--- A transaction's outputs, and input resolution by consumed (txid, vout).
-CREATE INDEX idx_tx_outputs_txid_vout ON tx_outputs (txid, vout_index);
-CREATE INDEX idx_tx_outputs_address ON tx_outputs (address) WHERE address IS NOT NULL;
--- The generated packed key exists to be joined on (spent-status lookups and
--- the UTXO-restore step of every disconnect); without this index those joins
--- full-scan every partition.
-CREATE INDEX idx_tx_outputs_outpoint ON tx_outputs (outpoint);
+-- No parent indexes here either: idx_tx_outputs_txid_vout,
+-- idx_tx_outputs_address and idx_tx_outputs_outpoint are all in the deferred
+-- set above and live per partition only. idx_tx_outputs_outpoint is the one
+-- of the three that a *disconnect* reads (the UTXO-restore join), which is
+-- why stepped mode returns to realtime before servicing a reorg.
 
 -- Dash special-transaction (DIP2/DIP3) payloads: a base fact keyed by txid,
 -- decoded to JSONB, indexed by protx_hash for validator provenance queries.
@@ -409,15 +559,140 @@ CREATE INDEX idx_utxo_set_block_height ON utxo_set (block_height);
 
 -- An address's transactions, newest-first, keyset-paginated. Partitioned by
 -- height so each page is a bounded index range independent of address size.
+--
+-- NO PRIMARY KEY, deliberately. This table carried two btrees whose keys are
+-- a prefix relationship:
+--
+--   address_txs_pkey                  (address, block_height, txid)
+--   idx_address_txs_addr_height_desc  (address, block_height DESC,
+--                                      block_pos DESC, txid DESC)
+--
+-- The first is a strict key-prefix subset of the second. On the retained
+-- mainnet database that redundancy was 8.8 GB of the table's 17.6 GB of
+-- index; on the 860,000-block seed, 6,527 MB of 13 GB. Nothing needs it:
+--
+--   * The read path never used it. The address paginator orders by
+--     (block_height DESC, block_pos DESC, txid DESC) within one address, which
+--     the pkey cannot serve, and it plans as an Index Only Scan using
+--     address_txs_pN_address_block_height_block_pos_txid_idx on every partition
+--     of `hyphen_mainnet`.
+--   * The write path stopped needing it in A5. The `address_txs` insert used to
+--     carry `ON CONFLICT DO NOTHING` with the pkey as its arbiter; the writer's
+--     in-memory dedup key was then narrowed to exactly (address, txid) at a
+--     fixed height — the constraint's own columns — so the key set handed to
+--     Postgres is unique by construction and the clause was removed. With no
+--     arbiter there is no arbiter index to back.
+--   * The reversal `DELETE ... WHERE block_height = $1` stands on
+--     idx_address_txs_block_height below, not on the pkey — neither btree
+--     leading with `address` could ever serve it.
+--
+-- Measured on a clone of the seed (`address_txs_p8`, 8.47M rows, 883 MB heap /
+-- 2,321 MB index), 100 blocks of 141 rows each, `pg_statio` deltas:
+--
+--   layout                     pages/block   physical reads/block cold   ms/block
+--   two btrees (before)            1281.5                       285.8      100.1
+--   one btree                       713.2                        73.4       56.1
+--   one UNIQUE btree                708.8                           —        47.1
+--
+-- `heap_blks_read` was zero in every phase: this is all index leaf traffic,
+-- which is the `IO:DataFileRead` that stood at 73% of active samples.
+--
+-- Why the survivor is deferred and built UNIQUE, not declared UNIQUE
+-- -----------------------------------------------------------------
+-- A unique index cannot be deferred — deferring it means not enforcing it — so
+-- declaring the wide index UNIQUE here would force it to be maintained on
+-- every insert during IBD and lose stepped sync's cheap scheme entirely. It
+-- would also need a partitioned parent, which is exactly what the deferred set
+-- cannot have. Instead the index is a member of the deferred set above
+-- (`stepped.rs::DEFERRED_INDEXES`, `unique: true`) and is built with
+-- CREATE UNIQUE INDEX when the partition closes. That build both creates the
+-- index and retroactively proves the partition holds no duplicate key: if A5's
+-- dedup ever breaks, or a new path bypasses it, the close fails loudly with
+-- the offending partition in the index name, instead of corrupting silently.
+-- Near the tip, in realtime mode, the index exists and enforcement is per-row
+-- again.
+--
+-- So enforcement granularity is per-row near the tip and per-partition during
+-- IBD, and verified either way. The accepted exposure: reads against the still
+-- open partition can see a duplicate before that partition closes, and a failed
+-- close needs an operator. Both are the right failure mode, because a duplicate
+-- here means a real bug in the writer.
+--
+-- What the unique key does and does not prove
+-- -------------------------------------------
+-- The key is the four columns the paginator orders by, which is one column
+-- wider than the old constraint. `block_pos` is functionally determined by
+-- (block_height, txid) — that pair is `transactions`' own primary key, and
+-- `address_txs.block_pos` is a copy of the value stored there — so a genuine
+-- duplicate (address, block_height, txid) carries the same block_pos and
+-- collides. The one shape that would slip through is a duplicate whose two
+-- rows disagree about `block_pos`, i.e. a writer that has already corrupted the
+-- position it copies; no single index over the paginator's ordering can catch
+-- that, because the ordering needs all four columns in that order.
 CREATE TABLE address_txs (
   address       TEXT    NOT NULL,
   block_height  INTEGER NOT NULL,
   txid          bytea   NOT NULL,
-  block_pos     INTEGER NOT NULL,
-  PRIMARY KEY (address, block_height, txid)
+  block_pos     INTEGER NOT NULL
 ) PARTITION BY RANGE (block_height);
-CREATE INDEX idx_address_txs_addr_height_desc
-  ON address_txs (address, block_height DESC, block_pos DESC, txid DESC);
+
+-- Support the reversal delete (task C2). Every disconnect runs one
+--
+--   DELETE FROM address_txs WHERE block_height = $1
+--
+-- per reversed block. `address_txs` is the only base table whose reversal has
+-- no other index to stand on: both btrees above lead with `address` and
+-- neither can be probed by height alone. Range partitioning narrowed the
+-- delete to one partition and nothing narrowed it further, leaving a
+-- sequential scan of that whole partition.
+--
+-- Measured on an 860,000-block seed (46.5M address_txs rows, partition p8
+-- holding 8.47M of them, 883 MB of heap), parallelism off, in a rolled-back
+-- transaction. Warm first, then again on a freshly cloned database so the
+-- buffer pool had never seen the data:
+--
+--                          latency      buffers (hit/read)   rows found
+--   before, warm            337-421 ms   112,980 / 0          62-131
+--   before, COLD          14,263 ms        2,110 / 110,932        62
+--   after, warm heap           81 ms          134 / 3            131
+--   after, COLD partition      18 ms           13 / 3             11
+--
+-- The cold row is the one that matters, and it is why the warm reading was not
+-- worth trusting: 110,932 physical block reads, 867 MB pulled through an 8 GB
+-- shared_buffers on a 61 GB database, and 14.3 SECONDS for a single block's
+-- reversal. Warm understated it by 42x. A reorg arrives while a sync is using
+-- that cache for something else, so cold is the normal case, not the bad one —
+-- and a multi-block reorg pays it per block.
+--
+-- The index path does not care either way: 3 physical reads on a partition the
+-- buffer pool had never touched, because it reads an index page and the handful
+-- of heap pages the matching rows actually live on.
+--
+-- Cost: 325 MB across the nine partitions of the seed, against 6.5 GB for the
+-- primary keys the same table used to carry. Insert-side maintenance is the
+-- cheap case for a btree — heights arrive monotonically, so every insert lands
+-- on the rightmost leaf.
+--
+-- Why btree and not BRIN
+-- ---------------------
+-- BRIN is the tempting answer for a column this correlated, and it works: the
+-- same delete measured 0.386 ms against a BRIN index on the same data. It is
+-- rejected anyway. At 280 kB for all nine partitions it is a thousand times
+-- smaller and builds in 2.4 s, but it is lossy: that run rechecked 6,229 heap
+-- rows to find 33, and the recheck set grows as heap correlation decays —
+-- precisely what a re-derived partition and reused free space do. The delete is
+-- on the reorg path, where predictable is worth more than small, and 325 MB
+-- against a 61 GB database (0.5%) is not the constraint. A future BRIN swap is
+-- a one-statement change if the size ever matters.
+--
+-- Why the parent, and not the deferred set
+-- ---------------------------------------
+-- This index is deliberately NOT deferrable, for the same reason `utxo_set`'s
+-- and every primary key are not: the ingest path itself reads it. It is read
+-- on disconnect, and while stepped mode drops back to realtime before
+-- servicing a reorg, "realtime" is where the index has to already exist. So it
+-- keeps its partitioned parent and is created here.
+CREATE INDEX idx_address_txs_block_height ON address_txs (block_height);
 
 -- Validator (masternode / evonode) registry, current state.
 CREATE TABLE validators (
@@ -528,3 +803,84 @@ CREATE TABLE undo_validators (
   last_updated_height     INTEGER,
   PRIMARY KEY (height, protx_hash)
 ) PARTITION BY RANGE (height);
+
+-- ===========================================================================
+-- The offline post-IBD maintenance pass, as a runbook (task B2)
+-- ===========================================================================
+--
+-- No DDL below this line. This section records the one maintenance step the
+-- schema wants an operator to run and cannot run for itself, next to the
+-- schema it applies to, because an operator reading `sql/` is the one who will
+-- need it. `COMMENT ON DATABASE` is the only executable form of the same note
+-- and it cannot be issued portably from inside a migration, so this is a
+-- comment block on purpose. (It was migration 0005, DDL-free, for the same
+-- reason.)
+--
+-- WHEN
+-- ----
+-- Once, after initial sync completes, with the daemon stopped. Not on a
+-- schedule, and not while syncing — B1's relaxed autovacuum settings exist so
+-- that IBD does *not* pay for this, and doing it mid-sync just means doing it
+-- again.
+--
+-- WHAT
+-- ----
+--
+--   vacuumdb --freeze --analyze --jobs=N -d <database>
+--
+-- or per table, `VACUUM (FREEZE, ANALYZE) <table>;`. Two things are wanted and
+-- neither is compaction:
+--
+--   FREEZE   IBD writes ~3.16 XIDs per block and every base table is
+--            append-only afterwards, so the whole history is permanently
+--            visible tuples that autovacuum will nonetheless have to revisit
+--            for wraparound one day — as an anti-wraparound vacuum, at some
+--            unchosen moment, on a running server. Freezing it while the
+--            daemon is down converts that future forced scan into a chosen
+--            one, and lets index-only scans use the visibility map.
+--   ANALYZE  Statistics from a table that grew by four orders of magnitude
+--            during sync describe a database that no longer exists. This is
+--            the cheap half and the one whose absence shows up as a plan
+--            cliff on the first query after sync.
+--
+-- Measured on a clone of an 860,000-block database (61 GB, 46.5M address_txs
+-- rows): `VACUUM (FREEZE, ANALYZE) address_txs_p8` — one 100,000-block
+-- partition, 883 MB of heap — took 10.6 s warm. It scales with heap size, it
+-- takes no exclusive lock, and it needs no free space beyond the visibility
+-- and freeze map updates. That per-partition rate is the figure to plan with;
+-- a whole-database `vacuumdb --freeze --analyze -j 3` run on the same clone was
+-- abandoned partway, for a reason worth knowing before scheduling one: the WAL
+-- it generates makes checkpoints continuous, and every `CREATE DATABASE` /
+-- `DROP DATABASE` on that server then waits on a checkpoint. This is an
+-- OFFLINE, whole-server maintenance window, not something to slip in beside
+-- other work on a shared instance.
+--
+-- NOT `VACUUM FULL`
+-- -----------------
+-- `VACUUM FULL` is a rewrite: it builds a complete new copy of the table and
+-- its indexes, then swaps, so peak usage is the table's current size PLUS the
+-- rewritten size, and it holds an ACCESS EXCLUSIVE lock throughout. Sizes from
+-- the retained mainnet database at height 967,013 (84 GB total):
+--
+--   address_txs   24 GB      tx_inputs    13 GB      utxo_set        3.0 GB
+--   tx_outputs    18 GB      spends      9.2 GB      address_stats   5.5 GB
+--   transactions  4.3 GB
+--
+-- so a full-database `VACUUM FULL` needs ~84 GB of headroom, and the largest
+-- single table alone needs ~24 GB — at a few hundred GB (the full chain, or a
+-- larger network) that is a spare volume, not a maintenance window. It also
+-- buys nothing this schema needs: the base tables are append-only, so they
+-- carry no dead tuples to compact. `utxo_set` is the one table that churns,
+-- and it is deliberately kept at a low fillfactor with aggressive autovacuum
+-- (see `utxo_set` above) precisely so its free space is *reused* rather than reclaimed.
+--
+-- If physical compaction is ever genuinely wanted — after a mass deletion, or
+-- a retention change — do it table by table, largest last, and size the
+-- headroom against that one table rather than the database:
+--
+--   VACUUM FULL <one table>;   -- or one partition at a time
+--
+-- Partitioning is the lever that makes this survivable: every large table here
+-- is range-partitioned by height, so the unit of rewrite is a ~2-5 GB
+-- partition, not a 24 GB table. `pg_repack` is the other answer, if the
+-- exclusive lock rather than the space is the binding constraint.

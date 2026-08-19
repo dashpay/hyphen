@@ -63,7 +63,7 @@
 //! of the writer's dedup key to exactly the constraint's columns removed the
 //! `ON CONFLICT` arbiter it existed to back.
 //!
-//! `0006_address_txs_one_index.sql` drops it. That leaves the constraint with
+//! The schema does not declare it. That leaves the constraint with
 //! nowhere to live, and the obvious repair — declaring the survivor `UNIQUE` —
 //! is the wrong one for IBD: a unique index cannot be deferred, because
 //! deferring it *is* not enforcing it, so the wide index would have to be
@@ -102,9 +102,9 @@
 //! is valid or was made invalid with `ON ONLY`. All four combinations were
 //! measured on PostgreSQL 18.3. So an attached partition can never lack a
 //! child of an existing parent index, and "deferred" is only reachable if the
-//! index has no parent at all. Migration `0003_stepped_indexes.sql` is what
-//! removes those parents; this module owns the per-partition indexes that
-//! replace them.
+//! index has no parent at all. `sql/0001_schema.sql` is what withholds those
+//! parents — its DEFERRED INDEX SET block names the seven and creates none
+//! of them; this module owns the per-partition indexes that stand in.
 //!
 //! Nothing is lost by it. Postgres has no global indexes — a partitioned index
 //! is a metadata umbrella, and plans are per-partition regardless. A
@@ -266,7 +266,7 @@ pub struct DeferredIndex {
   pub definition: &'static str,
   /// Build it `UNIQUE`. Set only where the key is a real uniqueness
   /// constraint that has nowhere else to live: `address_txs` traded its
-  /// redundant primary key for this index (`0006_address_txs_one_index.sql`),
+  /// redundant primary key for this index (see `sql/0001_schema.sql`),
   /// so the build at partition close is also the proof that the partition
   /// holds no duplicate. Deferring a unique index means not enforcing it
   /// until the build, which is the trade that section of the module doc
@@ -275,8 +275,9 @@ pub struct DeferredIndex {
 }
 
 /// The deferrable set: query-only indexes on height-partitioned tables, and
-/// nothing else. Must stay in step with `0003_stepped_indexes.sql`, which is
-/// asserted by `deferred_set_matches_the_migration`.
+/// nothing else. Must stay in step with the DEFERRED INDEX SET block of
+/// `sql/0001_schema.sql`, which is asserted by
+/// `deferred_set_matches_the_migration`.
 pub const DEFERRED_INDEXES: [DeferredIndex; 7] = [
   DeferredIndex {
     stem: "idx_transactions_txid",
@@ -342,12 +343,12 @@ pub const DEFERRED_INDEXES: [DeferredIndex; 7] = [
 /// here as the arbiter of `INSERT INTO address_txs … ON CONFLICT DO NOTHING`;
 /// A5 narrowed the writer's in-memory dedup key to exactly the constraint's
 /// columns, which made the key set unique by construction and let the clause
-/// go, and `0006_address_txs_one_index.sql` then dropped the constraint
-/// itself as a redundant key prefix of
+/// go, and the schema then stopped declaring the constraint
+/// itself, as a redundant key prefix of
 /// `idx_address_txs_addr_height_desc`. `address_txs` is consequently the one
 /// base table with *no* entry here: the ingest path reads none of its indexes
 /// on connect, and the reversal delete reads `idx_address_txs_block_height`,
-/// which keeps its partitioned parent (0004) and is not in the deferred set.
+/// which keeps its partitioned parent and is not in the deferred set.
 /// Nothing named here is an `address_txs` index, so this list no longer needs
 /// one — but the property the list encodes is unchanged.
 pub const INGEST_PATH_INDEXES: [&str; 8] = [
@@ -362,7 +363,7 @@ pub const INGEST_PATH_INDEXES: [&str; 8] = [
 ];
 
 /// Per-partition name for a deferred index: the stem plus the partition's own
-/// `_pN` suffix. The same rule `0003_stepped_indexes.sql` applies, so a
+/// `_pN` suffix. The same rule `sql/0001_schema.sql` documents, so a
 /// database that has been migrated and one that was built by the daemon carry
 /// identical names.
 #[must_use]
@@ -904,66 +905,126 @@ mod tests {
     }
   }
 
-  /// The migration and this table are two spellings of one list. If they
-  /// disagree, a migrated database and a daemon-built one carry different
-  /// indexes under the same names.
-  #[test]
-  fn deferred_set_matches_the_migration() {
+  /// The committed schema, split into the DDL it executes and the DEFERRED
+  /// INDEX SET block that documents what it deliberately does not create.
+  ///
+  /// The schema is one file and states its end state, so a deferred index
+  /// appears in it only as commentary. Both halves are needed: the DDL half
+  /// proves the index has no partitioned parent, the comment half is the
+  /// list this module mirrors.
+  fn schema_ddl_and_deferred_block() -> (String, String) {
     let sql = std::fs::read_to_string(
-      std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sql/0003_stepped_indexes.sql"),
+      std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sql/0001_schema.sql"),
     )
     .unwrap_or_default();
+    assert!(!sql.is_empty(), "0001_schema.sql should be readable");
+    let block = sql
+      .split("DEFERRED INDEX SET")
+      .nth(1)
+      .unwrap_or("")
+      .split("END DEFERRED INDEX SET")
+      .next()
+      .unwrap_or("")
+      .to_owned();
     assert!(
-      !sql.is_empty(),
-      "0003_stepped_indexes.sql should be readable"
+      !block.is_empty(),
+      "the schema should carry a DEFERRED INDEX SET block"
     );
-    let body = sql.split("DO $$").nth(1).unwrap_or("");
-    assert!(!body.is_empty(), "the migration should have a body");
+    // Everything the file actually executes: comments stripped, so a stem
+    // named only in prose does not read as a CREATE INDEX.
+    let ddl: String = sql
+      .lines()
+      .map(|line| line.split("--").next().unwrap_or(""))
+      .collect::<Vec<_>>()
+      .join("\n");
+    (ddl, block)
+  }
+
+  /// The schema and this table are two spellings of one list. If they
+  /// disagree, a freshly migrated database and a daemon-built one carry
+  /// different indexes under the same names.
+  ///
+  /// This replaced a pin to `0003_stepped_indexes.sql`, which is where the
+  /// seven used to be taken off their parents before the migrations were
+  /// collapsed into one file. The intent is unchanged and the grip is
+  /// tighter: as well as checking that the schema names every member, it now
+  /// checks that the schema never *creates* one, which is the property 0003
+  /// existed to establish and the one a careless edit would undo.
+  #[test]
+  fn deferred_set_matches_the_migration() {
+    let (ddl, block) = schema_ddl_and_deferred_block();
     for spec in &DEFERRED_INDEXES {
       assert!(
-        body.contains(&format!("'{}'", spec.stem)),
-        "{} is deferrable here but the migration does not unparent it",
+        block.contains(&format!("'{}'", spec.stem)),
+        "{} is deferrable here but the schema's deferred set does not list it",
         spec.stem
       );
       assert!(
-        body.contains(&format!("'{}'", spec.definition)),
-        "{}'s definition here does not appear in the migration",
+        block.contains(&format!("'{}'", spec.definition)),
+        "{}'s definition here does not appear in the schema's deferred set",
+        spec.stem
+      );
+      // The absence is the contract: a partitioned parent for any of these
+      // makes the per-partition index undroppable and silently disables
+      // stepped sync.
+      assert!(
+        !ddl.contains(spec.stem),
+        "{} is deferrable, so the schema must not create it — a partitioned          parent cannot coexist with deferring it on the open partition",
         spec.stem
       );
     }
-    // And nothing the migration unparents is missing from the table: count
-    // the VALUES rows by their table column.
-    let rows = body.matches("',").count();
-    assert!(
-      rows >= DEFERRED_INDEXES.len(),
-      "the migration lists fewer indexes than the deferred set"
+    // And nothing the schema defers is missing from this table: count the
+    // listed entries by their table column.
+    let rows = block.matches(" on '").count();
+    assert_eq!(
+      rows,
+      DEFERRED_INDEXES.len(),
+      "the schema lists {rows} deferred indexes and this table has {}",
+      DEFERRED_INDEXES.len()
     );
   }
 
   /// The unique members are a second contract with the schema, and a sharper
-  /// one: a `unique` flag that drifts away from the migration means a database
-  /// where `address_txs` has neither a primary key nor a unique index — no
+  /// one: a `unique` flag that drifts away from it means a database where
+  /// `address_txs` has neither a primary key nor a unique index — no
   /// constraint at all on the widest table in the schema, and nothing to
-  /// notice it. So the flag is pinned to `0006`, in both directions.
+  /// notice it. So the flag is pinned to the schema, in both directions.
+  ///
+  /// This used to pin to `0006_address_txs_one_index.sql`, the migration that
+  /// dropped `address_txs_pkey` and rebuilt each partition's index UNIQUE.
+  /// The collapsed schema states that end directly: no primary key on
+  /// `address_txs`, and the index marked UNIQUE in the deferred set. Both
+  /// halves are asserted, because either one alone is satisfiable by an
+  /// `address_txs` with no constraint whatsoever.
   #[test]
   fn the_unique_members_match_the_migration_that_made_them_unique() {
-    let sql = std::fs::read_to_string(
-      std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sql/0006_address_txs_one_index.sql"),
-    )
-    .unwrap_or_default();
+    let (ddl, block) = schema_ddl_and_deferred_block();
     assert!(
-      !sql.is_empty(),
-      "0006_address_txs_one_index.sql should be readable"
+      block.contains("[UNIQUE]"),
+      "the schema's deferred set should mark the surviving address_txs index UNIQUE"
     );
-    // The migration converts the existing partitions; the daemon builds the
-    // rest. Both spell the same DDL, so the migration must ask for UNIQUE.
+    // The redundant prefix primary key must not come back: it is the 8.8 GB
+    // this table gave up, and re-declaring it would also re-parent nothing
+    // but re-create the redundancy.
+    let address_txs = ddl
+      .split("CREATE TABLE address_txs (")
+      .nth(1)
+      .unwrap_or_default()
+      .split(");")
+      .next()
+      .unwrap_or_default()
+      .to_owned();
     assert!(
-      sql.contains("CREATE UNIQUE INDEX"),
-      "0006 should build the surviving address_txs index UNIQUE"
+      !address_txs.is_empty(),
+      "the schema should define the address_txs table"
     );
     assert!(
-      sql.contains("DROP CONSTRAINT IF EXISTS address_txs_pkey"),
-      "0006 should be what drops the redundant primary key"
+      !address_txs.contains("PRIMARY KEY"),
+      "address_txs must carry no primary key: its uniqueness lives in the        deferred UNIQUE index, which a declared key would make redundant again"
+    );
+    assert!(
+      !ddl.contains("address_txs_pkey"),
+      "address_txs_pkey was dropped and must not be re-created"
     );
 
     let unique: Vec<&str> = DEFERRED_INDEXES

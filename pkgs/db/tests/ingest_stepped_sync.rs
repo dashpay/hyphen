@@ -426,9 +426,9 @@ async fn answers(
 
 /// The guarantee that makes the consolidation safe rather than merely small.
 ///
-/// `0006_address_txs_one_index.sql` dropped `address_txs_pkey` — a redundant
-/// key prefix of `idx_address_txs_addr_height_desc` — and made the surviving
-/// index `UNIQUE`. But that index is *deferred* during stepped sync, so while a
+/// The schema declares no `address_txs_pkey` — it was a redundant key prefix
+/// of `idx_address_txs_addr_height_desc` — and the surviving index is built
+/// `UNIQUE`. But that index is *deferred* during stepped sync, so while a
 /// partition is open nothing enforces the key at all; the enforcement is the
 /// `CREATE UNIQUE INDEX` at partition close, which both builds the index and
 /// retroactively proves the partition holds no duplicate.
