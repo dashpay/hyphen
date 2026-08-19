@@ -9,28 +9,29 @@
 
 /// Redact the password from a connection URL for logging/serialization.
 ///
-/// Splits the authority at the *last* `@` (a password may itself contain `@`)
-/// and handles schemeless URLs (`user:secret@host/db`) too — a missing
-/// `scheme://` must not cause the secret to pass through verbatim.
+/// Splits at the *last* `@` before anything else about the string is trusted.
+/// Locating the authority's end first is what leaked: a password holding an
+/// unencoded `/` or `?` ended the authority ahead of its own `@`, so no `@`
+/// remained to find and the whole URL was returned verbatim.
+///
+/// Percent-encoded passwords need no special handling. The span from `:` to
+/// `@` is replaced whether or not its bytes are encoded, and decoding first
+/// would only reintroduce the reserved characters this splits around.
+///
+/// A URL carrying no userinfo but a later `@`, such as one with an `@` in a
+/// query value, is over-redacted. For a logging helper that is the correct
+/// direction to fail in.
 pub(crate) fn redact_url(url: &str) -> String {
   let (scheme, rest) = match url.find("://") {
     Some(idx) => (&url[..idx + 3], &url[idx + 3..]),
     None => ("", url),
   };
-  // The authority ends at the first `/` (path) or `?` (query) after the scheme.
-  let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
-  let authority = &rest[..authority_end];
-  let Some(at) = authority.rfind('@') else {
+  let Some(at) = rest.rfind('@') else {
     return url.to_owned();
   };
-  let userinfo = &authority[..at];
+  let userinfo = &rest[..at];
   match userinfo.find(':') {
-    Some(colon) => format!(
-      "{scheme}{}:***{}{}",
-      &userinfo[..colon],
-      &authority[at..],
-      &rest[authority_end..]
-    ),
+    Some(colon) => format!("{scheme}{}:***{}", &userinfo[..colon], &rest[at..]),
     None => url.to_owned(),
   }
 }
@@ -260,6 +261,43 @@ mod tests {
       redact_url("postgresql://user@host/db"),
       "postgresql://user@host/db"
     );
+  }
+
+  #[test]
+  fn redacts_passwords_holding_reserved_characters() {
+    // Each of these ended the authority before its own `@` under the old
+    // split, so the function returned the URL — password included — and the
+    // pool-creation log line printed it on every startup.
+    for (url, want, secret) in [
+      (
+        "postgresql://alice:pa/ss@host/db",
+        "postgresql://alice:***@host/db",
+        "pa/ss",
+      ),
+      (
+        "postgresql://alice:pa?ss@host/db",
+        "postgresql://alice:***@host/db",
+        "pa?ss",
+      ),
+      (
+        "postgresql://alice:p/a?s/s@host:5432/db?sslmode=require",
+        "postgresql://alice:***@host:5432/db?sslmode=require",
+        "p/a?s/s",
+      ),
+    ] {
+      let out = redact_url(url);
+      assert_eq!(out, want, "redacting {url}");
+      assert!(!out.contains(secret), "the password survived in {out}");
+    }
+  }
+
+  #[test]
+  fn redacts_a_socket_url_whose_password_holds_a_slash() {
+    // The libpq `?host=` form the socket path arrives in, which is also the
+    // shape whose parse failure reports the URL back to the operator.
+    let out = redact_url("postgresql://alice:pa/ss@/db?host=/var/run/postgresql");
+    assert_eq!(out, "postgresql://alice:***@/db?host=/var/run/postgresql");
+    assert!(!out.contains("pa/ss"));
   }
 
   #[test]

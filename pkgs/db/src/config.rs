@@ -434,11 +434,36 @@ mod tests {
     }
   }
 
+  /// Passwords that leaked while the two tests below passed. Both hold a
+  /// character that used to end the authority ahead of the `@`, so the
+  /// redaction found no `@` and returned the URL whole. A password with no
+  /// reserved character cannot catch that, which is why these are separate.
+  fn awkward_secret_cfgs() -> Vec<(HyDbClientCfg, &'static str)> {
+    ["pa/ss", "pa?ss", "p/a?s/s"]
+      .into_iter()
+      .map(|secret| {
+        (
+          HyDbClientCfg {
+            url: format!("postgresql://user:{secret}@db.example:5432/hyphen"),
+            ..HyDbClientCfg::default()
+          },
+          secret,
+        )
+      })
+      .collect()
+  }
+
   #[test]
   fn debug_never_prints_the_password() {
     let dump = format!("{:?}", secret_cfg());
     assert!(!dump.contains("s3cr3t"), "password leaked: {dump}");
     assert!(dump.contains("user:***@"));
+
+    for (cfg, secret) in awkward_secret_cfgs() {
+      let dump = format!("{cfg:?}");
+      assert!(!dump.contains(secret), "password {secret} leaked: {dump}");
+      assert!(dump.contains("user:***@"));
+    }
   }
 
   #[test]
@@ -446,6 +471,23 @@ mod tests {
     let json = serde_json::to_string(&secret_cfg()).unwrap_or_default();
     assert!(!json.contains("s3cr3t"), "password leaked: {json}");
     assert!(json.contains("user:***@"));
+
+    for (cfg, secret) in awkward_secret_cfgs() {
+      let json = serde_json::to_string(&cfg).unwrap_or_default();
+      assert!(!json.contains(secret), "password {secret} leaked: {json}");
+      assert!(json.contains("user:***@"));
+    }
+  }
+
+  #[test]
+  fn endpoint_never_prints_the_password() {
+    // `endpoint()` is what the pool-creation log line renders on every
+    // startup, so it is the widest of the three exposures.
+    for (cfg, secret) in awkward_secret_cfgs() {
+      let shown = cfg.endpoint();
+      assert!(!shown.contains(secret), "password {secret} leaked: {shown}");
+      assert!(shown.contains("user:***@"));
+    }
   }
 
   #[test]

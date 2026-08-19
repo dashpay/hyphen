@@ -261,9 +261,13 @@ fn parse_connect_options(url: &str) -> Result<PgConnectOptions, HyDbError> {
     })
     .next()
     .ok_or_else(|| {
+      // Redacted, not omitted. The operator needs to see which URL failed,
+      // and this arm reports a malformed one — exactly where a password is
+      // most likely to be the malformation.
       HyDbError::Config(format!(
         "db.client.url has empty host and no ?host= query parameter, and \
-         db.client.socket is not set: {url}"
+         db.client.socket is not set: {}",
+        crate::util::redact_url(url)
       ))
     })?;
 
@@ -317,6 +321,25 @@ mod tests {
   #[test]
   fn empty_host_without_socket_errors() {
     assert!(parse_connect_options("postgresql://u:p@/db").is_err());
+  }
+
+  #[test]
+  fn the_empty_host_refusal_does_not_echo_the_password() {
+    // This arm reports the URL back to the operator, and it is reached by a
+    // malformed URL — the case where the malformation is most often the
+    // password itself.
+    let err = parse_connect_options("postgresql://alice:S3cret@/db")
+      .err()
+      .map(|e| e.to_string())
+      .unwrap_or_default();
+    assert!(
+      !err.contains("S3cret"),
+      "the refusal must not carry the password: {err}"
+    );
+    assert!(
+      err.contains("alice:***@"),
+      "the refusal must still name the URL that failed: {err}"
+    );
   }
 
   #[test]
