@@ -118,6 +118,15 @@ pub trait HyDbAddrIdx: Send + Sync {
   /// Number of addresses holding a positive balance.
   async fn bal_count(&self) -> HyDbResult<u64>;
 
+  /// Number of addresses the rich list can actually return.
+  ///
+  /// Distinct from [`Self::bal_count`], and the distinction is the whole reason
+  /// this exists: `rich_list` reads `address_rich`, which holds only the
+  /// addresses above `[db.layout] rich_list_floor`. A caller paginating the rich
+  /// list against the positive-balance count runs out of rows long before it
+  /// runs out of count.
+  async fn rich_count(&self) -> HyDbResult<u64>;
+
   /// Chain-wide total and included supply.
   async fn supply(&self) -> HyDbResult<HyDbQrSupply>;
 
@@ -533,6 +542,20 @@ impl HyDbAddrIdx for PgAddrIdx {
     .fetch_one(&self.pg.query)
     .await
     .map_err(|e| HyDbError::pg("positive-balance address count", e))?;
+    Ok(count.max(0) as u64)
+  }
+
+  async fn rich_count(&self) -> HyDbResult<u64> {
+    // A real `COUNT(*)`, unlike `bal_count`. `address_rich` holds only the
+    // addresses above the floor — tens of thousands rather than the better part
+    // of a million — and it is indexed on the rank the count scans, so this is
+    // cheap enough to answer per request without a maintained counter.
+    //
+    // Runtime API rather than `query!` so it needs no offline-cache entry.
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM address_rich")
+      .fetch_one(&self.pg.query)
+      .await
+      .map_err(|e| HyDbError::pg("rich-list address count", e))?;
     Ok(count.max(0) as u64)
   }
 

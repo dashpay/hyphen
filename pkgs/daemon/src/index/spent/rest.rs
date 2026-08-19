@@ -398,9 +398,15 @@ pub async fn get_balances(
   let params = params.validate(MAX_ADDRESS_PAGE_LIMIT)?;
   let limit = params.limit;
   let cursor = decode_balances_cursor(params.cursor.as_deref(), stage.height)?;
-  let as_of_height = cursor
-    .as_ref()
-    .map_or(stage.height, |cursor| cursor.as_of_height);
+  // The height *this* page was read at, not the height the first page was read
+  // at. `address_rich` is maintained in place, so a listing paged over several
+  // requests is not a snapshot: an address can cross a page boundary in between
+  // and be returned twice, or skipped. Echoing the first page's height back on
+  // every page presented that as a consistent read of one height.
+  //
+  // The cursor keeps carrying a height so the decoder can still reject one from
+  // the future, which is a different question from whether the rows moved.
+  let as_of_height = stage.height;
   let start_rank = cursor.as_ref().map_or(0, |cursor| cursor.rank);
   let before_cursor = cursor
     .as_ref()
@@ -446,13 +452,21 @@ pub async fn get_balances(
       tx_count: row.tx_count,
     })
     .collect();
+  // The size of the listing, not of the chain. `rich_list` reads the side table
+  // above the floor, so counting every positive balance advertised roughly
+  // twenty-five times what the cursor could reach and then went terminal.
   let total_count = addrs
-    .bal_count()
+    .rich_count()
     .await
     .map_err(|e| hydb_err(e, "balances count"))? as i64;
+  let positive_balance_count = addrs
+    .bal_count()
+    .await
+    .map_err(|e| hydb_err(e, "positive balance count"))? as i64;
   Ok(Json(BalanceResponse {
     as_of_height,
     total_count,
+    positive_balance_count,
     value,
     meta: BalancePageMeta {
       included_supply: supply.included_supply,

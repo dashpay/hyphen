@@ -215,6 +215,10 @@ impl HyDbAddrIdx for MemDb {
     Ok(0)
   }
 
+  async fn rich_count(&self) -> HyDbResult<u64> {
+    Ok(0)
+  }
+
   async fn supply(&self) -> HyDbResult<HyDbQrSupply> {
     Err(HyDbError::MockGap("addr.supply"))
   }
