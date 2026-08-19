@@ -165,12 +165,13 @@
 //! | `idx_transactions_list`            |  1.37 s |  75 MB |
 //! | **total**                          | **96.44 s** | **2,098 MB** |
 //!
-//! Building `idx_address_txs_addr_height_desc` `UNIQUE` rather than plain costs
-//! nothing measurable: on an 8.46M-row partition, 32.46 s unique against
-//! 35.92 s non-unique at the same `maintenance_work_mem`, which is noise in the
-//! non-unique direction. The uniqueness check rides along on the sort the build
-//! already does — adjacent equal keys are adjacent in it — so the duplicate
-//! proof described above is genuinely free.
+//! Building `idx_address_txs_addr_height_desc` `UNIQUE` rather than plain is
+//! expected to cost little, because the uniqueness check rides along on the
+//! sort the build already does — adjacent equal keys are adjacent in it. This
+//! has NOT been measured at seed scale: the run that produced a figure was
+//! against a synthetic stand-in on an unrelated cluster, so no number is
+//! quoted here. Measure it against a real partition before relying on the
+//! duplicate proof being free.
 //!
 //! So the saving runs at ~6.6 s per 1,000 blocks against a one-off build of
 //! ~96 s per partition — the trade only works because it is charged once per
