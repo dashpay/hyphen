@@ -161,6 +161,7 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
 
   refresh_storage(ctx, state).await;
 
+  let sync_progress = ctx.ingest_status.sync_progress();
   let undo_span = ctx.hydb.status().undo_span().await.ok().flatten();
   let chain_progress_diag = ChainProgressDiag {
     canonical_tip_height: indexed_height,
@@ -168,6 +169,11 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
     undo_tip_height: undo_span.map_or(-1, |(_, hi)| hi.0.min(i32::MAX as u32) as i32),
     recovery_state: "clean".to_owned(),
     recovery_height: None,
+    block_progress_pct: sync_progress.block_pct,
+    transactions_indexed: sync_progress.transactions_indexed,
+    transactions_estimated_total: sync_progress.transactions_estimated_total,
+    tx_progress_pct: sync_progress.tx_pct,
+    txs_per_block_recent: sync_progress.txs_per_block_recent,
   };
 
   let ingestion_diag = IngestionDiag {

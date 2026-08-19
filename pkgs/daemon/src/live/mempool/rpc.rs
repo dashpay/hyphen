@@ -197,6 +197,13 @@ mod tests {
         })
     }
 
+    async fn get_chain_tx_stats(&self) -> Result<crate::sources::rpc::ChainTxStats, DaemonError> {
+      Ok(crate::sources::rpc::ChainTxStats {
+        tx_count: 0,
+        height: 0,
+      })
+    }
+
     async fn get_network_info(&self) -> Result<NetworkInfo, DaemonError> {
       unreachable!("unused in mempool rpc tests")
     }

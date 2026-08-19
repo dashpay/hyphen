@@ -17,7 +17,7 @@ use hyphend::wire::msg::{IngestionActivity, IngestionStateName};
 
 use crate::model::{AppState, Focus, OverviewSubFocus};
 use crate::theme;
-use crate::widgets::calc_eta;
+use crate::widgets::{calc_eta, calc_eta_by_transactions};
 
 /// Render the storage backends table.
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -56,10 +56,16 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
               theme::connected(),
             )
           } else {
+            // Both figures, always. A block percentage on its own read "36%"
+            // on a run that was ~6% done by transaction (task F2).
+            let progress = match snap.chain_progress_diag.tx_progress_pct {
+              Some(tx_pct) => format!("{:.0}% blk / {tx_pct:.0}% tx", ratio * 100.0),
+              None => format!("{:.0}% blk", ratio * 100.0),
+            };
             (
               theme::fmt_num(height),
               theme::fmt_num(tip),
-              format!("Importing ({:.0}%)", ratio * 100.0),
+              format!("Importing ({progress})"),
               theme::syncing(),
             )
           }
@@ -96,11 +102,21 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
       } else {
         "-".to_string()
       };
-      let eta = calc_eta(
-        ingestion_height.map(|height| height as i32),
-        abs_tip.map(|tip| tip as i32),
+      // Prefer the transaction-weighted ETA; the block-rate one is optimistic
+      // by roughly the density climb still ahead of it.
+      let eta = calc_eta_by_transactions(
+        snap.chain_progress_diag.transactions_indexed,
+        snap.chain_progress_diag.transactions_estimated_total,
+        snap.chain_progress_diag.txs_per_block_recent,
         bps,
-      );
+      )
+      .unwrap_or_else(|| {
+        calc_eta(
+          ingestion_height.map(|height| height as i32),
+          abs_tip.map(|tip| tip as i32),
+          bps,
+        )
+      });
       let name_style = if stores_focused && state.store_cursor == 0 {
         theme::highlight()
       } else {

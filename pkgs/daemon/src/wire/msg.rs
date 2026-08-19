@@ -76,6 +76,25 @@ pub struct ChainProgressDiag {
   pub recovery_state: String,
   /// Optional recovery progress height.
   pub recovery_height: Option<i32>,
+  /// Percentage of blocks connected, of the node's tip. Exact, and a poor
+  /// proxy for work done — see `tx_progress_pct`.
+  #[serde(default)]
+  pub block_progress_pct: Option<f64>,
+  /// Transactions in the database: the startup count plus this run's absorbs.
+  #[serde(default)]
+  pub transactions_indexed: Option<u64>,
+  /// Projected transactions at the node's tip, at the recently observed
+  /// density. An estimate: the node is never asked for a chain-wide count.
+  #[serde(default)]
+  pub transactions_estimated_total: Option<u64>,
+  /// Percentage of that projected total which is indexed. This is the figure
+  /// that tracks remaining work; block percentage overstates progress because
+  /// chain density rises roughly sixfold toward the tip (task F2).
+  #[serde(default)]
+  pub tx_progress_pct: Option<f64>,
+  /// Smoothed transactions per block over the blocks absorbed this run.
+  #[serde(default)]
+  pub txs_per_block_recent: Option<f64>,
 }
 
 /// Aggregate metrics for the daemon's REST server.

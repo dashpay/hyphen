@@ -412,6 +412,40 @@ fn build_status_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
             .unwrap_or_else(|| "--".into()),
         ),
         (
+          "Sync by Block",
+          snap
+            .chain_progress_diag
+            .block_progress_pct
+            .map(|pct| format!("{pct:.1}%"))
+            .unwrap_or_else(|| "--".into()),
+        ),
+        (
+          // The figure that tracks remaining work: block percentage overstates
+          // progress because chain density rises toward the tip (task F2).
+          "Sync by Transaction",
+          match (
+            snap.chain_progress_diag.tx_progress_pct,
+            snap.chain_progress_diag.transactions_indexed,
+            snap.chain_progress_diag.transactions_estimated_total,
+          ) {
+            (Some(pct), Some(indexed), Some(total)) => format!(
+              "{pct:.1}% ({} of ~{})",
+              theme::fmt_num(indexed),
+              theme::fmt_num(total)
+            ),
+            (_, Some(indexed), _) => format!("{} indexed", theme::fmt_num(indexed)),
+            _ => "--".into(),
+          },
+        ),
+        (
+          "Tx per Block (recent)",
+          snap
+            .chain_progress_diag
+            .txs_per_block_recent
+            .map(|density| format!("{density:.1}"))
+            .unwrap_or_else(|| "--".into()),
+        ),
+        (
           "Forward Freshness",
           snap
             .core_pipeline_diag

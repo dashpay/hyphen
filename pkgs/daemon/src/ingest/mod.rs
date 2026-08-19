@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 
 use crate::error::{DaemonError, Outcome};
 use crate::lifecycle::Lifecycle;
-use crate::sources::RestSource;
+use crate::sources::{RestSource, RpcSource};
 use crate::utils::{self, HashEndian};
 use hyphend::wire::msg::{IngestionActivity, IngestionStateName};
 
@@ -39,6 +39,9 @@ pub(crate) const DEFAULT_POLL_SECS: u64 = 5;
 
 /// Blocks absorbed per chunk before the engine is asked to connect them.
 const ABSORB_CHUNK_BLOCKS: u32 = 512;
+
+/// Seconds between refreshes of the node's chain-wide transaction count.
+const CHAIN_TX_STATS_REFRESH_SECS: u64 = 300;
 
 /// Ingest activity considered stalled after this many seconds without
 /// progress while behind the node tip.
@@ -64,6 +67,19 @@ pub(crate) struct IngestStatus {
   blocks_ingested_total: AtomicU64,
   last_progress_epoch: Arc<AtomicU64>,
   started_epoch: AtomicU64,
+  /// Transactions absorbed by this process since it started.
+  transactions_ingested_total: AtomicU64,
+  /// The node's own chain-wide transaction count, from `getchaintxstats`
+  /// (0 = not known: RPC disabled or the call failed).
+  network_transactions_total: AtomicU64,
+  /// Transactions already in the database when this process started, counted
+  /// once (0 until `transactions_baseline_known`).
+  transactions_baseline: AtomicU64,
+  transactions_baseline_known: AtomicBool,
+  /// Smoothed transactions-per-block, in thousandths, over the blocks this
+  /// process has absorbed. Chain density rises roughly 6x from genesis to the
+  /// mainnet tip, so a projection needs the *recent* rate, not the average.
+  txs_per_block_milli: AtomicU64,
   /// Set when a non-transient ingest failure has parked the loop. Ingestion
   /// stays down until an operator command clears it, which is the difference
   /// between "wedged, needs a human" and "briefly busy". Shared as an
@@ -90,6 +106,28 @@ const STATE_PAUSED: u8 = 6;
 /// so that a Postgres restart or an exhausted pool is not hammered at poll
 /// cadence, and stops doubling here.
 const MAX_BACKOFF_SECS: u64 = 300;
+
+/// Transactions in a serialized block, from the CompactSize count that
+/// follows the 80-byte header.
+///
+/// Deliberately not a full decode: the engine decodes the block anyway, and
+/// this only has to be cheap and right. `None` for anything too short to hold
+/// a count, which the absorb path will reject on its own terms.
+fn block_tx_count(raw: &[u8]) -> Option<u64> {
+  let (&first, rest) = raw.get(80..)?.split_first()?;
+  match first {
+    0xFD => rest
+      .get(..2)
+      .map(|b| u64::from(u16::from_le_bytes([b[0], b[1]]))),
+    0xFE => rest
+      .get(..4)
+      .map(|b| u64::from(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))),
+    0xFF => rest
+      .get(..8)
+      .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])),
+    count => Some(u64::from(count)),
+  }
+}
 
 /// What the ingest loop does about a failed cycle.
 ///
@@ -155,6 +193,11 @@ impl IngestStatus {
       blocks_ingested_total: AtomicU64::new(0),
       last_progress_epoch: Arc::new(AtomicU64::new(0)),
       started_epoch: AtomicU64::new(unix_now()),
+      transactions_ingested_total: AtomicU64::new(0),
+      network_transactions_total: AtomicU64::new(0),
+      transactions_baseline: AtomicU64::new(0),
+      transactions_baseline_known: AtomicBool::new(false),
+      txs_per_block_milli: AtomicU64::new(0),
       operator_pause_requested: Arc::new(AtomicBool::new(false)),
       retry_attempt: AtomicU32::new(0),
       backoff_until_epoch: AtomicU64::new(0),
@@ -163,6 +206,95 @@ impl IngestStatus {
 
   fn set_state(&self, state: u8) {
     self.state.store(state, Ordering::Relaxed);
+  }
+
+  /// Record one absorbed block's transaction count (task F2).
+  fn note_block_txs(&self, txs: u64) {
+    self
+      .transactions_ingested_total
+      .fetch_add(txs, Ordering::Relaxed);
+    // Exponential moving average in thousandths, alpha = 1/256: long enough to
+    // ignore one empty block, short enough to track the density climb.
+    let sample = txs.saturating_mul(1_000);
+    let previous = self.txs_per_block_milli.load(Ordering::Relaxed);
+    let next = if previous == 0 {
+      sample
+    } else {
+      let delta = (sample as i64 - previous as i64) / 256;
+      previous.saturating_add_signed(delta)
+    };
+    self.txs_per_block_milli.store(next, Ordering::Relaxed);
+  }
+
+  /// Record the node's chain-wide transaction count.
+  fn set_network_transactions_total(&self, total: u64) {
+    self
+      .network_transactions_total
+      .store(total, Ordering::Relaxed);
+  }
+
+  /// Record the transaction count already in the database at startup.
+  fn set_transactions_baseline(&self, total: u64) {
+    self.transactions_baseline.store(total, Ordering::Relaxed);
+    self
+      .transactions_baseline_known
+      .store(true, Ordering::Relaxed);
+  }
+
+  /// Transactions absorbed by this process.
+  pub(crate) fn transactions_ingested_total(&self) -> u64 {
+    self.transactions_ingested_total.load(Ordering::Relaxed)
+  }
+
+  /// Smoothed transactions per block over the blocks this process absorbed.
+  pub(crate) fn txs_per_block_recent(&self) -> Option<f64> {
+    let milli = self.txs_per_block_milli.load(Ordering::Relaxed);
+    (milli > 0).then(|| milli as f64 / 1_000.0)
+  }
+
+  /// Sync progress by block *and* by transaction (task F2).
+  ///
+  /// A monitored run read "36% complete" while roughly 6% complete by
+  /// transaction, and every projection made from the block figure was wrong:
+  /// mainnet is ~2.52M blocks but ~70.5M transactions, and density rises about
+  /// sixfold across the chain, so the remaining blocks are the expensive ones.
+  /// Both numbers are reported, and the transaction figure is explicitly an
+  /// estimate — the node is never asked how many transactions the chain has.
+  pub(crate) fn sync_progress(&self) -> SyncProgress {
+    let local = self.local_tip.load(Ordering::Relaxed);
+    let network = self.network_tip.load(Ordering::Relaxed);
+    let block_pct = (network > 0 && local >= 0)
+      .then(|| (local as f64 / network as f64 * 100.0).clamp(0.0, 100.0));
+
+    let indexed = self
+      .transactions_baseline_known
+      .load(Ordering::Relaxed)
+      .then(|| {
+        self.transactions_baseline.load(Ordering::Relaxed)
+          + self.transactions_ingested_total.load(Ordering::Relaxed)
+      });
+
+    // The denominator is the node's own count, never an extrapolation from
+    // the density observed locally: the blocks already indexed are the sparse
+    // ones, so projecting from them reads *higher* than the block percentage
+    // and is wrong in the opposite direction. Without the node's count there
+    // is no transaction percentage, only the count and the density.
+    let network_total = self.network_transactions_total.load(Ordering::Relaxed);
+    let estimated_total = (network_total > 0).then_some(network_total);
+    let tx_pct = match (indexed, estimated_total) {
+      (Some(indexed), Some(total)) if total > 0 => {
+        Some((indexed as f64 / total as f64 * 100.0).clamp(0.0, 100.0))
+      }
+      _ => None,
+    };
+
+    SyncProgress {
+      block_pct,
+      transactions_indexed: indexed,
+      transactions_estimated_total: estimated_total,
+      tx_pct,
+      txs_per_block_recent: self.txs_per_block_recent(),
+    }
   }
 
   /// `true` while a non-transient failure has ingestion parked.
@@ -293,11 +425,34 @@ impl IngestStatus {
   }
 }
 
+/// Sync progress measured two ways (task F2).
+///
+/// The block figure is exact and misleading; the transaction figure is an
+/// estimate and useful. Neither is offered alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct SyncProgress {
+  /// Percentage of blocks connected, of the node's tip.
+  pub(crate) block_pct: Option<f64>,
+  /// Transactions in the database (startup count plus this run's absorbs).
+  pub(crate) transactions_indexed: Option<u64>,
+  /// Transactions the node reports for the whole chain, when it was asked.
+  pub(crate) transactions_estimated_total: Option<u64>,
+  /// Percentage of the chain's transactions that are indexed.
+  pub(crate) tx_pct: Option<f64>,
+  /// Smoothed transactions per block over the blocks absorbed this run.
+  pub(crate) txs_per_block_recent: Option<f64>,
+}
+
 /// Owns the background ingest loop.
 pub(crate) struct IngestVisor {
   db: HyphenDb,
   ingest: Arc<HyDbIngest>,
   source: Arc<dyn RestSource>,
+  /// Optional JSON-RPC handle, used only to ask the node how many
+  /// transactions the chain has (task F2). Ingest itself needs REST alone, so
+  /// this stays optional and its absence costs the transaction percentage and
+  /// nothing else.
+  rpc: Option<Arc<dyn RpcSource>>,
   lifecycle: Arc<Lifecycle>,
   status: Arc<IngestStatus>,
   poll_secs: u64,
@@ -315,6 +470,7 @@ impl IngestVisor {
     db: HyphenDb,
     ingest: HyDbIngest,
     source: Arc<dyn RestSource>,
+    rpc: Option<Arc<dyn RpcSource>>,
     lifecycle: Arc<Lifecycle>,
     poll_secs: u64,
   ) -> Self {
@@ -322,6 +478,7 @@ impl IngestVisor {
       db,
       ingest: Arc::new(ingest),
       source,
+      rpc,
       lifecycle,
       status: Arc::new(IngestStatus::new()),
       poll_secs: poll_secs.max(1),
@@ -350,12 +507,19 @@ impl IngestVisor {
     let db = self.db.clone();
     let ingest = Arc::clone(&self.ingest);
     let source = Arc::clone(&self.source);
+    let rpc = self.rpc.clone();
     let lifecycle = Arc::clone(&self.lifecycle);
     let status = Arc::clone(&self.status);
     let poll_secs = self.poll_secs;
     let poll = Duration::from_secs(poll_secs);
     self.task = Some(tokio::spawn(async move {
       info!("ingest loop started");
+      // One count, once, so progress can be reported by transaction as well as
+      // by block (task F2). Everything after this is incremented in memory.
+      count_transactions_baseline(&db, &status).await;
+      // Refreshed on a slow cadence: the chain's transaction count moves by a
+      // few hundred a minute and the answer is only a denominator.
+      let mut chain_stats_refreshed_at = 0u64;
       // Consecutive transient failures. Reset by any successful cycle, so a
       // blip that resolves does not carry its ladder into the next hour.
       let mut attempt: u32 = 0;
@@ -368,6 +532,13 @@ impl IngestVisor {
           status.update_stall();
           lifecycle.sleep(poll).await;
           continue;
+        }
+        if let Some(rpc) = rpc.as_ref() {
+          let now = unix_now();
+          if now.saturating_sub(chain_stats_refreshed_at) >= CHAIN_TX_STATS_REFRESH_SECS {
+            chain_stats_refreshed_at = now;
+            refresh_chain_tx_stats(rpc.as_ref(), &status).await;
+          }
         }
         match ingest_once(&db, &ingest, source.as_ref(), &status, &lifecycle).await {
           Ok(()) => {
@@ -432,6 +603,44 @@ impl IngestVisor {
   }
 }
 
+/// Ask the node for its chain-wide transaction count (task F2).
+///
+/// Not an ingest failure when it fails: it costs the transaction percentage,
+/// so it is logged at debug and dropped. A node that has RPC disabled never
+/// gets here at all.
+async fn refresh_chain_tx_stats(rpc: &dyn RpcSource, status: &IngestStatus) {
+  match rpc.get_chain_tx_stats().await {
+    Ok(stats) => status.set_network_transactions_total(stats.tx_count),
+    Err(error) => tracing::debug!(
+      %error,
+      "getchaintxstats failed; transaction-side progress stays a count without a percentage"
+    ),
+  }
+}
+
+/// Count the transactions already in the database, once, at ingest start.
+///
+/// A failure here is not an ingest failure: it costs the transaction-side
+/// progress report and nothing else, so it is logged and dropped rather than
+/// classified.
+async fn count_transactions_baseline(db: &HyphenDb, status: &IngestStatus) {
+  let started = std::time::Instant::now();
+  match db.txs().total().await {
+    Ok(total) => {
+      status.set_transactions_baseline(total);
+      info!(
+        transactions = total,
+        elapsed_ms = started.elapsed().as_millis(),
+        "counted the indexed transactions for transaction-side progress"
+      );
+    }
+    Err(error) => warn!(
+      %error,
+      "could not count indexed transactions; progress will be reported by block only"
+    ),
+  }
+}
+
 /// Advance the storage engine toward the node's current tip once,
 /// interleaving bounded absorb chunks with engine connects.
 async fn ingest_once(
@@ -479,6 +688,12 @@ async fn ingest_once(
       let raw = source.raw_block(&hash).await?;
       if h == chunk_end {
         chunk_tip = Some(block_hash(&raw)?);
+      }
+      // Transaction-side progress (task F2): counted from the block's own
+      // CompactSize as it is absorbed, so the figure tracks the linear
+      // catch-up without a second pass over what was just written.
+      if let Some(txs) = block_tx_count(&raw) {
+        status.note_block_txs(txs);
       }
       absorb_with_ancestors(ingest, source, raw).await?;
     }
@@ -673,6 +888,99 @@ mod tests {
     assert_eq!(backoff_delay(5, 99), Duration::from_secs(MAX_BACKOFF_SECS));
     assert_eq!(backoff_delay(0, 1), Duration::from_secs(1));
     assert!(backoff_delay(5, 2) > backoff_delay(5, 1));
+  }
+
+  /// F2: the transaction count comes from the CompactSize after the header,
+  /// in all four of its encodings.
+  #[test]
+  fn block_tx_count_reads_the_compact_size() {
+    let mut raw = vec![0u8; 80];
+    raw.push(3);
+    assert_eq!(block_tx_count(&raw), Some(3));
+
+    let mut raw = vec![0u8; 80];
+    raw.extend_from_slice(&[0xFD, 0x10, 0x27]); // 10_000
+    assert_eq!(block_tx_count(&raw), Some(10_000));
+
+    let mut raw = vec![0u8; 80];
+    raw.extend_from_slice(&[0xFE, 0x40, 0x42, 0x0F, 0x00]); // 1_000_000
+    assert_eq!(block_tx_count(&raw), Some(1_000_000));
+
+    let mut raw = vec![0u8; 80];
+    raw.push(0xFF);
+    raw.extend_from_slice(&7u64.to_le_bytes());
+    assert_eq!(block_tx_count(&raw), Some(7));
+
+    // Too short to hold a count: no guess.
+    assert_eq!(block_tx_count(&[0u8; 80]), None);
+    assert_eq!(block_tx_count(&[]), None);
+  }
+
+  /// F2: a run must report progress by transaction as well as by block, and
+  /// the two must disagree while density is still rising ahead of the indexer.
+  /// The reference run read 36% by block at ~6% by transaction; the numbers
+  /// below are that run's, with the node's own count as the denominator.
+  #[test]
+  fn progress_is_reported_by_transaction_as_well_as_block() {
+    let status = IngestStatus::new();
+    status.local_tip.store(907_000, Ordering::Relaxed);
+    status.network_tip.store(2_520_000, Ordering::Relaxed);
+    status.set_transactions_baseline(4_400_000);
+    status.set_network_transactions_total(70_556_609);
+    for _ in 0..2_000 {
+      status.note_block_txs(3);
+    }
+
+    let progress = status.sync_progress();
+    let block_pct = progress.block_pct.unwrap_or_default();
+    let tx_pct = progress.tx_pct.unwrap_or_default();
+    assert!(
+      (block_pct - 36.0).abs() < 0.5,
+      "block progress should read ~36%, got {block_pct}"
+    );
+    assert!(
+      (tx_pct - 6.2).abs() < 0.5,
+      "transaction progress should read ~6%, got {tx_pct}"
+    );
+    assert!(
+      tx_pct < block_pct / 4.0,
+      "the two figures must disagree sharply: {tx_pct} vs {block_pct}"
+    );
+    assert_eq!(progress.transactions_estimated_total, Some(70_556_609));
+    assert!(progress.txs_per_block_recent.unwrap_or_default() > 2.0);
+  }
+
+  /// Without the node's count there is no percentage — and specifically no
+  /// percentage extrapolated from local density, which reads *higher* than the
+  /// block figure because the blocks indexed so far are the sparse ones.
+  #[test]
+  fn no_node_count_means_no_transaction_percentage() {
+    let status = IngestStatus::new();
+    status.local_tip.store(907_000, Ordering::Relaxed);
+    status.network_tip.store(2_520_000, Ordering::Relaxed);
+    status.set_transactions_baseline(4_400_000);
+    status.note_block_txs(3);
+
+    let progress = status.sync_progress();
+    assert_eq!(progress.tx_pct, None);
+    assert_eq!(progress.transactions_estimated_total, None);
+    // The honest parts still report.
+    assert_eq!(progress.transactions_indexed, Some(4_400_003));
+    assert!(progress.block_pct.is_some());
+    assert!(progress.txs_per_block_recent.is_some());
+  }
+
+  /// Without a baseline count there is no transaction figure, and the block
+  /// figure must still be reported rather than the whole thing going dark.
+  #[test]
+  fn progress_degrades_to_blocks_when_the_baseline_is_unknown() {
+    let status = IngestStatus::new();
+    status.local_tip.store(500, Ordering::Relaxed);
+    status.network_tip.store(1_000, Ordering::Relaxed);
+    let progress = status.sync_progress();
+    assert_eq!(progress.block_pct, Some(50.0));
+    assert_eq!(progress.transactions_indexed, None);
+    assert_eq!(progress.tx_pct, None);
   }
 
   /// A pause is visible on the wire and clearable through the shared handle

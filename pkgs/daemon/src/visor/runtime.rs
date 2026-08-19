@@ -235,6 +235,9 @@ impl ServeRuntime {
       db.clone(),
       ingest_handle,
       Arc::clone(&source),
+      rpc_client
+        .clone()
+        .map(|rpc| rpc as Arc<dyn crate::sources::RpcSource>),
       Arc::clone(&lifecycle),
       crate::ingest::DEFAULT_POLL_SECS,
     );
