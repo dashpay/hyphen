@@ -44,6 +44,13 @@ const STORAGE_RETRY_MAX: Duration = Duration::from_secs(10);
 /// crate's SQLSTATE classification, so "PG is still starting up" is waited on
 /// while "the URL is wrong" or "the schema failed to migrate" comes straight
 /// back as fatal. Nothing here inspects a message.
+///
+/// Each attempt is bounded by whatever is left of the readiness window, so the
+/// window bounds the call and not merely the pauses between calls. Without that
+/// a step which never returns — a connection accepted and then abandoned
+/// mid-handshake, a lock wait with nothing behind it — held startup open
+/// indefinitely, because the deadline was only consulted after a step had
+/// already come back.
 async fn await_storage<T, F, Fut>(context: &'static str, mut step: F) -> Result<T, DaemonError>
 where
   F: FnMut() -> Fut,
@@ -52,9 +59,22 @@ where
   let deadline = Instant::now() + STORAGE_READY_TIMEOUT;
   let mut backoff = STORAGE_RETRY_BASE;
   loop {
-    let error = match step().await {
-      Ok(value) => return Ok(value),
-      Err(error) => DaemonError::storage(context, error),
+    let budget = deadline.saturating_duration_since(Instant::now());
+    if budget.is_zero() {
+      return Err(DaemonError::StorageTimeout {
+        context,
+        secs: STORAGE_READY_TIMEOUT.as_secs(),
+      });
+    }
+    let error = match tokio::time::timeout(budget, step()).await {
+      Ok(Ok(value)) => return Ok(value),
+      Ok(Err(error)) => DaemonError::storage(context, error),
+      Err(_elapsed) => {
+        return Err(DaemonError::StorageTimeout {
+          context,
+          secs: STORAGE_READY_TIMEOUT.as_secs(),
+        })
+      }
     };
     if error.classify() != Outcome::Warning {
       return Err(error);

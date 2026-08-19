@@ -73,6 +73,17 @@ pub enum DaemonError {
     subsystem: &'static str,
     secs: u64,
   },
+  /// A storage startup step did not return inside the readiness window.
+  ///
+  /// Distinct from `Storage`, which carries a failure the server reported. This
+  /// is the absence of any answer — a connection accepted and then left hanging
+  /// mid-handshake, or a lock wait with nothing behind it. The retry ladder
+  /// cannot classify what it never received, so the window has to bound the
+  /// individual attempt and not only the gaps between them.
+  StorageTimeout {
+    context: &'static str,
+    secs: u64,
+  },
   Index(String),
 }
 
@@ -121,6 +132,9 @@ impl fmt::Display for DaemonError {
       Self::ShutdownTimeout { subsystem, secs } => {
         write!(f, "{subsystem} did not shut down within {secs}s")
       }
+      Self::StorageTimeout { context, secs } => {
+        write!(f, "storage engine did not answer {context} within {secs}s")
+      }
       Self::Index(msg) => write!(f, "index error: {msg}"),
     }
   }
@@ -165,7 +179,10 @@ impl DaemonError {
       // graded exactly as the `Config(_)` these used to be built from, so the
       // typing changes what can be read off the error, not what happens.
       | Self::Supervisor { .. }
-      | Self::ShutdownTimeout { .. } => Outcome::Fatal,
+      | Self::ShutdownTimeout { .. }
+      // Startup already spent its whole readiness window waiting. Retrying the
+      // same unanswered call is what the window was for.
+      | Self::StorageTimeout { .. } => Outcome::Fatal,
 
       // Delegate rather than re-derive: the storage crate owns the
       // SQLSTATE policy and is the only place it is written down.
@@ -403,6 +420,18 @@ mod tests {
     assert_eq!(
       err.to_string(),
       "docs-only server did not shut down within 5s"
+    );
+
+    // A step that never answered is not a transient server failure to retry:
+    // the readiness window is what was being spent while it hung.
+    let err = DaemonError::StorageTimeout {
+      context: "connect",
+      secs: 120,
+    };
+    assert_eq!(err.classify(), Outcome::Fatal);
+    assert_eq!(
+      err.to_string(),
+      "storage engine did not answer connect within 120s"
     );
   }
 
