@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO undo_blocks\n             (height, block_hash, prev_hash, summary_tx_total, summary_supply_total,\n              summary_supply_included, summary_supply_unspendable)\n           SELECT $1, $2, $3, t.total, s.total, s.included_supply, s.unspendable_value\n             FROM transactions_summary t, supply_summary s\n            WHERE t.singleton AND s.singleton",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4c3f5d6560be83586291d37709cd807846348e27891e7f0db7ddfae3feead317"
+}
