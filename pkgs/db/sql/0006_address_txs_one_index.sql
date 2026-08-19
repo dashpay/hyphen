@@ -91,7 +91,9 @@
 --   ALTER TABLE address_txs ADD PRIMARY KEY (address, block_height, txid);
 --   -- and re-create each idx_address_txs_addr_height_desc_pN non-unique.
 
-ALTER TABLE address_txs DROP CONSTRAINT address_txs_pkey;
+-- IF EXISTS so a database whose primary key was already removed out of band
+-- still migrates: the goal is the end state, not the transition.
+ALTER TABLE address_txs DROP CONSTRAINT IF EXISTS address_txs_pkey;
 
 DO $$
 DECLARE

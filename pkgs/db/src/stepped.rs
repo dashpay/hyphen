@@ -961,7 +961,7 @@ mod tests {
       "0006 should build the surviving address_txs index UNIQUE"
     );
     assert!(
-      sql.contains("ALTER TABLE address_txs DROP CONSTRAINT address_txs_pkey"),
+      sql.contains("DROP CONSTRAINT IF EXISTS address_txs_pkey"),
       "0006 should be what drops the redundant primary key"
     );
 
