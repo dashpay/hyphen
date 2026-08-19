@@ -469,25 +469,46 @@ async fn load_prevouts(
   for (prev_txid, vouts) in plan.parents {
     let hash = hyphen_db::HyDbHash::from_slice(&prev_txid)
       .map_err(|e| DaemonError::storage("mempool prevout hash", e))?;
-    let Some(detail) = db
-      .txs()
-      .get(hash)
-      .await
-      .map_err(|e| DaemonError::storage("mempool prevout lookup", e))?
-    else {
+    let Some(&want_max) = vouts.last() else {
       continue;
     };
-    for output in &detail.outputs {
-      if vouts.binary_search(&output.vout_index).is_err() {
-        continue;
+    // Windowed reads rather than `txs().get()`. `get` materialises only the
+    // first `HYDB_TX_IO_CAP` outputs of the parent, so an input spending a
+    // higher index of a wide parent — a coinbase paying tens of thousands of
+    // addresses, which mainnet has — resolved to nothing, and the transaction
+    // was served with no provenance for that input and no fee at all, silently.
+    //
+    // Walking forward from the lowest wanted index costs one round trip for
+    // every parent narrow enough to matter, which is all of them in practice.
+    let mut from = u32::try_from(vouts.first().copied().unwrap_or(0)).unwrap_or(0);
+    loop {
+      let page = db
+        .txs()
+        .outputs(hash, from, hyphen_db::query::HYDB_TX_IO_CAP)
+        .await
+        .map_err(|e| DaemonError::storage("mempool prevout lookup", e))?;
+      if page.items.is_empty() {
+        break;
       }
-      out.insert(
-        (prev_txid.clone(), output.vout_index),
-        PrevOutput {
-          address: output.address.as_ref().map(|address| address.0.clone()),
-          value: Some(output.value),
-        },
-      );
+      let mut highest_seen = from;
+      for output in &page.items {
+        highest_seen = u32::try_from(output.vout_index).unwrap_or(highest_seen);
+        if vouts.binary_search(&output.vout_index).is_err() {
+          continue;
+        }
+        out.insert(
+          (prev_txid.clone(), output.vout_index),
+          PrevOutput {
+            address: output.address.as_ref().map(|address| address.0.clone()),
+            value: Some(output.value),
+          },
+        );
+      }
+      let past_the_last_wanted = i64::from(highest_seen) >= i64::from(want_max);
+      if past_the_last_wanted || page.next_cursor.is_none() {
+        break;
+      }
+      from = highest_seen.saturating_add(1);
     }
   }
   Ok(out)
