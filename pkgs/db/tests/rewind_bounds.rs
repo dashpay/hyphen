@@ -176,7 +176,7 @@ async fn build_chain(
 /// where the operator left it.
 #[tokio::test]
 async fn a_target_below_the_reorg_bound_is_refused_before_any_work() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_depth_bound(&tmp).await;
   tmp.drop_now().await;
   result
@@ -248,7 +248,7 @@ async fn run_depth_bound(tmp: &TempDb) -> TestResult {
 /// and 4, then traps at 3 with the tip permanently at 4.
 #[tokio::test]
 async fn a_hole_in_the_undo_is_refused_before_the_first_disconnect() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_undo_hole(&tmp).await;
   tmp.drop_now().await;
   result
@@ -339,7 +339,7 @@ async fn address_stats(
 /// and the error names 4.
 #[tokio::test]
 async fn a_stage_trap_mid_span_rolls_back_the_whole_rewind() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_mid_span_trap(&tmp).await;
   tmp.drop_now().await;
   result

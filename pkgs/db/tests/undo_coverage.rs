@@ -187,7 +187,7 @@ async fn restore_partition(pool: &PgPool, idx: i32) -> TestResult {
 /// The whole check, exercised as a sequence of injuries to one healthy chain.
 #[tokio::test]
 async fn undo_coverage_finds_holes_and_forgives_pruning() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = scenarios(&tmp).await;
   tmp.drop_now().await;
   result
@@ -452,7 +452,7 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 /// here so a tightening of the gate fails *this* test rather than all of them.
 #[tokio::test]
 async fn an_empty_projection_is_clean() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = empty_case(&tmp).await;
   tmp.drop_now().await;
   result
