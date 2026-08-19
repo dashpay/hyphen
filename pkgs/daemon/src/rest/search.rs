@@ -120,6 +120,13 @@ pub async fn search(
         push_unique(&mut results, &mut seen, result);
         return Ok(Json(SearchListResponse { value: results }));
       }
+      // A number is a whole height, not a truncated prefix, so a miss is an
+      // empty result. Falling through to the minimum-length refusal below told
+      // a client that asked about a block which does not exist that its request
+      // was malformed, which it was not.
+      if !arms.has_prefix_arm() {
+        return Ok(Json(SearchListResponse { value: results }));
+      }
     }
   }
   if !arms.has_prefix_arm() {
