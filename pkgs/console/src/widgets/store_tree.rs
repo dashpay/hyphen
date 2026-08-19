@@ -57,7 +57,7 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             )
           } else {
             // Both figures, always. A block percentage on its own read "36%"
-            // on a run that was ~6% done by transaction (task F2).
+            // on a run that was ~6% done by transaction.
             let progress = match snap.chain_progress_diag.tx_progress_pct {
               Some(tx_pct) => format!("{:.0}% blk / {tx_pct:.0}% tx", ratio * 100.0),
               None => format!("{:.0}% blk", ratio * 100.0),

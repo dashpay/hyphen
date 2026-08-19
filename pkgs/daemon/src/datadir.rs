@@ -19,11 +19,11 @@ use crate::error::DaemonError;
 /// file, a lockfile and the rolling logs — one file per process start, kept
 /// seven days (`init::logs`). The chain store is in Postgres, possibly on
 /// another host, so the old 5 GiB was vestigial sizing for a store this
-/// directory no longer holds (task E2.13).
+/// directory no longer holds.
 ///
 /// The volume that can genuinely fill is Postgres's, and this check cannot see
 /// it. A server-side free-space check belongs with the startup GUC review
-/// (`policy::server_settings`, task F4) and needs the storage crate to expose
+/// (`policy::server_settings`) and needs the storage crate to expose
 /// it.
 const MIN_FREE_BYTES: u64 = 1024 * 1024 * 1024;
 

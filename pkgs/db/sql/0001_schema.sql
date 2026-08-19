@@ -15,14 +15,12 @@
 -- IF NOT EXISTS guards — it runs exactly once, against a database that has
 -- never held Hyphen state.
 --
--- It states the END STATE, deliberately. An earlier revision shipped six
--- incremental migrations (0001-0006); some of them existed only to take away
--- what an earlier one had added. They were collapsed here once the RocksDB
--- removal made every deployment a fresh sync, leaving no database for an
--- incremental step to migrate and no reader served by replaying the history.
+-- It states the END STATE, deliberately. Every deployment is a fresh sync, so
+-- there is no database for an incremental step to migrate and no reader served
+-- by replaying a history of additions and removals.
 --
--- So where the collapsed set removed an object, that object simply does not
--- appear below and a comment says why. Two of those absences are load-bearing
+-- Where an object is deliberately absent it simply does not appear below, and a
+-- comment says why. Two of those absences are load-bearing
 -- and must not be "fixed" by adding the obvious index back:
 --   * the seven deferred indexes have no partitioned parent (see the deferred
 --     index set below);
@@ -105,10 +103,7 @@ CREATE TYPE validator_type AS ENUM (
 --
 -- The table has to exist before any block is written, which it does by
 -- construction: `hyphen-db` resolves the layout immediately after
--- `MIGRATOR.run` returns, on a table this file has just created. (It was its
--- own migration, 0002, only because sqlx checksums applied migrations and
--- editing an already-applied 0001 would have locked out the databases of the
--- day. There are none of those left, so it lives here.)
+-- `MIGRATOR.run` returns, on a table this file has just created.
 --
 -- Key/value rather than one column per parameter, deliberately: a newer daemon
 -- must be able to record a key an older one has never heard of, and an older
@@ -139,7 +134,7 @@ COMMENT ON TABLE init_params IS
 --
 -- Seven query-only indexes on the height-partitioned tables are NOT created
 -- on their partitioned parents anywhere in this file. That absence is the
--- feature. Stepped sync (task A3) defers these indexes on the partition that
+-- feature. Stepped sync defers these indexes on the partition that
 -- is currently being filled and builds them in one pass when that partition
 -- closes. Building an index costs O(table), not O(delta), so paying it once
 -- per partition (~25 times over the chain) beats paying random-write index
@@ -636,7 +631,7 @@ CREATE TABLE address_txs (
   block_pos     INTEGER NOT NULL
 ) PARTITION BY RANGE (block_height);
 
--- Support the reversal delete (task C2). Every disconnect runs one
+-- Support the reversal delete. Every disconnect runs one
 --
 --   DELETE FROM address_txs WHERE block_height = $1
 --
@@ -805,7 +800,7 @@ CREATE TABLE undo_validators (
 ) PARTITION BY RANGE (height);
 
 -- ===========================================================================
--- The offline post-IBD maintenance pass, as a runbook (task B2)
+-- The offline post-IBD maintenance pass, as a runbook
 -- ===========================================================================
 --
 -- No DDL below this line. This section records the one maintenance step the
@@ -813,7 +808,7 @@ CREATE TABLE undo_validators (
 -- schema it applies to, because an operator reading `sql/` is the one who will
 -- need it. `COMMENT ON DATABASE` is the only executable form of the same note
 -- and it cannot be issued portably from inside a migration, so this is a
--- comment block on purpose. (It was migration 0005, DDL-free, for the same
+-- comment block on purpose. (It was once its own DDL-free file, for the same
 -- reason.)
 --
 -- WHEN

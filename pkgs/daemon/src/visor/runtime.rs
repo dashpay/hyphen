@@ -216,7 +216,7 @@ impl ServeRuntime {
     info!("storage engine ready, schema migrated");
 
     // Settings the daemon depends on but cannot set. Read back and reported
-    // once (task F4); every finding is a warning, never a refusal.
+    // once; every finding is a warning, never a refusal.
     let pool_total = cfg.db.client.write.size
       + cfg.db.client.query.size
       + cfg.db.client.heavy.size

@@ -40,7 +40,7 @@
 //! the write path into sequential scans, which converts a slow sync into a
 //! stopped one, so `address_stats_pkey`, the `utxo_set` keys, the primary keys
 //! the partitioned tables still have, and `idx_validator_collateral` all stay.
-//! (`address_txs` no longer has one; 0006 dropped it as a redundant key prefix
+//! (`address_txs` has none; the schema withholds it as a redundant key prefix
 //! of the index above.) The unpartitioned tables cannot participate at all: any rebuild
 //! there is full-size by construction.
 //!
@@ -82,7 +82,7 @@
 //!
 //! During stepped sync `address_txs` is consequently left maintaining exactly
 //! one index — `idx_address_txs_block_height`, 325 MB over nine partitions and
-//! append-only, which 0004 keeps for the reversal delete. It was two, one of
+//! append-only, which the schema keeps for the reversal delete. It was two, one of
 //! them the 6.5 GB random-write primary key.
 //!
 //! The unique key is one column wider than the constraint it replaces, and that
@@ -113,13 +113,13 @@
 //! falls back only on the one that does not.
 //!
 //! How graceful the fallback is depends on the table, and for `address_txs` it
-//! stopped being graceful when 0006 dropped the primary key. Measured, not
+//! stopped being graceful once the primary key went. Measured, not
 //! assumed, on an 8.46M-row `p0`/`p1` pair with `p0` closed and `p1` open:
 //!
 //! | `p1`'s state | plan for the address-history page |
 //! |---|---|
 //! | built (realtime, or after close) | `Index Only Scan using idx_address_txs_addr_height_desc_p1`, no sort |
-//! | deferred, pkey still present (before 0006) | `Index Scan Backward using …_pkey` under an `Incremental Sort` |
+//! | deferred, with a pkey present | `Index Scan Backward using …_pkey` under an `Incremental Sort` |
 //! | deferred, pkey gone (now) | `Parallel Seq Scan on address_txs_p1` under a `Sort` |
 //!
 //! The parent-level query is a `Parallel Append`, so only the open partition
@@ -990,11 +990,11 @@ mod tests {
   /// disagree, a freshly migrated database and a daemon-built one carry
   /// different indexes under the same names.
   ///
-  /// This replaced a pin to `0003_stepped_indexes.sql`, which is where the
+  /// The pin is to `sql/0001_schema.sql`, which is where the
   /// seven used to be taken off their parents before the migrations were
   /// collapsed into one file. The intent is unchanged and the grip is
   /// tighter: as well as checking that the schema names every member, it now
-  /// checks that the schema never *creates* one, which is the property 0003
+  /// checks that the schema never *creates* one, which is the property the
   /// existed to establish and the one a careless edit would undo.
   #[test]
   fn deferred_set_matches_the_migration() {
@@ -1036,7 +1036,7 @@ mod tests {
   /// constraint at all on the widest table in the schema, and nothing to
   /// notice it. So the flag is pinned to the schema, in both directions.
   ///
-  /// This used to pin to `0006_address_txs_one_index.sql`, the migration that
+  /// The pin is to `sql/0001_schema.sql`, the schema that
   /// dropped `address_txs_pkey` and rebuilt each partition's index UNIQUE.
   /// The collapsed schema states that end directly: no primary key on
   /// `address_txs`, and the index marked UNIQUE in the deferred set. Both
@@ -1092,7 +1092,7 @@ mod tests {
   fn the_dropped_address_txs_primary_key_is_not_claimed_by_the_ingest_path() {
     assert!(
       !INGEST_PATH_INDEXES.contains(&"address_txs_pkey"),
-      "address_txs_pkey was dropped by 0006 and cannot be an ingest-path index"
+      "address_txs has no primary key and so cannot be an ingest-path index"
     );
     assert!(
       !INGEST_PATH_INDEXES

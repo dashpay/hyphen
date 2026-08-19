@@ -5,7 +5,7 @@
 //
 
 //! `HyDbSearch::prefix` and the four per-kind `search_prefix` probes are one
-//! implementation, not two that happen to agree today (task C6).
+//! implementation, not two that happen to agree today.
 //!
 //! REST drives the per-kind probes directly; `prefix` is the consolidated
 //! entry point that has no production caller yet. While both existed as

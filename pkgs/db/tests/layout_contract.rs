@@ -7,7 +7,7 @@
 //! The `[db.layout]` immutability contract, against a real database.
 //!
 //! `src/layout.rs` unit-tests the decision table with no server. This file
-//! tests the half that only a live database can show: that migration 0002
+//! tests the half that only a live database can show: that the schema
 //! actually creates `init_params`, that a first run writes every key with the
 //! daemon version that wrote it, and that each of the five startup cases does
 //! to the *store* what the decision table said it would.

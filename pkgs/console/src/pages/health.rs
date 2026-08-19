@@ -418,7 +418,7 @@ fn build_status_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
         ),
         (
           // The figure that tracks remaining work: block percentage overstates
-          // progress because chain density rises toward the tip (task F2).
+          // progress because chain density rises toward the tip.
           "Sync by Transaction",
           match (
             snap.chain_progress_diag.tx_progress_pct,

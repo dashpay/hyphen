@@ -17,7 +17,7 @@
 //! Reads clone an `Arc` under a short read lock and never hold it across an
 //! `.await`.
 //!
-//! Poisoning is handled by [`Shared`], not by each call site (task E2.6).
+//! Poisoning is handled by [`Shared`], not by each call site.
 //! Release builds set `panic = "abort"`, so a lock cannot poison in production
 //! at all; under test it can, and the previous handling — `if let Ok(guard)`,
 //! `.ok()`, `.unwrap_or_default()` — turned that into silently empty reads and
@@ -327,7 +327,7 @@ impl LiveState {
 /// is unusable, so the guard is recovered with `into_inner()` and the fact is
 /// logged once per process. Release builds abort on panic and can never reach
 /// this; what it removes is the dev/test failure mode where a poisoned lock
-/// made every live-state read look like "no data" (task E2.6).
+/// made every live-state read look like "no data".
 #[derive(Debug)]
 struct Shared<T>(RwLock<T>);
 

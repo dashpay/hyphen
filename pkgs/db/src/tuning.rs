@@ -28,7 +28,7 @@
 //! # Why a profile
 //!
 //! Vacuum behaviour is not four independent knobs. "Relax vacuum during the
-//! initial sync" (task B1) means a large scale factor *and* an analyze factor
+//! initial sync" means a large scale factor *and* an analyze factor
 //! that stays small enough to keep the planner honest, and getting one of the
 //! two wrong is worse than changing neither. So `tuning_profile` resolves the
 //! set coherently and the individual keys exist to override a member of the
@@ -41,36 +41,35 @@ use sqlx::{Executor as _, PgPool};
 
 use crate::error::{HyDbError, HyDbResult};
 
-/// Enable stepped sync (task A3) when the gap to the node's tip is large.
+/// Enable stepped sync when the gap to the node's tip is large.
 pub const DEFAULT_STEPPED_SYNC: bool = true;
 /// Block gap at or above which stepped sync engages. Must stay below
 /// `[db.layout] partition_span`: stepped mode defers the query-only indexes of
 /// the *open* partition and builds them when it closes, so a gap that could
 /// span more than one partition boundary has no single partition to close.
 pub const DEFAULT_STEPPED_SYNC_GAP: i64 = 25_000;
-/// Blocks connected per `advance` call. Was `pipeline::MAX_SEGMENT_BLOCKS`.
+/// Blocks connected per `advance` call.
 pub const DEFAULT_MAX_ADVANCE_BLOCKS: usize = 2_000;
-/// Deepest reorg the pipeline will unwind. Was `pipeline::MAX_REORG_DEPTH`.
+/// Deepest reorg the pipeline will unwind.
 pub const DEFAULT_MAX_REORG_DEPTH: i64 = 1_000;
-/// Blocks of undo pre-images retained below the tip. Was
-/// `pipeline::UNDO_KEEP_DEPTH`.
+/// Blocks of undo pre-images retained below the tip.
 pub const DEFAULT_UNDO_KEEP_DEPTH: i32 = 1_000;
-/// Rows the writer will place in one multi-row statement (task A6).
+/// Rows the writer will place in one multi-row statement.
 pub const DEFAULT_BATCH_ROWS: usize = 10_000;
-/// Row count at or above which a batch is loaded with `COPY` (task A4/A6).
+/// Row count at or above which a batch is loaded with `COPY`.
 pub const DEFAULT_COPY_THRESHOLD: usize = 5_000;
 
 /// `autovacuum_vacuum_scale_factor` for the vacuum-tuned tables under the
 /// `sync` profile. Ten times the steady-state 0.02: during a cold sync the
 /// churny table is being appended to far faster than a vacuum can keep pace
 /// with, and the pass that matters is the one after the sync, not the twenty
-/// during it (task B1).
+/// during it.
 pub const SYNC_VACUUM_SCALE_FACTOR: f64 = 0.2;
 /// `autovacuum_analyze_scale_factor` under the `sync` profile. Deliberately
 /// *not* relaxed alongside the vacuum factor: turning off statistics
 /// collection during a sync is how a table arrives at the end of one with a
 /// plan cliff. This is the half of the pair an operator setting knobs
-/// individually gets wrong (task B1).
+/// individually gets wrong.
 pub const SYNC_ANALYZE_SCALE_FACTOR: f64 = 0.05;
 
 /// Which coherent set of vacuum/storage parameters to run.
@@ -478,12 +477,12 @@ pub fn max_advance_blocks() -> usize {
   resolved().max_advance_blocks
 }
 
-/// Whether stepped sync may engage at all (task A3).
+/// Whether stepped sync may engage at all.
 pub fn stepped_sync() -> bool {
   resolved().stepped_sync
 }
 
-/// Gap to the node tip at which stepped sync engages (task A3). The gap it
+/// Gap to the node tip at which stepped sync engages. The gap it
 /// *disengages* at is derived from this one rather than configured
 /// separately — see [`crate::stepped::SteppedSync::with_params`].
 pub fn stepped_sync_gap() -> i64 {

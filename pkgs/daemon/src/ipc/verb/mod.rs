@@ -63,7 +63,7 @@ pub(crate) fn emit_command_result(
   });
 }
 
-/// Lift an operator pause set by a non-transient ingest failure (E2.19).
+/// Lift an operator pause set by a non-transient ingest failure.
 ///
 /// Returns whether a pause was actually lifted, so the caller can say so
 /// rather than logging on every command.

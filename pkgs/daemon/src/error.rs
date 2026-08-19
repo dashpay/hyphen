@@ -56,14 +56,14 @@ pub enum DaemonError {
   /// a startup validation message whose only consumer is the operator reading
   /// stderr, which is the one place prose is the right representation. What
   /// used to also travel through here — supervisor and shutdown failures — has
-  /// its own variants below (task E2.15).
+  /// its own variants below.
   Config(String),
   /// A supervised subsystem could not be brought back up.
   ///
   /// Previously smuggled through `Config(String)`, which it never was: the
   /// configuration is fine, the worker is not. Keeping the subsystem and the
   /// disposition typed means a supervisor decision can be read without parsing
-  /// the sentence it was rendered into (task E2.15).
+  /// the sentence it was rendered into.
   Supervisor {
     subsystem: &'static str,
     failure: SupervisorFailure,

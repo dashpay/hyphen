@@ -4,7 +4,7 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! Stepped sync (task A3) against a real database.
+//! Stepped sync against a real database.
 //!
 //! The state machine itself is unit-tested in `stepped.rs`, where it needs no
 //! server. What needs one is everything the machine *does*: that the open
@@ -296,7 +296,7 @@ async fn no_index_the_ingest_path_reads_is_ever_dropped() -> Res {
     .collect();
   // The partitioned tables' own primary keys, per partition — the arbiters
   // every ON CONFLICT on the write path depends on. `address_txs` is absent
-  // deliberately: 0006 dropped its primary key as a redundant key prefix of
+  // deliberately: it has no primary key, that being a redundant key prefix of
   // idx_address_txs_addr_height_desc, so there is no such index to check for,
   // and asserting on one would assert the old schema back into existence.
   let mut partitioned: Vec<String> = Vec::new();
@@ -309,7 +309,7 @@ async fn no_index_the_ingest_path_reads_is_ever_dropped() -> Res {
   let dropped: Vec<String> = (0..=1).map(|p| format!("address_txs_p{p}_pkey")).collect();
   assert!(
     present(&pool, &dropped).await?.is_empty(),
-    "0006 should have left no address_txs primary key behind"
+    "address_txs must carry no primary key"
   );
 
   let baseline_unpartitioned = present(&pool, &unpartitioned).await?.len();

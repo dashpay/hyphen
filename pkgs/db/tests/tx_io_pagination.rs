@@ -5,7 +5,7 @@
 //
 
 //! `txs::get` is bounded in both io dimensions, and everything past the bound
-//! is reachable through the paged window (task C5).
+//! is reachable through the paged window.
 //!
 //! Input and output counts are attacker-chosen up to the block size limit, so
 //! an unbounded `get` makes a summary render cost a row per output. The seed

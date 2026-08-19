@@ -142,7 +142,7 @@ impl HyphenDb {
     migrate::apply(&pools.write).await?;
 
     // Immediately after the migrator, and before anything can read or write a
-    // block: `init_params` is guaranteed to exist by migration 0002, and no
+    // block: `init_params` is guaranteed to exist by the schema, and no
     // other code path may run against a database whose layout has not been
     // agreed.
     let mut layout_cfg = cfg.layout.clone();

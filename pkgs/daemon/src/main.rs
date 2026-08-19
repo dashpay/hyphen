@@ -74,7 +74,7 @@ fn run() -> Result<(), DaemonError> {
   options.log_capabilities();
 
   // The number, not a reassurance: "disk space OK" once survived the check it
-  // was reporting on (E2.13).
+  // was reporting on.
   let free_bytes = datadir::check_free_space(&dir)?;
   info!(free_bytes, "datadir free space");
 

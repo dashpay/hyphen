@@ -231,7 +231,7 @@ impl Options {
     ]
   }
 
-  /// Report which optional capabilities this run has (task F1).
+  /// Report which optional capabilities this run has.
   ///
   /// Both halves are named. An earlier run shipped with every overlay off and
   /// said nothing about it; the state was recoverable only by reading struct

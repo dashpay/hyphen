@@ -61,7 +61,7 @@ pub trait RpcSource: Send + Sync + std::fmt::Debug {
   async fn get_raw_transaction(&self, txid: &str) -> Result<Vec<u8>, DaemonError>;
 
   /// Read the node's chain-wide transaction count, the denominator for
-  /// transaction-side sync progress (task F2).
+  /// transaction-side sync progress.
   async fn get_chain_tx_stats(&self) -> Result<ChainTxStats, DaemonError>;
 
   /// Read the current network summary.

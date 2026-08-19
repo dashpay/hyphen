@@ -4,12 +4,12 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! The reversal delete on `address_txs` has an index to stand on (task C2).
+//! The reversal delete on `address_txs` has an index to stand on.
 //!
 //! `DELETE FROM address_txs WHERE block_height = $1` runs once per reversed
 //! block. Both pre-existing indexes on the table lead with `address`, so the
 //! delete had nothing but partition pruning and scanned the whole partition.
-//! Migration 0004 adds `idx_address_txs_block_height`.
+//! `sql/0001_schema.sql` creates `idx_address_txs_block_height`.
 //!
 //! What is asserted here is presence and reachability, not latency: on a seeded
 //! test partition a sequential scan is genuinely the cheaper plan, so the plan
@@ -37,7 +37,7 @@ async fn the_reversal_delete_has_a_height_index_on_every_partition() -> TestResu
 }
 
 async fn run(tmp: &TempDb) -> TestResult {
-  // `open()` applies the migration set, 0004 included.
+  // `open()` applies the schema, this index included.
   let _db = tmp.open().await?;
   let pool = tmp.seed_pool().await?;
 
@@ -58,7 +58,7 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // A partition created after the migration inherits it: partitioned indexes
   // are re-created for every partition added, which is what makes the parent
-  // index the right place for this (see 0003 for the same mechanism used in
+  // index the right place for this (the deferred set uses the same mechanism in
   // reverse).
   assert_eq!(child_count(&pool).await?, 0, "no partitions yet");
   sqlx::query(

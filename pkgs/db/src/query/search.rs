@@ -26,7 +26,7 @@
 //! probes run concurrently — a flood of block matches can never crowd out the
 //! transaction the user actually searched for.
 //!
-//! # Relationship to the REST search endpoint (task C6)
+//! # Relationship to the REST search endpoint
 //!
 //! [`HyDbSearch::prefix`] still has NO production caller: `rest/search.rs`
 //! drives the four per-kind `search_prefix` probes itself. The db-side half of

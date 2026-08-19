@@ -489,7 +489,7 @@ async fn empty_case(tmp: &TempDb) -> TestResult {
 // Requires a real pruned seed database, which only exists where an 860k-block
 // sync has been run. Marked `ignore` rather than skipping silently on a missing
 // env var: a test that passes without asserting anything is the idiom that let
-// a completely broken search ship green (E2.8). Run it with
+// a completely broken search ship green. Run it with
 //   HYPHEN_SEED_DATABASE_URL=... cargo test -p hyphen-db --test undo_coverage -- --ignored
 #[tokio::test]
 #[ignore = "needs HYPHEN_SEED_DATABASE_URL pointing at a pruned seed clone"]

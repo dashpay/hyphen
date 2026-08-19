@@ -428,7 +428,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   let tip = db.status().tip().await?.ok_or("tip after reorg")?;
   assert_eq!(tip.hash, HyDbHash(h(7)));
 
-  // W's revoke (B4) undone → back to registered; V's reap (B5) undone → restored.
+  // W's revoke undone → back to registered; V's reap undone → restored.
   let w = db
     .validators()
     .get(HyDbHash(h(W)))

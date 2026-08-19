@@ -89,7 +89,7 @@ pub struct ChainProgressDiag {
   pub transactions_estimated_total: Option<u64>,
   /// Percentage of that projected total which is indexed. This is the figure
   /// that tracks remaining work; block percentage overstates progress because
-  /// chain density rises roughly sixfold toward the tip (task F2).
+  /// chain density rises roughly sixfold toward the tip.
   #[serde(default)]
   pub tx_progress_pct: Option<f64>,
   /// Smoothed transactions per block over the blocks absorbed this run.
@@ -205,7 +205,7 @@ pub struct IngestionDiag {
   pub state: IngestionStateName,
   /// Ingestion is explicitly paused by the control plane.
   pub paused: bool,
-  /// Index-maintenance regime: `realtime` or `stepped` (task A3). Defaulted
+  /// Index-maintenance regime: `realtime` or `stepped`. Defaulted
   /// so a console talking to an older daemon still decodes the frame.
   #[serde(default)]
   pub sync_mode: String,

@@ -68,7 +68,7 @@ pub(crate) struct IngestStatus {
   stalled: AtomicBool,
   network_tip: Arc<AtomicI64>,
   local_tip: AtomicI64,
-  /// Index-maintenance regime the storage engine reports (task A3), shared
+  /// Index-maintenance regime the storage engine reports, shared
   /// with the REST status endpoint the same way the node tip is.
   sync_mode: Arc<AtomicU8>,
   blocks_ingested_total: AtomicU64,
@@ -226,7 +226,7 @@ impl IngestStatus {
     self.state.store(state, Ordering::Relaxed);
   }
 
-  /// Record one absorbed block's transaction count (task F2).
+  /// Record one absorbed block's transaction count.
   fn note_block_txs(&self, txs: u64) {
     self
       .transactions_ingested_total
@@ -244,7 +244,7 @@ impl IngestStatus {
     self.txs_per_block_milli.store(next, Ordering::Relaxed);
   }
 
-  /// Record a reorg the engine reported (task E2.5).
+  /// Record a reorg the engine reported.
   fn note_reorg(&self, fork_height: u32, full_rederive: bool) {
     self.last_reorg_epoch.store(unix_now(), Ordering::Relaxed);
     self
@@ -301,7 +301,7 @@ impl IngestStatus {
     (milli > 0).then(|| milli as f64 / 1_000.0)
   }
 
-  /// Sync progress by block *and* by transaction (task F2).
+  /// Sync progress by block *and* by transaction.
   ///
   /// A monitored run read "36% complete" while roughly 6% complete by
   /// transaction, and every projection made from the block figure was wrong:
@@ -474,7 +474,7 @@ impl IngestStatus {
   }
 }
 
-/// Sync progress measured two ways (task F2).
+/// Sync progress measured two ways.
 ///
 /// The block figure is exact and misleading; the transaction figure is an
 /// estimate and useful. Neither is offered alone.
@@ -498,7 +498,7 @@ pub(crate) struct IngestVisor {
   ingest: Arc<HyDbIngest>,
   source: Arc<dyn RestSource>,
   /// Optional JSON-RPC handle, used only to ask the node how many
-  /// transactions the chain has (task F2). Ingest itself needs REST alone, so
+  /// transactions the chain has. Ingest itself needs REST alone, so
   /// this stays optional and its absence costs the transaction percentage and
   /// nothing else.
   rpc: Option<Arc<dyn RpcSource>>,
@@ -564,7 +564,7 @@ impl IngestVisor {
     self.task = Some(tokio::spawn(async move {
       info!("ingest loop started");
       // One count, once, so progress can be reported by transaction as well as
-      // by block (task F2). Everything after this is incremented in memory.
+      // by block. Everything after this is incremented in memory.
       count_transactions_baseline(&db, &status).await;
       // Refreshed on a slow cadence: the chain's transaction count moves by a
       // few hundred a minute and the answer is only a denominator.
@@ -652,7 +652,7 @@ impl IngestVisor {
   }
 }
 
-/// Ask the node for its chain-wide transaction count (task F2).
+/// Ask the node for its chain-wide transaction count.
 ///
 /// Not an ingest failure when it fails: it costs the transaction percentage,
 /// so it is logged at debug and dropped. A node that has RPC disabled never

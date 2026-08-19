@@ -376,7 +376,7 @@ const MAX_RESOLVED_PREVOUT_INPUTS: usize = 1_000;
 /// Resolve the consumed outputs of a mempool transaction from committed chain
 /// data in the storage engine.
 ///
-/// Two costs are bounded here (task C3):
+/// Two costs are bounded here:
 ///
 /// * **Repeats.** Inputs are grouped by their previous transaction, so a
 ///   transaction spending twenty outputs of one parent costs one lookup, not

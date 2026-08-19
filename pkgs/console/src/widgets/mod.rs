@@ -22,7 +22,7 @@ pub(crate) fn calc_eta(indexed_height: Option<i32>, abs_tip: Option<i32>, bps: u
   }
 }
 
-/// ETA from remaining *transactions* rather than remaining blocks (task F2).
+/// ETA from remaining *transactions* rather than remaining blocks.
 ///
 /// Blocks are not units of equal work: mainnet density rises roughly sixfold
 /// toward the tip, so a block-rate ETA is optimistic by about that factor

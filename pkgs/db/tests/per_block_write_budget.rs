@@ -68,7 +68,7 @@
 //! in `shared_buffers`, so every page touched is a hit. The count of pages
 //! touched is what carries over to a database that does not fit — at mainnet
 //! scale `address_txs` holds 60.0M rows under what was 17.6 GB of index and is
-//! 8.8 GB of it since 0006, and a page touched on a btree that large is a page
+//! 8.8 GB of it once the primary key went, and a page touched on a btree that
 //! read.
 
 mod common;

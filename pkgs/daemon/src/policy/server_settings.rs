@@ -5,7 +5,7 @@
 //
 
 //! Startup review of the Postgres server settings the daemon depends on but
-//! cannot set (task F4).
+//! cannot set.
 //!
 //! The daemon does not own `postgresql.conf` and must not pretend to. What it
 //! can do is read the settings back and say, once, at startup, when they
