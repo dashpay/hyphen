@@ -110,15 +110,9 @@ pub(crate) struct PgSearch {
 /// per-kind probes match on the SQL `display_hex()` of the same value, so this
 /// is the Rust side of one convention, not a second one.
 fn display_hex(hash: &HyDbHash) -> String {
-  hash
-    .as_bytes()
-    .iter()
-    .rev()
-    .fold(String::with_capacity(64), |mut out, b| {
-      use core::fmt::Write as _;
-      let _ = write!(out, "{b:02x}");
-      out
-    })
+  let mut bytes = *hash.as_bytes();
+  bytes.reverse();
+  hex::encode(bytes)
 }
 
 #[async_trait]
