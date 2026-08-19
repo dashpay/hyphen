@@ -534,6 +534,16 @@ async fn run_deep_reorg(tmp: &TempDb) -> TestResult {
 /// Below the horizon the answer must be a refusal. A disconnect that finds no
 /// undo cannot reverse the block, and the one thing it must never do is
 /// return success having left the projection where the block put it.
+///
+/// The refusal now arrives *before* any work rather than part way down the
+/// span. This test used to assert the opposite — that the rewind unwound what
+/// it could, committed it, and then stopped at the first height whose undo
+/// partition was gone — which is the behaviour the operator rewind was fixed
+/// to stop having: every height above the exhaustion point was already
+/// permanently committed, the projection served an arbitrary intermediate tip
+/// as canonical, and the error named no height. The depth bound the reorg path
+/// always had now applies here too, so the target is rejected on arrival and
+/// the projection is untouched.
 #[tokio::test]
 async fn disconnect_below_the_horizon_is_refused() -> TestResult {
   let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
@@ -549,8 +559,11 @@ async fn run_below_horizon(tmp: &TempDb) -> TestResult {
   build_chain(&ingest, 0xC000, PRUNE_BLOCKS).await?;
   let tip_h = (PRUNE_BLOCKS - 1) as i32;
 
-  // A rewind that walks past the retention window: it unwinds the blocks it
-  // can and then refuses, naming the height it could not reverse.
+  let supply_before = db.addrs().supply().await?.total;
+
+  // A rewind that walks past the retention window is refused outright: the
+  // undo it would need is gone, so there is no depth at which any part of it
+  // is admissible.
   let Err(err) = ingest.rewind_to(HyDbHeight(0)).await else {
     return Err("a rewind past the retention window must fail, not silently no-op".into());
   };
@@ -560,25 +573,36 @@ async fn run_below_horizon(tmp: &TempDb) -> TestResult {
     "the refusal must name its cause; got {msg}"
   );
 
-  // It stopped at the first height whose undo partition is gone, and it
-  // stopped *before* that height's projection was touched.
+  // Nothing was rewound. This is the part that matters: the tip is exactly
+  // where the operator left it, so no reader ever saw an intermediate chain,
+  // and the undo the retention window still holds was not consumed on the way
+  // to the refusal.
   let tip = db
     .status()
     .tip()
     .await?
     .ok_or("the rewind must not unwind the whole chain")?;
-  assert!(
-    tip.height.0 as i32 <= tip_h - KEEP_DEPTH,
-    "the rewind must get at least to the horizon before refusing"
+  assert_eq!(
+    tip.height,
+    HyDbHeight(tip_h as u32),
+    "a refused rewind must leave the tip untouched, not stranded part way down"
   );
+  assert_eq!(db.addrs().supply().await?.total, supply_before);
   let (undo_rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM undo_blocks WHERE height = $1")
-    .bind(tip.height.0 as i32)
+    .bind(tip_h)
     .fetch_one(&tmp.seed_pool().await?)
     .await?;
   assert_eq!(
-    undo_rows, 0,
-    "the block it refused to reverse is the one whose undo was dropped"
+    undo_rows, 1,
+    "the tip's undo must still be there — the refusal consumed nothing"
   );
+
+  // The horizon itself is still reachable, so this is a bound and not a
+  // blanket refusal: `deepest_reversible_reorg_survives_the_prune` proves the
+  // undo is there, and this proves the rewind path will use it.
+  let edge = tip_h - KEEP_DEPTH;
+  let report = ingest.rewind_to(HyDbHeight(edge as u32)).await?;
+  assert_eq!(report.to, Some(HyDbHeight(edge as u32)));
 
   Ok(())
 }

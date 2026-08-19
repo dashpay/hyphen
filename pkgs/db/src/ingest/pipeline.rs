@@ -297,6 +297,15 @@ pub(super) async fn advance(
           "reorg from height {from_height} to fork {floor} exceeds the supported depth ({max_reorg})"
         )));
       }
+      // The bound above is what the *configuration* promises about retention.
+      // A reorg is a rollback too, so it gets the same data-side pre-flight
+      // the operator rewind does: refusing here costs one query and names the
+      // uncovered height, where discovering it inside the transaction gives
+      // the operator a stage trap to interpret instead. The transaction would
+      // roll the span back either way — this is about the diagnosis, not the
+      // integrity.
+      tuning::verify_undo_coverage(pool, floor + 1, from_height).await?;
+
       // A disconnect runs the UTXO-restore join on `idx_tx_outputs_outpoint`,
       // which stepped mode has taken off the open partition. Stepped mode is
       // predicated on a reversal being unreachable from this far behind the
@@ -349,6 +358,34 @@ pub(super) async fn advance(
 
 /// Operator-initiated rewind: disconnect canonical blocks, tip-first, until
 /// the tip is at `target`.
+///
+/// This carries the same two safety properties as the reorg path above, for
+/// the same reasons, and it is worth saying why they are not weaker here just
+/// because a human asked rather than the network.
+///
+/// **Bounded first, side effects second.** Every admissibility gate runs
+/// before anything at all is mutated — before the mode change, before the
+/// storage tuning, before the index reconcile. A disconnect below the retained
+/// undo window cannot be performed at any depth by anyone, so an operator
+/// target is subject to the same `max_reorg_depth` bound a fork point is; and
+/// because the bound is a promise the *configuration* makes,
+/// [`tuning::verify_undo_coverage`] then checks the rows actually on disk. An
+/// inadmissible rewind is now rejected having touched nothing, which is the
+/// point: leaving stepped mode and rebuilding a partition's deferred indexes
+/// is expensive, and it used to happen on the way to a refusal.
+///
+/// **Atomic, not resumable.** The whole span commits as ONE transaction. Once
+/// the target is bounded to `max_reorg_depth`, a rewind spans no more heights
+/// than a reorg the pipeline already commits atomically, so atomicity is
+/// simply available — and it is the property actually wanted. The failure this
+/// replaces was not "the rewind took a long time", it was "the projection
+/// stranded at an arbitrary height and kept serving reads as canonical". A
+/// marker-and-resume scheme would preserve exactly the state nobody wants to
+/// be in — a half-rewound chain, durable, visible to readers, waiting for
+/// someone to notice — and it would need a marker table, a resume path, and a
+/// rule for how the ingest loop behaves while one is outstanding. Atomicity
+/// needs none of that: on any failure the old tip is still the tip, no reader
+/// ever saw the gap, and the operator can just ask again.
 pub(super) async fn rewind(
   pool: &PgPool,
   target: HyDbHeight,
@@ -359,32 +396,84 @@ pub(super) async fn rewind(
     .map(|(h, _)| HyDbHeight::try_from_i32(h))
     .transpose()?;
   let floor = target.0 as i32;
+  let from_height = from_tip.map(|(h, _)| h).unwrap_or(-1);
+
+  // --- Admissibility. Nothing below this block has mutated anything. -------
+
+  // The reorg path refuses a span deeper than the retained undo window. The
+  // undo tables cannot tell the two callers apart, so neither can this bound:
+  // `ipc/verb/rewind` used to hand the operator's number straight through.
+  let max_reorg = max_reorg_depth();
+  let depth = i64::from(from_height - floor);
+  if depth > max_reorg {
+    return Err(HyDbError::Derive(format!(
+      "rewind from height {from_height} to target {floor} is {depth} blocks deep and \
+       exceeds the supported depth ({max_reorg}) — a disconnect replays undo \
+       pre-images and anything below [db.ingest] undo_keep_depth has been pruned. \
+       Nothing was rewound; target height {} or above, or re-sync from scratch.",
+      i64::from(from_height) - max_reorg
+    )));
+  }
+
+  // ...and the bound is only what the *configuration* promises. Check the rows
+  // that are really there, so a shortfall is a refusal rather than a trap
+  // sprung half way down the span.
+  tuning::verify_undo_coverage(pool, floor + 1, from_height).await?;
+
+  // --- Admissible. From here the call has observable side effects. ---------
 
   // Same argument as the reorg path: a rewind disconnects, and a disconnect
-  // needs the index stepped mode is holding back.
-  if stepped
+  // runs the UTXO-restore join on `idx_tx_outputs_outpoint`, which stepped
+  // mode has taken off the open partition.
+  let left_stepped = stepped
     .force_realtime("an operator rewind was requested")
-    .is_some()
-  {
+    .is_some();
+  if left_stepped {
     tuning::apply_storage_for(stepped.admin(), tuning::resolved(), false).await?;
   }
   if let Some((tip, _)) = from_tip {
     stepped.ensure_settled(tip).await?;
   }
 
+  // One transaction for the whole span, tip-first. If anything fails the
+  // transaction is dropped unsent and the old canonical chain — every height
+  // of it — remains untouched.
+  let mut tx = pool
+    .begin()
+    .await
+    .map_err(|e| HyDbError::pg("rewind: begin", e))?;
   let mut disconnected: Vec<HyDbHash> = Vec::new();
-  let mut h = from_tip.map(|(h, _)| h).unwrap_or(-1);
-  while h > floor {
-    let mut tx = pool
-      .begin()
+  let outcome = match disconnect_span_in(&mut tx, floor, from_height, &mut disconnected).await {
+    Ok(()) => tx
+      .commit()
       .await
-      .map_err(|e| HyDbError::pg("rewind: begin", e))?;
-    let hash = disconnect_block_in(&mut tx, h).await?;
-    tx.commit()
-      .await
-      .map_err(|e| HyDbError::pg("rewind: commit", e))?;
-    disconnected.push(hash);
-    h -= 1;
+      .map_err(|e| HyDbError::pg("rewind: commit", e)),
+    Err(e) => {
+      drop(tx);
+      Err(e)
+    }
+  };
+  if let Err(e) = outcome {
+    // The span rolled back, so restore what this call changed outside the
+    // transaction. The storage profile goes back to the stepped flavour it
+    // was resolved for; the mode itself converges on its own, because
+    // `force_realtime` reset the hysteresis and the next advance re-enters
+    // stepped if the gap still warrants it, at which point `ensure_settled`
+    // drops the open partition's deferred indexes again. Realtime is the
+    // conservative direction to be caught in — the indexes are present and
+    // every query is served — so converging beats a second DDL pass here.
+    if left_stepped {
+      if let Err(restore) =
+        tuning::apply_storage_for(stepped.admin(), tuning::resolved(), true).await
+      {
+        tracing::warn!(
+          error = %restore,
+          "rewind failed and the stepped storage profile could not be restored; \
+           the realtime profile stays in force until the next mode transition"
+        );
+      }
+    }
+    return Err(e);
   }
 
   let to_tip = chain::canonical_tip(pool).await?;
@@ -403,6 +492,39 @@ pub(super) async fn rewind(
     reorg,
     mode: stepped.mode(),
   })
+}
+
+/// Disconnect `(floor, from_height]` tip-first inside `tx`, appending each
+/// disconnected hash to `disconnected`.
+///
+/// Split out so the caller's success and failure paths can each do the one
+/// thing they owe the transaction — commit it, or drop it unsent — without a
+/// loop-with-two-exits in between.
+///
+/// # Errors
+///
+/// Whatever the failing stage returned, wrapped in a message that **names the
+/// height**. An operator reading `rewind failed: <sqlstate>` cannot tell a
+/// target that was never reachable from a transient fault, and the height is
+/// the one fact that separates them.
+async fn disconnect_span_in(
+  tx: &mut PgTx<'_>,
+  floor: i32,
+  from_height: i32,
+  disconnected: &mut Vec<HyDbHash>,
+) -> HyDbResult<()> {
+  let mut h = from_height;
+  while h > floor {
+    let hash = disconnect_block_in(tx, h).await.map_err(|e| {
+      HyDbError::Derive(format!(
+        "rewind to {floor} failed at height {h}: {e} — nothing was committed, \
+         the tip is still {from_height}"
+      ))
+    })?;
+    disconnected.push(hash);
+    h -= 1;
+  }
+  Ok(())
 }
 
 /// Decide what an advance toward `node_tip` must do.

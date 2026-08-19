@@ -10,6 +10,16 @@
 //! disconnects canonical blocks tip-first via the same undo machinery a reorg
 //! uses. The raw blocks stay absorbed, so the ingest loop reconnects them on
 //! its next cycle unless the node also rewound.
+//!
+//! `target_height` arrives off the wire and is *not* checked here. It used to
+//! be checked nowhere at all; it is now bounded inside `rewind_to`, against
+//! `[db.ingest] max_reorg_depth` and against the undo rows actually on disk,
+//! before that call mutates anything. That is the right place for it — the
+//! bound is a property of the projection's retention, not of the IPC surface,
+//! and a check here would be a second copy of it that could drift. What this
+//! module owes the operator is that the refusal reaches them intact, target
+//! and stopping height included, which is why the failure arm below repeats
+//! the target rather than emitting a bare `{e}`.
 
 use hyphen_db::HyDbHeight;
 
@@ -35,7 +45,12 @@ pub async fn rewind(ctx: &CommandCtx, id: u64, target_height: u32) {
         ),
       );
     }
-    Err(e) => emit_command_result(&ctx.event_tx, id, false, format!("rewind failed: {e}")),
+    Err(e) => emit_command_result(
+      &ctx.event_tx,
+      id,
+      false,
+      format!("rewind to {target_height} failed: {e}"),
+    ),
   }
 }
 
