@@ -31,6 +31,47 @@ use crate::records::HyDbDataSrc;
 use crate::stepped::{HyDbSyncMode, SteppedSync};
 use crate::types::{HyDbHash, HyDbHeight};
 
+/// What an advance is aiming at, and how far the node is beyond it.
+///
+/// Stepped sync decides from the distance between the projection and the
+/// *node*, which is not the distance to the hash being connected. A caller
+/// syncing from cold feeds the chain in bounded chunks, so those two numbers
+/// differ by the whole backlog. Making the caller choose a variant is what
+/// keeps them from being conflated: there is no default that is right for
+/// both, and the one that was inferred before measured the chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HyDbTipTarget {
+  /// Connect toward this hash, which *is* the node's tip. Used when following
+  /// the chain live, where the two heights coincide.
+  AtNode(HyDbHash),
+  /// Connect toward `tip`, the end of the chunk absorbed so far, while the
+  /// node itself has reached `network_height`.
+  Chunk {
+    tip: HyDbHash,
+    network_height: HyDbHeight,
+  },
+}
+
+impl HyDbTipTarget {
+  /// The hash to canonicalize toward.
+  #[must_use]
+  pub fn tip(&self) -> HyDbHash {
+    match self {
+      Self::AtNode(tip) | Self::Chunk { tip, .. } => *tip,
+    }
+  }
+
+  /// The node's height, when the caller knows it independently of the tip.
+  /// `AtNode` returns `None`, meaning the target's own height is the node's.
+  #[must_use]
+  pub const fn network_height(&self) -> Option<HyDbHeight> {
+    match self {
+      Self::AtNode(_) => None,
+      Self::Chunk { network_height, .. } => Some(*network_height),
+    }
+  }
+}
+
 /// Outcome of absorbing a single block announcement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HyDbBlockSeen {
@@ -84,12 +125,18 @@ impl HyDbIngest {
   /// advance is *bounded*: at most `[db.ingest] max_advance_blocks` blocks are
   /// connected per call, so a cold sync reports progress continuously and the
   /// caller simply calls again (`report.to < target`) to resume deeper.
-  pub async fn on_tip(&self, node_tip: HyDbHash) -> HyDbResult<HyDbTipReport> {
+  ///
+  /// `target` says whether the hash being connected is the node's own tip or
+  /// merely the end of a chunk with a backlog behind it — see
+  /// [`HyDbTipTarget`]. Stepped sync reads its gap from that distinction, so a
+  /// cold sync that reports a chunk as the node's tip leaves the mode
+  /// disengaged however far behind it actually is.
+  pub async fn on_tip(&self, target: HyDbTipTarget) -> HyDbResult<HyDbTipReport> {
     let _op = self.op_lock.lock().await;
     let report = pipeline::advance(
       &self.write,
       self.data_src.as_ref(),
-      node_tip,
+      target,
       &self.progress_tx,
       &self.stepped,
     )

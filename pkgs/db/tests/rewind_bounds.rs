@@ -36,7 +36,7 @@ use bytes::Bytes;
 use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbHeight, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut,
+  HyDbHeight, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -150,7 +150,7 @@ async fn build_chain(
   let tip = HyDbHash(prev);
   let target = Some(HyDbHeight::new(count as u32 - 1));
   loop {
-    let report = ingest.on_tip(tip).await?;
+    let report = ingest.on_tip(HyDbTipTarget::AtNode(tip)).await?;
     if report.to == target {
       return Ok(chain);
     }

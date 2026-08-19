@@ -50,7 +50,9 @@ pub use config::{
   DEFAULT_POSTGRES_URL,
 };
 pub use error::{HyDbError, HyDbResult, Outcome};
-pub use ingest::{HyDbBlockSeen, HyDbIngest, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport};
+pub use ingest::{
+  HyDbBlockSeen, HyDbIngest, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport, HyDbTipTarget,
+};
 pub use records::{
   HyDbBlock, HyDbBlockId, HyDbCbFields, HyDbDataSrc, HyDbHeader, HyDbPayload, HyDbTx, HyDbTxIn,
   HyDbTxOut, HyDbVlEvent, HyDbVlRegister, HyDbVlRevoke, HyDbVlUpdRegistrar, HyDbVlUpdService,

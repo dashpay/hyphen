@@ -26,7 +26,7 @@ use common::TempDb;
 use hyphen_db::layout::rich_list_floor;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
+  HyDbOutpoint, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
 };
 use sqlx::PgPool;
 
@@ -245,7 +245,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   for (hash, prev) in [(1u8, 0u8), (2, 1), (3, 2)] {
     ingest.on_block(raw(hash, prev)).await?;
   }
-  ingest.on_tip(HyDbHash(h(3))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(3)))).await?;
 
   // Only the whale qualifies; dust and the one-duff-short crosser do not.
   assert_eq!(members(&pool).await?, vec![(WHALE.to_owned(), 2 * f)]);
@@ -253,7 +253,7 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // Crossing upward.
   ingest.on_block(raw(4, 3)).await?;
-  ingest.on_tip(HyDbHash(h(4))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(4)))).await?;
   assert_eq!(
     members(&pool).await?,
     vec![(WHALE.to_owned(), 2 * f), (CROSSER.to_owned(), f + 1)],
@@ -263,7 +263,7 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // Crossing downward, plus a new above-floor row in the same block.
   ingest.on_block(raw(5, 4)).await?;
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_eq!(
     members(&pool).await?,
     vec![(HEIR.to_owned(), 2 * f), (CROSSER.to_owned(), f + 1)],
@@ -287,7 +287,9 @@ async fn run(tmp: &TempDb) -> TestResult {
   // Two-block reorg back to h2: the crossing and the spend both unwind.
   ingest.on_block(raw(0x14, 3)).await?;
   ingest.on_block(raw(0x15, 0x14)).await?;
-  let report = ingest.on_tip(HyDbHash(h(0x15))).await?;
+  let report = ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(h(0x15))))
+    .await?;
   let reorg = report
     .reorg
     .ok_or("switching branches must report a reorg")?;
@@ -314,7 +316,7 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // Re-connecting the original branch reproduces the same membership: the two
   // directions are inverses, not merely each individually plausible.
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_eq!(
     members(&pool).await?,
     vec![(HEIR.to_owned(), 2 * f), (CROSSER.to_owned(), f + 1)]

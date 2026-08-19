@@ -32,7 +32,7 @@ use tokio::sync::watch;
 use super::derive::PgDeriver;
 use super::scratch::{HyDbDeriveError, HyDbStageError, PipelineError, Scratch};
 use super::{balances, base, chain, stats, validators};
-use super::{HyDbBlockSeen, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport};
+use super::{HyDbBlockSeen, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport, HyDbTipTarget};
 use crate::error::{HyDbError, HyDbResult};
 use crate::records::{HyDbDataSrc, PgTx};
 use crate::stepped::{HyDbSyncMode, SteppedSync};
@@ -158,13 +158,22 @@ enum Plan {
 
 /// Advance the canonical projection toward `node_tip`, connecting at most
 /// [`max_advance_blocks`] blocks. Publishes per-block progress on `progress`.
+///
+/// `target` carries how far the *node* has got, which is not the height of
+/// the hash being connected: a caller syncing from cold feeds the chain in
+/// chunks, so that hash ends the current chunk and sits a few hundred blocks
+/// ahead at most. Stepped sync keys off the distance to the node, so it reads
+/// the node's height from the target rather than deriving one from the hash —
+/// deriving it measured the chunk instead of the backlog, and the mode never
+/// engaged.
 pub(super) async fn advance(
   pool: &PgPool,
   data_src: &dyn HyDbDataSrc,
-  node_tip: HyDbHash,
+  target_spec: HyDbTipTarget,
   progress: &watch::Sender<HyDbProgress>,
   stepped: &SteppedSync,
 ) -> HyDbResult<HyDbTipReport> {
+  let node_tip = target_spec.tip();
   let from_tip = chain::canonical_tip(pool).await?;
   let from = from_tip
     .map(|(h, _)| HyDbHeight::try_from_i32(h))
@@ -185,8 +194,13 @@ pub(super) async fn advance(
 
   // One observation per advance: this is the "N consecutive advances" the
   // hysteresis counts, and the point at which the gap to the node is known
-  // for certain.
-  if let Some(transition) = stepped.observe(from_tip.map(|(h, _)| h), node_height) {
+  // for certain. `AtNode` has no separate node height because for it the two
+  // coincide, so the target's own height is the honest answer there.
+  let observed_height = match target_spec.network_height() {
+    Some(height) => height.as_i32()?,
+    None => node_height,
+  };
+  if let Some(transition) = stepped.observe(from_tip.map(|(h, _)| h), observed_height) {
     stepped.apply(transition).await?;
     tuning::apply_storage_for(
       stepped.admin(),

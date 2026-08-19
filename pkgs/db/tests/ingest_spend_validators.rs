@@ -28,8 +28,8 @@ use bytes::Bytes;
 use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType, HyDbVlEvent,
-  HyDbVlRegister, HyDbVlRevoke, HyDbVlType, HyDbVlUpdRegistrar, HyDbVlUpdService,
+  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
+  HyDbVlEvent, HyDbVlRegister, HyDbVlRevoke, HyDbVlType, HyDbVlUpdRegistrar, HyDbVlUpdService,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -350,7 +350,7 @@ async fn run(tmp: &TempDb) -> TestResult {
       "block {hash} newly absorbed"
     );
   }
-  let report = ingest.on_tip(HyDbHash(h(5))).await?;
+  let report = ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_eq!(report.to, Some(HyDbHeight::new(4)));
   assert!(report.reorg.is_none(), "linear connect is not a reorg");
 
@@ -419,7 +419,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   for (hash, prev) in [(6u8, 3u8), (7, 6)] {
     ingest.on_block(raw(hash, prev)).await?;
   }
-  let report = ingest.on_tip(HyDbHash(h(7))).await?;
+  let report = ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(7)))).await?;
   let reorg = report.reorg.ok_or("switching branches reports a reorg")?;
   assert_eq!(
     reorg.disconnected.len(),

@@ -26,7 +26,7 @@ use hyphen_db::layout::undo_span;
 use hyphen_db::query::HyDbSearchKind;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbHeight, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut,
+  HyDbHeight, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut,
 };
 use sqlx::PgPool;
 
@@ -148,7 +148,7 @@ async fn run_search(tmp: &TempDb) -> TestResult {
   ingest.on_block(raw_seeded(genesis, [0u8; 32], 50)).await?;
   ingest.on_block(raw_seeded(b1, genesis, 50)).await?;
   ingest.on_block(raw_seeded(b2, b1, 50)).await?;
-  ingest.on_tip(HyDbHash(b2)).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(b2))).await?;
 
   // Render the way the UI does, copy a prefix, search with it. This is the
   // case the original code could never satisfy: it matched internal-order
@@ -235,7 +235,9 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
     chain.push(hash);
     prev = hash;
   }
-  ingest.on_tip(HyDbHash(chain[5])).await?;
+  ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(chain[5])))
+    .await?;
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
     Some(HyDbHeight::new(5))
@@ -253,7 +255,9 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
     alt.push(hash);
     alt_prev = hash;
   }
-  let report = ingest.on_tip(HyDbHash(alt[3])).await?;
+  let report = ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(alt[3])))
+    .await?;
   let reorg = report
     .reorg
     .ok_or("multi-block branch switch must report a reorg")?;
@@ -275,7 +279,9 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
   // The original detector compared heights only and was blind to this.
   let sibling = seeded(0x3000);
   ingest.on_block(raw_seeded(sibling, alt[2], 25)).await?;
-  let report = ingest.on_tip(HyDbHash(sibling)).await?;
+  let report = ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(sibling)))
+    .await?;
   let reorg = report
     .reorg
     .ok_or("same-height branch switch must report a reorg")?;
@@ -334,7 +340,7 @@ async fn build_chain(
   let tip = HyDbHash(prev);
   let target = Some(HyDbHeight::new(count as u32 - 1));
   loop {
-    let report = ingest.on_tip(tip).await?;
+    let report = ingest.on_tip(HyDbTipTarget::AtNode(tip)).await?;
     if report.to == target {
       return Ok(chain);
     }
@@ -507,7 +513,7 @@ async fn run_deep_reorg(tmp: &TempDb) -> TestResult {
   ingest
     .on_block(raw_seeded(alt, chain[fork as usize], 25))
     .await?;
-  let report = ingest.on_tip(HyDbHash(alt)).await?;
+  let report = ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(alt))).await?;
   let reorg = report
     .reorg
     .ok_or("the deepest admissible fork must reorg, not no-op")?;

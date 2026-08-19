@@ -25,7 +25,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use hyphen_db::{HyDbBlockSeen, HyDbHash, HyDbHeight, HyDbIngest, HyDbSyncMode, HyphenDb};
+use hyphen_db::{
+  HyDbBlockSeen, HyDbHash, HyDbHeight, HyDbIngest, HyDbSyncMode, HyDbTipTarget, HyphenDb,
+};
 use tracing::{error, info, warn};
 
 use crate::error::{DaemonError, Outcome, RestErrorKind};
@@ -717,7 +719,7 @@ async fn ingest_once(
     status.set_state(STATE_FETCHING);
     absorb_with_ancestors(ingest, source, status, raw).await?;
     status.set_state(STATE_COMMITTING);
-    advance_until_settled(db, ingest, status, tip).await?;
+    advance_until_settled(db, ingest, status, tip, node_height).await?;
     return Ok(());
   }
 
@@ -742,7 +744,7 @@ async fn ingest_once(
     }
     if let Some(tip) = chunk_tip {
       status.set_state(STATE_COMMITTING);
-      advance_until_settled(db, ingest, status, tip).await?;
+      advance_until_settled(db, ingest, status, tip, node_height).await?;
     }
     height = chunk_end.saturating_add(1);
   }
@@ -751,15 +753,24 @@ async fn ingest_once(
 
 /// Drive `on_tip` until the projection reaches the engine's reported target
 /// (each call connects a bounded segment).
+///
+/// `network_height` is carried separately from `tip` because the two mean
+/// different things during a cold sync: `tip` ends the chunk being connected
+/// now, while `network_height` is how far the node has got. Stepped sync
+/// needs the second one.
 async fn advance_until_settled(
   db: &HyphenDb,
   ingest: &HyDbIngest,
   status: &IngestStatus,
   tip: HyDbHash,
+  network_height: u32,
 ) -> Result<(), DaemonError> {
   loop {
     let report = ingest
-      .on_tip(tip)
+      .on_tip(HyDbTipTarget::Chunk {
+        tip,
+        network_height: HyDbHeight::new(network_height),
+      })
       .await
       .map_err(|e| DaemonError::storage("advance to tip", e))?;
     if let Some(reorg) = &report.reorg {

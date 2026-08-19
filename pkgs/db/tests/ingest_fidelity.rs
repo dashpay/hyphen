@@ -22,7 +22,7 @@ use bytes::Bytes;
 use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbHeight, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut,
+  HyDbHeight, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -134,7 +134,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   ));
 
   // Canonicalize to the tip.
-  let report = ingest.on_tip(HyDbHash(h(4))).await?;
+  let report = ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(4)))).await?;
   assert_eq!(report.to, Some(HyDbHeight::new(3)));
   assert!(report.reorg.is_none(), "linear connect is not a reorg");
 
@@ -154,7 +154,9 @@ async fn run(tmp: &TempDb) -> TestResult {
   // Reorg: a heavier branch off height 1 (b1 = hash 2). alt2/alt3 pay 70 each.
   ingest.on_block(raw(0x12, 2, 70)).await?; // alt2 @ height 2, parent b1
   ingest.on_block(raw(0x13, 0x12, 70)).await?; // alt3 @ height 3, parent alt2
-  let report = ingest.on_tip(HyDbHash(h(0x13))).await?;
+  let report = ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(h(0x13))))
+    .await?;
 
   let reorg = report
     .reorg

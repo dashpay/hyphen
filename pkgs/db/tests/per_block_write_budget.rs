@@ -81,7 +81,7 @@ use bytes::Bytes;
 use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
+  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
 };
 use sqlx::PgPool;
 
@@ -448,7 +448,9 @@ async fn run(tmp: &TempDb) -> TestResult {
   for h in 0..BLOCKS {
     ingest.on_block(Chain::raw(h)).await?;
   }
-  ingest.on_tip(HyDbHash(block_hash(BLOCKS - 1))).await?;
+  ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(block_hash(BLOCKS - 1))))
+    .await?;
   let elapsed = started.elapsed();
 
   // The chain really was written, in full, before any budget is read.
@@ -670,7 +672,9 @@ async fn empty_tail(tmp: &TempDb) -> TestResult {
     ingest.on_block(Chain::raw(h)).await?;
   }
   ingest
-    .on_tip(HyDbHash(block_hash(EmptyTail::empty_at() - 1)))
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(block_hash(
+      EmptyTail::empty_at() - 1,
+    ))))
     .await?;
   let before = summaries(&pool).await?;
   flush_writer_stats(&pool).await?;
@@ -682,7 +686,9 @@ async fn empty_tail(tmp: &TempDb) -> TestResult {
   // The block that moves nothing.
   let empty = EmptyTail::empty_at();
   ingest.on_block(Chain::raw(empty)).await?;
-  ingest.on_tip(HyDbHash(block_hash(empty))).await?;
+  ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(block_hash(empty))))
+    .await?;
   let (tip,): (Option<i32>,) = sqlx::query_as("SELECT MAX(height) FROM blocks")
     .fetch_one(&pool)
     .await?;

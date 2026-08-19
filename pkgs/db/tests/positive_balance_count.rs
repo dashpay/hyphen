@@ -33,7 +33,7 @@ use bytes::Bytes;
 use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
+  HyDbOutpoint, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
 };
 use sqlx::PgPool;
 
@@ -274,13 +274,13 @@ async fn run(tmp: &TempDb) -> TestResult {
   for (hash, prev) in [(1u8, 0u8), (2, 1), (3, 2)] {
     ingest.on_block(raw(hash, prev)).await?;
   }
-  ingest.on_tip(HyDbHash(h(3))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(3)))).await?;
   assert_exact(&pool, "h2").await?;
   assert_eq!(counter(&pool).await?, 3, "three upward crossings, one each");
 
   // A block that moves a balance without crossing zero.
   ingest.on_block(raw(4, 3)).await?;
-  ingest.on_tip(HyDbHash(h(4))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(4)))).await?;
   assert_exact(&pool, "h3").await?;
   assert_eq!(
     counter(&pool).await?,
@@ -290,7 +290,7 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // One downward crossing and two upward ones in a single block.
   ingest.on_block(raw(5, 4)).await?;
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_eq!(
     positive(&pool).await?,
     vec![
@@ -313,7 +313,9 @@ async fn run(tmp: &TempDb) -> TestResult {
   // add two more.
   ingest.on_block(raw(0x14, 3)).await?;
   ingest.on_block(raw(0x15, 0x14)).await?;
-  let report = ingest.on_tip(HyDbHash(h(0x15))).await?;
+  let report = ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(h(0x15))))
+    .await?;
   let reorg = report
     .reorg
     .ok_or("switching branches must report a reorg")?;
@@ -343,7 +345,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   // Re-connecting the original branch returns the counter to its earlier
   // value: the two directions are inverses of one another, not merely each
   // individually plausible.
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_eq!(
     positive(&pool).await?,
     vec![

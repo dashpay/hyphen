@@ -29,7 +29,7 @@ use hyphen_db::layout::undo_span;
 use hyphen_db::verify::{self, HyDbUndoDefect};
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbError, HyDbHash,
-  HyDbHeader, HyDbHeight, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut,
+  HyDbHeader, HyDbHeight, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut,
 };
 use sqlx::PgPool;
 
@@ -138,7 +138,7 @@ async fn build_chain(ingest: &hyphen_db::HyDbIngest, count: u64) -> TestResult {
   let tip = HyDbHash(prev);
   let target = Some(HyDbHeight::new(count as u32 - 1));
   loop {
-    let report = ingest.on_tip(tip).await?;
+    let report = ingest.on_tip(HyDbTipTarget::AtNode(tip)).await?;
     if report.to == target {
       return Ok(());
     }

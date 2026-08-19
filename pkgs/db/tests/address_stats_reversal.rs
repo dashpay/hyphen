@@ -56,7 +56,7 @@ use common::TempDb;
 use hyphen_db::layout::rich_list_floor;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
-  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
+  HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTipTarget, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType,
 };
 use sqlx::PgPool;
 
@@ -545,14 +545,14 @@ async fn run(tmp: &TempDb) -> TestResult {
   for (hash, prev) in [(1u8, 0u8), (2, 1), (3, 2)] {
     ingest.on_block(raw(hash, prev)).await?;
   }
-  ingest.on_tip(HyDbHash(h(3))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(3)))).await?;
   assert_projections_agree(&pool, "h2").await?;
   let counter_h2 = snapshot(&pool, "h2").await?;
 
   // The two blocks that exercise every leg of the recomputation.
   ingest.on_block(raw(4, 3)).await?;
   ingest.on_block(raw(5, 4)).await?;
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_projections_agree(&pool, "h4").await?;
   let counter_h4 = snapshot(&pool, "h4").await?;
 
@@ -605,13 +605,15 @@ async fn run(tmp: &TempDb) -> TestResult {
   // ---- Route one: a plain rewind and replay ------------------------------
   ingest.rewind_to(HyDbHeight::new(2)).await?;
   assert_identical(&pool, "h2", counter_h2, &[], "after rewind_to(2)").await?;
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_identical(&pool, "h4", counter_h4, &[], "after replaying to h4").await?;
 
   // ---- Route two: a branch switch and back -------------------------------
   ingest.on_block(raw(0x14, 3)).await?;
   ingest.on_block(raw(0x15, 0x14)).await?;
-  let report = ingest.on_tip(HyDbHash(h(0x15))).await?;
+  let report = ingest
+    .on_tip(HyDbTipTarget::AtNode(HyDbHash(h(0x15))))
+    .await?;
   let reorg = report
     .reorg
     .ok_or("switching branches must report a reorg")?;
@@ -639,7 +641,7 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // And back to the original branch: this is the assertion the whole file is
   // for — every column of every row identical to before the reorg.
-  ingest.on_tip(HyDbHash(h(5))).await?;
+  ingest.on_tip(HyDbTipTarget::AtNode(HyDbHash(h(5)))).await?;
   assert_identical(&pool, "h4", counter_h4, &[], "after re-connecting h3/h4").await?;
 
   // ---- The one thing reversal cannot recover from -----------------------
