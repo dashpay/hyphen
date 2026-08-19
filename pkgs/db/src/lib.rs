@@ -179,9 +179,9 @@ impl HyphenDb {
       tracing::warn!("undo ledger: {}", defect.describe());
     }
     tracing::debug!(
-      tip = ?undo.tip.map(|t| t.0),
-      undo_lo = ?undo.undo_lo.map(|h| h.0),
-      undo_hi = ?undo.undo_hi.map(|h| h.0),
+      tip = ?undo.tip.map(|t| t.get()),
+      undo_lo = ?undo.undo_lo.map(|h| h.get()),
+      undo_hi = ?undo.undo_hi.map(|h| h.get()),
       covered_rows = undo.covered_rows,
       expected_rows = undo.expected_rows,
       "undo coverage verified against the canonical tip"

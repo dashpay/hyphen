@@ -148,7 +148,7 @@ async fn build_chain(
     prev = hash;
   }
   let tip = HyDbHash(prev);
-  let target = Some(HyDbHeight(count as u32 - 1));
+  let target = Some(HyDbHeight::new(count as u32 - 1));
   loop {
     let report = ingest.on_tip(tip).await?;
     if report.to == target {
@@ -194,7 +194,7 @@ async fn run_depth_bound(tmp: &TempDb) -> TestResult {
   let tip_h = (count - 1) as i32;
   let supply_before = db.addrs().supply().await?.total;
 
-  let Err(err) = ingest.rewind_to(HyDbHeight(0)).await else {
+  let Err(err) = ingest.rewind_to(HyDbHeight::new(0)).await else {
     return Err("a rewind deeper than max_reorg_depth must be refused".into());
   };
   let msg = err.to_string();
@@ -203,14 +203,14 @@ async fn run_depth_bound(tmp: &TempDb) -> TestResult {
     "the refusal must name the deepest target it would accept; got {msg}"
   );
   assert!(
-    msg.contains("Nothing was rewound"),
+    msg.contains("nothing was rewound"),
     "the refusal must say it changed nothing; got {msg}"
   );
 
   // Nothing moved. Not the tip, and not a single projected total.
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(tip_h as u32)),
+    Some(HyDbHeight::new(tip_h as u32)),
     "a refused rewind must leave the tip exactly where it was"
   );
   assert_eq!(db.addrs().supply().await?.total, supply_before);
@@ -218,13 +218,93 @@ async fn run_depth_bound(tmp: &TempDb) -> TestResult {
   // ...and the edge of the bound is still admissible, so the bound is a bound
   // and not a blanket refusal.
   let edge = tip_h - bound;
-  let report = ingest.rewind_to(HyDbHeight(edge as u32)).await?;
-  assert_eq!(report.to, Some(HyDbHeight(edge as u32)));
+  let report = ingest.rewind_to(HyDbHeight::new(edge as u32)).await?;
+  assert_eq!(report.to, Some(HyDbHeight::new(edge as u32)));
   assert_eq!(
     report.reorg.map_or(0, |r| r.disconnected.len()),
     bound as usize
   );
   assert_eq!(db.addrs().supply().await?.total, i64::from(edge + 1) * 10);
+
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 1b. The width of the target itself
+// ---------------------------------------------------------------------------
+
+/// A target that cannot be represented as the `INTEGER` the projection stores
+/// heights at must be refused, not narrowed.
+///
+/// `u32::MAX as i32` is `-1`. A floor of `-1` against a tip of 5 measures a
+/// span of 6 blocks, which every depth bound accepts, and the disconnect loop
+/// then walks the chain to height 0 and commits an empty projection. The
+/// operator asked for an absurd height and got a wiped database.
+#[tokio::test]
+async fn a_target_wider_than_the_stored_height_is_refused() -> TestResult {
+  let tmp = TempDb::create().await?;
+  let result = run_target_width(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn run_target_width(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let ingest = db.ingest(Arc::new(TestSrc)).await?;
+  build_chain(&ingest, 0xE100, 6).await?;
+  let supply_before = db.addrs().supply().await?.total;
+
+  for target in [u32::MAX, 0x8000_0000, i32::MAX as u32 + 1] {
+    let Err(err) = ingest.rewind_to(HyDbHeight::new(target)).await else {
+      return Err(format!("a target of {target} must be refused, not narrowed").into());
+    };
+    assert!(
+      err.to_string().contains("exceeds the stored INTEGER range"),
+      "the refusal must name the width, not a wrapped depth; got {err}"
+    );
+  }
+
+  assert_eq!(
+    db.status().tip().await?.map(|t| t.height),
+    Some(HyDbHeight::new(5)),
+    "a refused rewind must leave the tip where it was"
+  );
+  assert_eq!(db.addrs().supply().await?.total, supply_before);
+
+  Ok(())
+}
+
+/// A target at or above the tip disconnects nothing and touches nothing.
+///
+/// The admissibility gates pass trivially for a non-positive span, so without
+/// an early return the call still leaves stepped mode, re-applies the storage
+/// profile and settles the open partition's deferred indexes — minutes of DDL
+/// under the ingest lock, for a request that changes no rows.
+#[tokio::test]
+async fn a_target_at_or_above_the_tip_is_a_no_op() -> TestResult {
+  let tmp = TempDb::create().await?;
+  let result = run_no_op(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn run_no_op(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let ingest = db.ingest(Arc::new(TestSrc)).await?;
+  build_chain(&ingest, 0xE200, 6).await?;
+  let supply_before = db.addrs().supply().await?.total;
+
+  for target in [5_u32, 6, 99] {
+    let report = ingest.rewind_to(HyDbHeight::new(target)).await?;
+    assert!(
+      report.reorg.is_none(),
+      "a target at or above the tip must disconnect nothing; got {:?}",
+      report.reorg
+    );
+    assert_eq!(report.from, report.to, "the tip must not move");
+    assert_eq!(report.to, Some(HyDbHeight::new(5)));
+  }
+  assert_eq!(db.addrs().supply().await?.total, supply_before);
 
   Ok(())
 }
@@ -270,7 +350,7 @@ async fn run_undo_hole(tmp: &TempDb) -> TestResult {
     .rows_affected();
   assert_eq!(removed, 1, "height 3 must have had a summary undo row");
 
-  let Err(err) = ingest.rewind_to(HyDbHeight(1)).await else {
+  let Err(err) = ingest.rewind_to(HyDbHeight::new(1)).await else {
     return Err("a rewind across a hole in undo_blocks must be refused".into());
   };
   let msg = err.to_string();
@@ -287,7 +367,7 @@ async fn run_undo_hole(tmp: &TempDb) -> TestResult {
   // because the span is admissible or it is not.
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(5)),
+    Some(HyDbHeight::new(5)),
     "a refused rewind must not have disconnected the reversible prefix"
   );
   assert_eq!(db.addrs().supply().await?.total, supply_before);
@@ -300,8 +380,8 @@ async fn run_undo_hole(tmp: &TempDb) -> TestResult {
   );
 
   // A target that clears the hole is still accepted.
-  let report = ingest.rewind_to(HyDbHeight(4)).await?;
-  assert_eq!(report.to, Some(HyDbHeight(4)));
+  let report = ingest.rewind_to(HyDbHeight::new(4)).await?;
+  assert_eq!(report.to, Some(HyDbHeight::new(4)));
 
   Ok(())
 }
@@ -361,7 +441,7 @@ async fn run_mid_span_trap(tmp: &TempDb) -> TestResult {
     .rows_affected();
   assert!(removed > 0, "height 4 must have had address undo to remove");
 
-  let Err(err) = ingest.rewind_to(HyDbHeight(1)).await else {
+  let Err(err) = ingest.rewind_to(HyDbHeight::new(1)).await else {
     return Err("a disconnect with no address undo must refuse".into());
   };
   let msg = err.to_string();

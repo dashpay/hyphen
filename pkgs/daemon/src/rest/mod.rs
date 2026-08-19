@@ -498,7 +498,7 @@ impl AppState {
       .tip()
       .await
       .map_err(|e| error::ApiError::internal(format!("read {stage_name} tip: {e}")))?
-      .map_or(-1, |tip| tip.height.0 as i32);
+      .map_or(-1, |tip| tip.height.get() as i32);
     if height < 0 {
       return Err(error::ApiError::service_unavailable(format!(
         "{stage_name} index is not ready",

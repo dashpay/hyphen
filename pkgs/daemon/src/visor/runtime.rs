@@ -207,7 +207,7 @@ impl ServeRuntime {
       .await
       .ok()
       .flatten()
-      .map(|tip| tip.height.0);
+      .map(|tip| tip.height.get());
     crate::policy::server_settings::review_at_startup(&db, pool_total, startup_tip).await;
 
     // From here on the layout is whatever the *database* says it is, not

@@ -350,7 +350,7 @@ async fn run(tmp: &TempDb) -> TestResult {
     );
   }
   let report = ingest.on_tip(HyDbHash(h(5))).await?;
-  assert_eq!(report.to, Some(HyDbHeight(4)));
+  assert_eq!(report.to, Some(HyDbHeight::new(4)));
   assert!(report.reorg.is_none(), "linear connect is not a reorg");
 
   // --- Spend resolution + balances -----------------------------------------
@@ -423,7 +423,7 @@ async fn run(tmp: &TempDb) -> TestResult {
     2,
     "old heights 3 and 4 disconnected"
   );
-  assert_eq!(report.to, Some(HyDbHeight(4)));
+  assert_eq!(report.to, Some(HyDbHeight::new(4)));
 
   let tip = db.status().tip().await?.ok_or("tip after reorg")?;
   assert_eq!(tip.hash, HyDbHash(h(7)));

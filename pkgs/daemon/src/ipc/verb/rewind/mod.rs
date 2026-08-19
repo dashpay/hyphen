@@ -11,15 +11,17 @@
 //! uses. The raw blocks stay absorbed, so the ingest loop reconnects them on
 //! its next cycle unless the node also rewound.
 //!
-//! `target_height` arrives off the wire and is *not* checked here. It used to
-//! be checked nowhere at all; it is now bounded inside `rewind_to`, against
-//! `[db.ingest] max_reorg_depth` and against the undo rows actually on disk,
-//! before that call mutates anything. That is the right place for it — the
-//! bound is a property of the projection's retention, not of the IPC surface,
-//! and a check here would be a second copy of it that could drift. What this
-//! module owes the operator is that the refusal reaches them intact, target
-//! and stopping height included, which is why the failure arm below repeats
-//! the target rather than emitting a bare `{e}`.
+//! `target_height` arrives off the wire and is not checked here. `rewind_to`
+//! bounds it against `[db.ingest] max_reorg_depth` and against the undo rows
+//! actually on disk before mutating anything, and narrows it through
+//! `HyDbHeight::as_i32` so a value above `i32::MAX` is refused rather than
+//! wrapped into a negative floor. The bound belongs there because it is a
+//! property of the projection's retention, not of the IPC surface, and a
+//! copy here could drift from it.
+//!
+//! What this module owes the operator is that the refusal reaches them
+//! intact, target and stopping height included, which is why the failure arm
+//! below repeats the target rather than emitting a bare `{e}`.
 
 use hyphen_db::HyDbHeight;
 
@@ -32,7 +34,7 @@ pub async fn rewind(ctx: &CommandCtx, id: u64, target_height: u32) {
     id,
     format!("rewind_started target={target_height}"),
   );
-  match ctx.ingest.rewind_to(HyDbHeight(target_height)).await {
+  match ctx.ingest.rewind_to(HyDbHeight::new(target_height)).await {
     Ok(report) => {
       let removed = report.reorg.map_or(0, |r| r.disconnected.len());
       emit_command_result(
@@ -41,7 +43,7 @@ pub async fn rewind(ctx: &CommandCtx, id: u64, target_height: u32) {
         true,
         format!(
           "rewind_complete tip={} disconnected={removed}",
-          report.to.map_or(-1, |h| i64::from(h.0))
+          report.to.map_or(-1, |h| i64::from(h.get()))
         ),
       );
     }
@@ -64,7 +66,7 @@ pub async fn disconnect_tip(ctx: &CommandCtx, id: u64) {
     }
   };
   match tip {
-    Some(tip) if tip.height.0 > 0 => rewind(ctx, id, tip.height.0 - 1).await,
+    Some(tip) if tip.height.get() > 0 => rewind(ctx, id, tip.height.get() - 1).await,
     Some(_) => emit_command_result(
       &ctx.event_tx,
       id,

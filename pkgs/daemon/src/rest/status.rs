@@ -44,7 +44,7 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse
         "query status tip",
       )
     })?
-    .map_or(-1, |tip| tip.height.0 as i32);
+    .map_or(-1, |tip| tip.height.get() as i32);
 
   // Derivation is atomic per block in the storage engine, so every enabled
   // stage is lock-step at the canonical tip height. `updated_at` reflects the

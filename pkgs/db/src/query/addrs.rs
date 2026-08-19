@@ -340,7 +340,7 @@ impl HyDbAddrIdx for PgAddrIdx {
     let next = items.last().filter(|_| has_more).map(|t| {
       HyDbCursor(format!(
         "{}:{}:{}",
-        t.block_height.0,
+        t.block_height.get(),
         t.block_pos,
         hex::encode(t.txid.as_bytes())
       ))
@@ -414,7 +414,7 @@ impl HyDbAddrIdx for PgAddrIdx {
     let next = items.last().filter(|_| has_more).map(|u| {
       HyDbCursor(format!(
         "{}:{}",
-        u.block_height.0,
+        u.block_height.get(),
         hex::encode(u.outpoint.packed())
       ))
     });

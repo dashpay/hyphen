@@ -76,7 +76,11 @@ impl HyDbUndoGap {
   /// How many heights this run covers.
   #[must_use]
   pub fn heights(&self) -> u32 {
-    self.hi.0.saturating_sub(self.lo.0).saturating_add(1)
+    self
+      .hi
+      .get()
+      .saturating_sub(self.lo.get())
+      .saturating_add(1)
   }
 }
 
@@ -139,14 +143,14 @@ impl HyDbUndoDefect {
       Self::NoCoverage { tip } => format!(
         "canonical tip {} has no undo coverage at all (undo_blocks is empty); \
          the first reorg could not roll back",
-        tip.0
+        tip.get()
       ),
       Self::TipUncovered { tip, undo_hi } => format!(
         "undo coverage stops at height {} but the canonical tip is {} — \
          {} block(s) at the tip cannot be reversed",
-        undo_hi.0,
-        tip.0,
-        tip.0.saturating_sub(undo_hi.0)
+        undo_hi.get(),
+        tip.get(),
+        tip.get().saturating_sub(undo_hi.get())
       ),
       Self::Hole {
         missing_heights,
@@ -156,7 +160,7 @@ impl HyDbUndoDefect {
       } => {
         let runs = gaps
           .iter()
-          .map(|g| format!("{}..={}", g.lo.0, g.hi.0))
+          .map(|g| format!("{}..={}", g.lo.get(), g.hi.get()))
           .collect::<Vec<_>>()
           .join(", ");
         let more = if *truncated { ", ..." } else { "" };
@@ -176,7 +180,7 @@ impl HyDbUndoDefect {
       Self::StaleAboveTip { tip, rows } => format!(
         "{rows} undo row(s) sit above the canonical tip ({}); a rollback left \
          the undo ledger behind",
-        tip.map_or_else(|| "none".to_owned(), |t| t.0.to_string())
+        tip.map_or_else(|| "none".to_owned(), |t| t.get().to_string())
       ),
       Self::ShallowRetention { retained, required } => format!(
         "undo retains {retained} block(s) below the tip but db.ingest.max_reorg_depth \
@@ -412,7 +416,7 @@ async fn absent_partitions(pool: &PgPool, gaps: &[HyDbUndoGap]) -> HyDbResult<Ve
 
   let mut names: Vec<String> = Vec::new();
   for gap in gaps {
-    for idx in (gap.lo.0 / span)..=(gap.hi.0 / span) {
+    for idx in (gap.lo.get() / span)..=(gap.hi.get() / span) {
       let name = format!("undo_blocks_p{idx}");
       if !names.contains(&name) {
         names.push(name);
@@ -440,7 +444,7 @@ mod tests {
   use super::*;
 
   fn h(v: u32) -> HyDbHeight {
-    HyDbHeight(v)
+    HyDbHeight::new(v)
   }
 
   fn gap(lo: u32, hi: u32) -> HyDbUndoGap {

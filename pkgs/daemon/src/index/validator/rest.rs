@@ -213,7 +213,7 @@ pub async fn list_validators(
       .map(|row| {
         encode_cursor(&ValidatorCursor {
           as_of_height,
-          registered_height: row.registered_height.0 as i32,
+          registered_height: row.registered_height.get() as i32,
           pro_tx_hash: utils::view_hex(row.protx_hash.as_bytes(), HashEndian::Ser),
           status: params.status.clone(),
           validator_type: params.validator_type.clone(),
@@ -303,7 +303,7 @@ pub async fn get_validator(
       txid: utils::view_hex(entry.txid.as_bytes(), HashEndian::Ser),
       tx_type: tx_type_str(entry.tx_type).to_owned(),
       payload: entry.payload.clone(),
-      block_height: entry.block_height.0 as i32,
+      block_height: entry.block_height.get() as i32,
     })
     .collect();
   let addresses = row_addresses(&row);
@@ -321,8 +321,8 @@ pub async fn get_validator(
     validator_type: vl_type_str(row.validator_type).to_owned(),
     status: row.status.clone(),
     services,
-    registered_height: row.registered_height.0 as i32,
-    last_updated_height: row.last_updated_height.0 as i32,
+    registered_height: row.registered_height.get() as i32,
+    last_updated_height: row.last_updated_height.get() as i32,
     history,
   }))
 }
@@ -345,8 +345,8 @@ fn row_to_summary(
     validator_type: vl_type_str(row.validator_type).to_owned(),
     status: row.status.clone(),
     services: row_services(row),
-    registered_height: row.registered_height.0 as i32,
-    last_updated_height: row.last_updated_height.0 as i32,
+    registered_height: row.registered_height.get() as i32,
+    last_updated_height: row.last_updated_height.get() as i32,
   }
 }
 
@@ -589,8 +589,8 @@ mod tests {
       operator_reward: 0,
       validator_type,
       status: status.to_owned(),
-      registered_height: hyphen_db::HyDbHeight(123),
-      last_updated_height: hyphen_db::HyDbHeight(123),
+      registered_height: hyphen_db::HyDbHeight::new(123),
+      last_updated_height: hyphen_db::HyDbHeight::new(123),
     }
   }
 

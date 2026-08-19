@@ -287,28 +287,28 @@ async fn blocks(db: &HyphenDb) -> TestResult {
   assert!(p2.next_cursor.is_none());
 
   // by_height / by_hash / exists / height_for_hash / hash_for_height.
-  assert!(db.blocks().by_height(HyDbHeight(2)).await?.is_some());
+  assert!(db.blocks().by_height(HyDbHeight::new(2)).await?.is_some());
   assert!(db.blocks().by_hash(HyDbHash([0x22; 32])).await?.is_some());
   assert!(db.blocks().by_hash(HyDbHash([0x99; 32])).await?.is_none());
-  assert!(db.blocks().exists(HyDbHeight(1)).await?);
-  assert!(!db.blocks().exists(HyDbHeight(999)).await?);
+  assert!(db.blocks().exists(HyDbHeight::new(1)).await?);
+  assert!(!db.blocks().exists(HyDbHeight::new(999)).await?);
   assert_eq!(
     db.blocks().height_for_hash(HyDbHash([0x11; 32])).await?,
-    Some(HyDbHeight(1))
+    Some(HyDbHeight::new(1))
   );
   assert_eq!(
-    db.blocks().hash_for_height(HyDbHeight(3)).await?,
+    db.blocks().hash_for_height(HyDbHeight::new(3)).await?,
     Some(HyDbHash([0x33; 32]))
   );
 
   // txs of a block: both arms (block 2 has two txs).
-  let t1 = db.blocks().txs(HyDbHeight(2), 1, None).await?;
+  let t1 = db.blocks().txs(HyDbHeight::new(2), 1, None).await?;
   assert_eq!(t1.items.len(), 1);
   let cur = t1
     .next_cursor
     .clone()
     .ok_or("block-txs page 1 has a cursor")?;
-  let t2 = db.blocks().txs(HyDbHeight(2), 1, Some(cur)).await?;
+  let t2 = db.blocks().txs(HyDbHeight::new(2), 1, Some(cur)).await?;
   assert_eq!(t2.items.len(), 1);
 
   // raw_bytes / topology / search_prefix.
@@ -445,15 +445,25 @@ async fn validators(db: &HyphenDb) -> TestResult {
 
 async fn metrics(db: &HyphenDb) -> TestResult {
   let latest = db.metrics().latest().await?.ok_or("latest metric")?;
-  assert_eq!(latest.height, HyDbHeight(3), "latest is the highest block");
+  assert_eq!(
+    latest.height,
+    HyDbHeight::new(3),
+    "latest is the highest block"
+  );
 
-  let all = db.metrics().range(HyDbHeight(1), HyDbHeight(3), 1).await?;
+  let all = db
+    .metrics()
+    .range(HyDbHeight::new(1), HyDbHeight::new(3), 1)
+    .await?;
   assert_eq!(all.len(), 3);
 
   // Step 2 keeps heights divisible by 2 within [1,3] → just height 2.
-  let stepped = db.metrics().range(HyDbHeight(1), HyDbHeight(3), 2).await?;
+  let stepped = db
+    .metrics()
+    .range(HyDbHeight::new(1), HyDbHeight::new(3), 2)
+    .await?;
   assert_eq!(
-    stepped.iter().map(|m| m.height.0).collect::<Vec<_>>(),
+    stepped.iter().map(|m| m.height.get()).collect::<Vec<_>>(),
     vec![2]
   );
   Ok(())
@@ -480,7 +490,7 @@ async fn search_and_status(db: &HyphenDb) -> TestResult {
   );
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(3))
+    Some(HyDbHeight::new(3))
   );
   assert!(
     !db.status().sizes().await?.is_empty(),

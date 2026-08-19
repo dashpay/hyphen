@@ -136,7 +136,7 @@ async fn build_chain(ingest: &hyphen_db::HyDbIngest, count: u64) -> TestResult {
     prev = hash;
   }
   let tip = HyDbHash(prev);
-  let target = Some(HyDbHeight(count as u32 - 1));
+  let target = Some(HyDbHeight::new(count as u32 - 1));
   loop {
     let report = ingest.on_tip(tip).await?;
     if report.to == target {
@@ -213,9 +213,9 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
     "a freshly synced chain must be clean, got {:?}",
     report.defects
   );
-  assert_eq!(report.tip.map(|h| h.0), Some(tip));
-  assert_eq!(report.undo_lo.map(|h| h.0), Some(0));
-  assert_eq!(report.undo_hi.map(|h| h.0), Some(tip));
+  assert_eq!(report.tip.map(|h| h.get()), Some(tip));
+  assert_eq!(report.undo_lo.map(|h| h.get()), Some(0));
+  assert_eq!(report.undo_hi.map(|h| h.get()), Some(tip));
   assert_eq!(report.expected_rows, i64::from(BLOCKS as u32));
   assert_eq!(report.covered_rows, report.expected_rows);
   assert!(report.startup_refusal().is_none());
@@ -257,7 +257,7 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
     "a stale row above the tip must not refuse startup"
   );
   // The floor and the covered window ignore it entirely.
-  assert_eq!(report.undo_hi.map(|h| h.0), Some(tip));
+  assert_eq!(report.undo_hi.map(|h| h.get()), Some(tip));
   // ...and a daemon can still open the database.
   drop(db);
   let db = tmp.open().await?;
@@ -297,7 +297,7 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
     "got {:?}",
     report.defects
   );
-  assert_eq!(report.undo_lo.map(|h| h.0), Some(span as u32));
+  assert_eq!(report.undo_lo.map(|h| h.get()), Some(span as u32));
   assert_eq!(report.expected_rows, i64::from(tip) - i64::from(span) + 1);
   assert_eq!(report.covered_rows, report.expected_rows);
   // Put it back: with the floor at genesis again, the *next* partition to go
@@ -334,8 +334,8 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
       assert_eq!(*missing_heights, i64::from(span));
       assert!(!truncated);
       assert_eq!(gaps.len(), 1, "one contiguous run, got {gaps:?}");
-      assert_eq!(gaps[0].lo.0, span as u32);
-      assert_eq!(gaps[0].hi.0, (span * 2 - 1) as u32);
+      assert_eq!(gaps[0].lo.get(), span as u32);
+      assert_eq!(gaps[0].hi.get(), (span * 2 - 1) as u32);
       assert_eq!(gaps[0].heights(), span as u32);
       // The distinguishing detail: the partition is gone, not merely empty.
       assert_eq!(dropped_partitions, &["undo_blocks_p1".to_owned()]);
@@ -413,7 +413,7 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
     .execute(&pool)
     .await?;
   let report = verify::undo_coverage(&pool).await?;
-  assert_eq!(report.undo_hi.map(|h| h.0), Some(tip - 3));
+  assert_eq!(report.undo_hi.map(|h| h.get()), Some(tip - 3));
   assert!(
     report
       .defects
@@ -507,7 +507,7 @@ async fn a_pruned_seed_opens_and_a_hole_above_its_floor_does_not() -> TestResult
   assert_eq!(report.undo_hi, Some(tip), "undo must reach the tip");
   assert_eq!(report.covered_rows, report.expected_rows);
   assert!(
-    floor.0 > 0,
+    floor.get() > 0,
     "this fixture is only interesting once pruning has moved the floor"
   );
 
@@ -540,7 +540,7 @@ async fn a_pruned_seed_opens_and_a_hole_above_its_floor_does_not() -> TestResult
   // 3. A hole above the new floor. Ten heights out of the middle: the bounds
   //    are untouched, so only the count can see it.
   let new_floor = pruned.undo_lo.ok_or("no undo rows left")?;
-  let gap_lo = i32::try_from((i64::from(new_floor.0) + i64::from(tip.0)) / 2)?;
+  let gap_lo = i32::try_from((i64::from(new_floor.get()) + i64::from(tip.get())) / 2)?;
   let gap_hi = gap_lo + 9;
   sqlx::query("DELETE FROM undo_blocks WHERE height BETWEEN $1 AND $2")
     .bind(gap_lo)
@@ -567,8 +567,8 @@ async fn a_pruned_seed_opens_and_a_hole_above_its_floor_does_not() -> TestResult
     }) => {
       assert_eq!(*missing_heights, 10);
       assert_eq!(gaps.len(), 1, "one run, got {gaps:?}");
-      assert_eq!(gaps[0].lo.0, gap_lo as u32);
-      assert_eq!(gaps[0].hi.0, gap_hi as u32);
+      assert_eq!(gaps[0].lo.get(), gap_lo as u32);
+      assert_eq!(gaps[0].hi.get(), gap_hi as u32);
       assert!(
         dropped_partitions.is_empty(),
         "rows are missing, not a partition, got {dropped_partitions:?}"

@@ -179,7 +179,7 @@ pub async fn get_address_txs(
         encode_cursor(&AddressTxCursor {
           as_of_height,
           address: addr.clone(),
-          block_height: row.block_height.0 as i32,
+          block_height: row.block_height.get() as i32,
           block_pos: row.block_pos,
           txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
         })
@@ -212,7 +212,7 @@ fn hydb_addr_tx_summary(
 ) -> Result<AddressTxSummary, ApiError> {
   Ok(AddressTxSummary {
     txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
-    block_height: Some(row.block_height.0 as i32),
+    block_height: Some(row.block_height.get() as i32),
     block_pos: Some(row.block_pos),
     block_time: Some(rfc3339_time(row.block_time)?),
     version: row.version as i16,
@@ -337,7 +337,7 @@ pub async fn get_address_utxos(
         encode_cursor(&AddressUtxoCursor {
           as_of_height,
           address: addr.clone(),
-          block_height: row.block_height.0 as i32,
+          block_height: row.block_height.get() as i32,
           txid: utils::view_hex(row.outpoint.txid.as_bytes(), HashEndian::Ser),
           vout_index: row.outpoint.vout as i32,
         })
@@ -353,7 +353,7 @@ pub async fn get_address_utxos(
       txid: utils::view_hex(row.outpoint.txid.as_bytes(), HashEndian::Ser),
       vout: row.outpoint.vout as i32,
       value: row.value,
-      height: row.block_height.0 as i32,
+      height: row.block_height.get() as i32,
       script_pub_key: hex::encode(&row.script_pubkey),
     })
     .collect();
@@ -548,7 +548,7 @@ mod tests {
   fn hydb_addr_tx_summary_keeps_address_relative_fields() {
     let row = hyphen_db::query::HyDbQrAddrTx {
       txid: hyphen_db::HyDbHash([0x11; 32]),
-      block_height: hyphen_db::HyDbHeight(7),
+      block_height: hyphen_db::HyDbHeight::new(7),
       block_pos: 0,
       block_time: 7,
       version: 3,

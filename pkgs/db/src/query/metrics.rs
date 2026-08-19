@@ -59,7 +59,7 @@ impl HyDbMetricIdx for PgMetricIdx {
     .map_err(|e| HyDbError::pg("latest metrics", e))?;
 
     Ok(row.map(|r| HyDbQrMetricPoint {
-      height: HyDbHeight(r.height.max(0) as u32),
+      height: HyDbHeight::new(r.height.max(0) as u32),
       tx_count: r.tx_count,
       utxos_spendable: r.utxos_spendable,
       utxos_unspendable: r.utxos_unspendable,
@@ -91,8 +91,8 @@ impl HyDbMetricIdx for PgMetricIdx {
             AND ($3 <= 1 OR (height % $3) = 0)
           ORDER BY height ASC
           LIMIT $4"#,
-      from.0 as i32,
-      to.0 as i32,
+      from.as_i32()?,
+      to.as_i32()?,
       step,
       MAX_POINTS
     )
@@ -104,7 +104,7 @@ impl HyDbMetricIdx for PgMetricIdx {
       rows
         .into_iter()
         .map(|r| HyDbQrMetricPoint {
-          height: HyDbHeight(r.height.max(0) as u32),
+          height: HyDbHeight::new(r.height.max(0) as u32),
           tx_count: r.tx_count,
           utxos_spendable: r.utxos_spendable,
           utxos_unspendable: r.utxos_unspendable,

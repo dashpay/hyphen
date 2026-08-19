@@ -95,17 +95,52 @@ impl<'r> Decode<'r, Postgres> for HyDbHash {
 
 /// A block height. Canonical chain position; negative sentinels never cross the
 /// boundary — absence is `Option<HyDbHeight>`.
+///
+/// The inner field is private so every narrowing runs through
+/// [`Self::as_i32`]. A bare `as i32` on a height that arrived over the wire
+/// wraps large values into negative sentinels, which the depth bounds below
+/// then read as a shallow, admissible span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct HyDbHeight(pub u32);
+pub struct HyDbHeight(u32);
 
 impl HyDbHeight {
+  /// Wrap a height that is already in range, such as one counted up from
+  /// zero or read back through [`Self::try_from_i32`].
+  pub const fn new(height: u32) -> Self {
+    Self(height)
+  }
+
+  /// Read the height for arithmetic and formatting.
+  pub const fn get(self) -> u32 {
+    self.0
+  }
+
   /// Build from a stored `INTEGER`, rejecting negative sentinels: absence is
   /// `Option<HyDbHeight>`, never a negative height (an unchecked `as u32`
   /// would silently turn `-1` into ~4.29 billion).
+  ///
+  /// # Errors
+  ///
+  /// Returns `Decode` when `height` is negative.
   pub fn try_from_i32(height: i32) -> Result<Self, HyDbError> {
     u32::try_from(height)
       .map(Self)
       .map_err(|_| HyDbError::Decode(format!("negative height {height} crossed the boundary")))
+  }
+
+  /// Narrow to the `INTEGER` width the projection stores heights at.
+  ///
+  /// # Errors
+  ///
+  /// Returns `Decode` when the height exceeds `i32::MAX`, which no real
+  /// chain reaches but a wire-supplied target can claim.
+  pub fn as_i32(self) -> Result<i32, HyDbError> {
+    i32::try_from(self.0).map_err(|_| {
+      HyDbError::Decode(format!(
+        "height {} exceeds the stored INTEGER range",
+        self.0
+      ))
+    })
   }
 }
 
@@ -244,5 +279,35 @@ mod tests {
     let s = format!("{:?}", HyDbHash(bytes));
     assert!(s.ends_with("ab"));
     assert_eq!(s.len(), 64);
+  }
+
+  #[test]
+  fn height_narrowing_refuses_what_a_cast_would_wrap() {
+    // The three values a bare `as i32` turns into a negative floor, which
+    // every depth bound downstream then reads as an admissible span.
+    for wide in [u32::MAX, 0x8000_0000, i32::MAX as u32 + 1] {
+      assert!(
+        HyDbHeight::new(wide).as_i32().is_err(),
+        "height {wide} must not narrow"
+      );
+    }
+    assert_eq!(HyDbHeight::new(0).as_i32().ok(), Some(0));
+    assert_eq!(
+      HyDbHeight::new(i32::MAX as u32).as_i32().ok(),
+      Some(i32::MAX)
+    );
+  }
+
+  #[test]
+  fn height_round_trips_through_the_stored_width() {
+    for h in [0_i32, 1, 860_000, i32::MAX] {
+      assert_eq!(
+        HyDbHeight::try_from_i32(h)
+          .and_then(HyDbHeight::as_i32)
+          .ok(),
+        Some(h)
+      );
+    }
+    assert!(HyDbHeight::try_from_i32(-1).is_err());
   }
 }

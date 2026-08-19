@@ -17,7 +17,7 @@ pub(crate) fn hydb_hash(bytes: &[u8]) -> Result<hyphen_db::HyDbHash, ApiError> {
 
 /// Convert a height into the storage-layer height newtype (negatives clamp to 0).
 pub(crate) fn hydb_height(height: i32) -> hyphen_db::HyDbHeight {
-  hyphen_db::HyDbHeight(height.max(0) as u32)
+  hyphen_db::HyDbHeight::new(height.max(0) as u32)
 }
 
 /// Map a storage-engine error onto an API error, preserving its class.

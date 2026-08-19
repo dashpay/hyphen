@@ -136,13 +136,13 @@ async fn run_read_path(tmp: &TempDb) -> TestResult {
   seed_minimal_chain(&pool, &txid, address, value).await?;
 
   // Blocks
-  let detail = db.blocks().by_height(HyDbHeight(1)).await?;
+  let detail = db.blocks().by_height(HyDbHeight::new(1)).await?;
   assert!(detail.is_some(), "block 1 should exist");
   let list = db.blocks().list(10, None).await?;
   assert_eq!(list.items.len(), 1, "one block listed");
   assert!(list.next_cursor.is_none(), "single page");
   let tip = db.status().tip().await?;
-  assert_eq!(tip.map(|t| t.height), Some(HyDbHeight(1)));
+  assert_eq!(tip.map(|t| t.height), Some(HyDbHeight::new(1)));
 
   // Transactions
   let tx = db.txs().get(HyDbHash(txid)).await?;
@@ -247,8 +247,8 @@ async fn run_validators(tmp: &TempDb) -> TestResult {
   assert_eq!(v.owner_address.map(|a| a.0), Some("yOwnerAddr".to_owned()));
   assert_eq!(v.addr_core_p2p, vec!["1.2.3.4:9999".to_owned()]);
   assert_eq!(v.validator_type, HyDbVlType::Evonode);
-  assert_eq!(v.registered_height, HyDbHeight(5));
-  assert_eq!(v.last_updated_height, HyDbHeight(7));
+  assert_eq!(v.registered_height, HyDbHeight::new(5));
+  assert_eq!(v.last_updated_height, HyDbHeight::new(7));
 
   // list: unfiltered returns it; the type filter includes/excludes correctly.
   let all = db.validators().list(None, None, 10, None).await?;

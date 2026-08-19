@@ -86,7 +86,7 @@ pub async fn list_blocks(
       .map(|row| {
         encode_cursor(&BlockCursor {
           as_of_height,
-          height: row.height.0 as i32,
+          height: row.height.get() as i32,
         })
       })
       .transpose()?
@@ -100,7 +100,7 @@ pub async fn list_blocks(
     .iter()
     .map(|row| {
       Ok(BlockSummary {
-        height: row.height.0 as i32,
+        height: row.height.get() as i32,
         hash: utils::view_hex(row.hash.as_bytes(), HashEndian::Ser),
         previousblockhash: utils::view_hex(row.prev_hash.as_bytes(), HashEndian::Ser),
         time: rfc3339_time(i64::from(row.time))?,
@@ -218,7 +218,7 @@ fn canonical_block_detail(
     super::overlay::block_live_from_snapshot(chainlock_snapshot.as_deref(), row.hash.as_bytes())?;
   Ok(BlockDetail {
     as_of_height,
-    height: row.height.0 as i32,
+    height: row.height.get() as i32,
     hash: utils::view_hex(row.hash.as_bytes(), HashEndian::Ser),
     previousblockhash: utils::view_hex(row.prev_hash.as_bytes(), HashEndian::Ser),
     merkleroot: utils::view_hex(row.merkle_root.as_bytes(), HashEndian::Ser),
@@ -253,11 +253,11 @@ fn orphan_block_detail(
   topo: &hyphen_db::query::HyDbQrBlockRef,
   raw: &[u8],
 ) -> Result<BlockDetail, ApiError> {
-  let ctx = crate::index::block_ctx::BlockCtx::from_raw(topo.height.0, raw.to_vec())
+  let ctx = crate::index::block_ctx::BlockCtx::from_raw(topo.height.get(), raw.to_vec())
     .map_err(|e| ApiError::internal(format!("decode orphan block: {e}")))?;
   let block = ctx.block();
   let header = &block.header;
-  let cb = crate::index::block::util::extract_cbtx_fields(block, topo.height.0);
+  let cb = crate::index::block::util::extract_cbtx_fields(block, topo.height.get());
   let hash = ctx.block_hash();
   let bits = i32::try_from(header.bits).map_err(|_| ApiError::internal("block bits exceed i32"))?;
   let time =
@@ -266,7 +266,7 @@ fn orphan_block_detail(
   let live = super::overlay::block_live_from_snapshot(chainlock_snapshot.as_deref(), &hash)?;
   Ok(BlockDetail {
     as_of_height,
-    height: topo.height.0 as i32,
+    height: topo.height.get() as i32,
     hash: utils::view_hex(&hash, HashEndian::Ser),
     previousblockhash: utils::view_hex(&header.prev_hash.to_bytes(), HashEndian::Ser),
     merkleroot: utils::view_hex(&header.merkle_root.to_bytes(), HashEndian::Ser),
@@ -603,7 +603,7 @@ async fn resolve_block_height(state: &AppState, hash_or_height: &str) -> Result<
         .await
         .map_err(|e| hydb_err(e, "block height for hash"))?
       {
-        return Ok(height.0 as i32);
+        return Ok(height.get() as i32);
       }
     }
     Err(ApiError::not_found("block not found"))

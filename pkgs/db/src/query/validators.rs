@@ -160,7 +160,7 @@ impl HyDbVlIdx for PgVlIdx {
     let next = items.last().filter(|_| has_more).map(|v| {
       HyDbCursor(format!(
         "{}:{}",
-        v.registered_height.0,
+        v.registered_height.get(),
         hex::encode(v.protx_hash.as_bytes())
       ))
     });

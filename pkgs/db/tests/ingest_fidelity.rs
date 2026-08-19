@@ -135,14 +135,14 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // Canonicalize to the tip.
   let report = ingest.on_tip(HyDbHash(h(4))).await?;
-  assert_eq!(report.to, Some(HyDbHeight(3)));
+  assert_eq!(report.to, Some(HyDbHeight::new(3)));
   assert!(report.reorg.is_none(), "linear connect is not a reorg");
 
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(3))
+    Some(HyDbHeight::new(3))
   );
-  assert!(db.blocks().by_height(HyDbHeight(0)).await?.is_some());
+  assert!(db.blocks().by_height(HyDbHeight::new(0)).await?.is_some());
   assert_eq!(db.txs().total().await?, 4);
 
   let summary = db.addrs().summary(HyDbAddress(ADDRESS.to_owned())).await?;
@@ -164,7 +164,7 @@ async fn run(tmp: &TempDb) -> TestResult {
     2,
     "old heights 2 and 3 disconnected"
   );
-  assert_eq!(report.to, Some(HyDbHeight(3)));
+  assert_eq!(report.to, Some(HyDbHeight::new(3)));
 
   // New canonical tip is alt3.
   let tip = db.status().tip().await?.ok_or("tip after reorg")?;

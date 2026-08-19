@@ -63,7 +63,7 @@ impl MemDb {
   /// Seed an explicit canonical tip, marking every stage as ready.
   pub(crate) fn with_tip(mut self, height: u32, hash: [u8; 32]) -> Self {
     self.tip = Some(HyDbQrChainTip {
-      height: HyDbHeight(height),
+      height: HyDbHeight::new(height),
       hash: HyDbHash(hash),
     });
     self
@@ -84,7 +84,10 @@ impl MemDb {
   }
 
   fn block_by_height(&self, height: u32) -> Option<&HyDbQrBlockDetail> {
-    self.blocks.iter().find(|block| block.height.0 == height)
+    self
+      .blocks
+      .iter()
+      .find(|block| block.height.get() == height)
   }
 
   fn block_by_hash(&self, hash: &HyDbHash) -> Option<&HyDbQrBlockDetail> {
@@ -103,7 +106,7 @@ impl HyDbBlockIdx for MemDb {
   }
 
   async fn by_height(&self, height: HyDbHeight) -> HyDbResult<Option<HyDbQrBlockDetail>> {
-    Ok(self.block_by_height(height.0).cloned())
+    Ok(self.block_by_height(height.get()).cloned())
   }
 
   async fn by_hash(&self, hash: HyDbHash) -> HyDbResult<Option<HyDbQrBlockDetail>> {
@@ -137,7 +140,7 @@ impl HyDbBlockIdx for MemDb {
   }
 
   async fn exists(&self, height: HyDbHeight) -> HyDbResult<bool> {
-    Ok(self.block_by_height(height.0).is_some())
+    Ok(self.block_by_height(height.get()).is_some())
   }
 
   async fn height_for_hash(&self, hash: HyDbHash) -> HyDbResult<Option<HyDbHeight>> {
@@ -145,7 +148,7 @@ impl HyDbBlockIdx for MemDb {
   }
 
   async fn hash_for_height(&self, height: HyDbHeight) -> HyDbResult<Option<HyDbHash>> {
-    Ok(self.block_by_height(height.0).map(|block| block.hash))
+    Ok(self.block_by_height(height.get()).map(|block| block.hash))
   }
 }
 
@@ -287,7 +290,7 @@ impl HyDbStatus for MemDb {
       self
         .blocks
         .iter()
-        .max_by_key(|block| block.height.0)
+        .max_by_key(|block| block.height.get())
         .map(|block| HyDbQrChainTip {
           height: block.height,
           hash: block.hash,

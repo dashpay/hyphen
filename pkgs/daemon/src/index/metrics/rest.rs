@@ -184,7 +184,7 @@ fn metric_to_block_metrics(
     0.0
   };
   BlockMetrics {
-    height: row.height.0 as i32,
+    height: row.height.get() as i32,
     tx_count: row.tx_count,
     utxos_spendable: row.utxos_spendable,
     utxos_unspendable: row.utxos_unspendable,

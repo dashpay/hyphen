@@ -238,7 +238,7 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
   ingest.on_tip(HyDbHash(chain[5])).await?;
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(5))
+    Some(HyDbHeight::new(5))
   );
   let supply_before = db.addrs().supply().await?.total;
   assert_eq!(supply_before, 60);
@@ -258,10 +258,10 @@ async fn run_reorg(tmp: &TempDb) -> TestResult {
     .reorg
     .ok_or("multi-block branch switch must report a reorg")?;
   assert_eq!(reorg.disconnected.len(), 3, "heights 3..=5 disconnected");
-  assert_eq!(reorg.fork_height, HyDbHeight(2));
+  assert_eq!(reorg.fork_height, HyDbHeight::new(2));
   // Disconnection order: tip first.
   assert_eq!(reorg.disconnected.first(), Some(&HyDbHash(chain[5])));
-  assert_eq!(report.to, Some(HyDbHeight(6)));
+  assert_eq!(report.to, Some(HyDbHeight::new(6)));
 
   // Projection reflects the new branch exactly: 3 x 10 + 4 x 20.
   assert_eq!(db.addrs().supply().await?.total, 110);
@@ -332,7 +332,7 @@ async fn build_chain(
     prev = hash;
   }
   let tip = HyDbHash(prev);
-  let target = Some(HyDbHeight(count as u32 - 1));
+  let target = Some(HyDbHeight::new(count as u32 - 1));
   loop {
     let report = ingest.on_tip(tip).await?;
     if report.to == target {
@@ -382,7 +382,7 @@ async fn run_prune(tmp: &TempDb) -> TestResult {
   let tip_h = (PRUNE_BLOCKS - 1) as i32;
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(tip_h as u32))
+    Some(HyDbHeight::new(tip_h as u32))
   );
 
   let pool = tmp.seed_pool().await?;
@@ -465,8 +465,8 @@ async fn run_prune(tmp: &TempDb) -> TestResult {
   assert_eq!(deleted, 0, "the prune path must issue no DELETE");
 
   // And the retained window still disconnects: rewind a few blocks.
-  let report = ingest.rewind_to(HyDbHeight(tip_h as u32 - 3)).await?;
-  assert_eq!(report.to, Some(HyDbHeight(tip_h as u32 - 3)));
+  let report = ingest.rewind_to(HyDbHeight::new(tip_h as u32 - 3)).await?;
+  assert_eq!(report.to, Some(HyDbHeight::new(tip_h as u32 - 3)));
 
   Ok(())
 }
@@ -511,13 +511,13 @@ async fn run_deep_reorg(tmp: &TempDb) -> TestResult {
   let reorg = report
     .reorg
     .ok_or("the deepest admissible fork must reorg, not no-op")?;
-  assert_eq!(reorg.fork_height, HyDbHeight(fork as u32));
+  assert_eq!(reorg.fork_height, HyDbHeight::new(fork as u32));
   assert_eq!(
     reorg.disconnected.len(),
     KEEP_DEPTH as usize,
     "every block above the fork must be disconnected"
   );
-  assert_eq!(report.to, Some(HyDbHeight(fork as u32 + 1)));
+  assert_eq!(report.to, Some(HyDbHeight::new(fork as u32 + 1)));
 
   // The projection is the replacement branch exactly: heights 0..=fork at 10
   // each, plus the one replacement block at 25.
@@ -564,7 +564,7 @@ async fn run_below_horizon(tmp: &TempDb) -> TestResult {
   // A rewind that walks past the retention window is refused outright: the
   // undo it would need is gone, so there is no depth at which any part of it
   // is admissible.
-  let Err(err) = ingest.rewind_to(HyDbHeight(0)).await else {
+  let Err(err) = ingest.rewind_to(HyDbHeight::new(0)).await else {
     return Err("a rewind past the retention window must fail, not silently no-op".into());
   };
   let msg = err.to_string();
@@ -584,7 +584,7 @@ async fn run_below_horizon(tmp: &TempDb) -> TestResult {
     .ok_or("the rewind must not unwind the whole chain")?;
   assert_eq!(
     tip.height,
-    HyDbHeight(tip_h as u32),
+    HyDbHeight::new(tip_h as u32),
     "a refused rewind must leave the tip untouched, not stranded part way down"
   );
   assert_eq!(db.addrs().supply().await?.total, supply_before);
@@ -601,8 +601,8 @@ async fn run_below_horizon(tmp: &TempDb) -> TestResult {
   // blanket refusal: `deepest_reversible_reorg_survives_the_prune` proves the
   // undo is there, and this proves the rewind path will use it.
   let edge = tip_h - KEEP_DEPTH;
-  let report = ingest.rewind_to(HyDbHeight(edge as u32)).await?;
-  assert_eq!(report.to, Some(HyDbHeight(edge as u32)));
+  let report = ingest.rewind_to(HyDbHeight::new(edge as u32)).await?;
+  assert_eq!(report.to, Some(HyDbHeight::new(edge as u32)));
 
   Ok(())
 }
@@ -636,7 +636,7 @@ async fn run_missing_address_undo(tmp: &TempDb) -> TestResult {
     .rows_affected();
   assert!(removed > 0, "height 5 must have had address undo to remove");
 
-  let Err(err) = ingest.rewind_to(HyDbHeight(4)).await else {
+  let Err(err) = ingest.rewind_to(HyDbHeight::new(4)).await else {
     return Err("a disconnect with no address undo must refuse".into());
   };
   let msg = err.to_string();
@@ -648,7 +648,7 @@ async fn run_missing_address_undo(tmp: &TempDb) -> TestResult {
   // And it refused instead of half-reversing: the tip is untouched.
   assert_eq!(
     db.status().tip().await?.map(|t| t.height),
-    Some(HyDbHeight(5))
+    Some(HyDbHeight::new(5))
   );
 
   Ok(())

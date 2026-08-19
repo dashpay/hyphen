@@ -109,7 +109,7 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
 
   let network_tip = ctx.ingest_status.network_tip();
   let tip = ctx.hydb.status().tip().await.ok().flatten();
-  let ingestion_tip = tip.as_ref().map(|t| t.height.0);
+  let ingestion_tip = tip.as_ref().map(|t| t.height.get());
   let ingestion_tip_hash = tip.as_ref().map(|t| format!("{:?}", t.hash));
 
   // Every stage is lock-step at the canonical tip: derivation is atomic per
@@ -167,7 +167,7 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
   let chain_progress_diag = ChainProgressDiag {
     canonical_tip_height: indexed_height,
     projection_tip_height: indexed_height,
-    undo_tip_height: undo_span.map_or(-1, |(_, hi)| hi.0.min(i32::MAX as u32) as i32),
+    undo_tip_height: undo_span.map_or(-1, |(_, hi)| hi.get().min(i32::MAX as u32) as i32),
     recovery_state: recovery_state.to_owned(),
     recovery_height: recovery_height.map(|height| height.min(i32::MAX as u32) as i32),
     block_progress_pct: sync_progress.block_pct,
@@ -203,7 +203,7 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
   // Pool utilization straight from the facade.
   let pool_stats = ctx.hydb.pool_stats();
   let mut storage_diag = state.storage.clone();
-  storage_diag.undo_span = undo_span.map(|(lo, hi)| (lo.0, hi.0));
+  storage_diag.undo_span = undo_span.map(|(lo, hi)| (lo.get(), hi.get()));
   storage_diag.pool_stats = pool_stats
     .iter()
     .map(|p| (p.name.clone(), p.size, p.idle as u64))
@@ -301,12 +301,12 @@ fn scheduler_diag(
   let committing = ingestion.state == IngestionStateName::Committing;
   let forward = ForwardLaneDiag {
     run_id: None,
-    height: progress.height.map(|h| h.0),
+    height: progress.height.map(|h| h.get()),
     phase: (busy || committing).then_some(phase),
     stage: None,
     substep: None,
     phase_elapsed_ms: None,
-    last_success_height: progress.height.map(|h| h.0),
+    last_success_height: progress.height.map(|h| h.get()),
     last_success_epoch: ingestion.last_progress_epoch,
     last_attempt_epoch: ingestion.last_progress_epoch,
     last_heartbeat_epoch: Some(now_epoch),

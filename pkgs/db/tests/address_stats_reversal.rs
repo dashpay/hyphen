@@ -603,7 +603,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   );
 
   // ---- Route one: a plain rewind and replay ------------------------------
-  ingest.rewind_to(HyDbHeight(2)).await?;
+  ingest.rewind_to(HyDbHeight::new(2)).await?;
   assert_identical(&pool, "h2", counter_h2, &[], "after rewind_to(2)").await?;
   ingest.on_tip(HyDbHash(h(5))).await?;
   assert_identical(&pool, "h4", counter_h4, &[], "after replaying to h4").await?;
@@ -653,7 +653,7 @@ async fn run(tmp: &TempDb) -> TestResult {
     .execute(&pool)
     .await?;
   let refusal = ingest
-    .rewind_to(HyDbHeight(3))
+    .rewind_to(HyDbHeight::new(3))
     .await
     .err()
     .map(|e| e.to_string());

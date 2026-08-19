@@ -764,12 +764,12 @@ async fn advance_until_settled(
       .map_err(|e| DaemonError::storage("advance to tip", e))?;
     if let Some(reorg) = &report.reorg {
       info!(
-        fork_height = reorg.fork_height.0,
+        fork_height = reorg.fork_height.get(),
         disconnected = reorg.disconnected.len(),
         full_rederive = reorg.full_rederive,
         "chain reorganization applied"
       );
-      status.note_reorg(reorg.fork_height.0, reorg.full_rederive);
+      status.note_reorg(reorg.fork_height.get(), reorg.full_rederive);
     }
     let connected = blocks_connected(&report.from, &report.to);
     if connected > 0 {
@@ -779,7 +779,9 @@ async fn advance_until_settled(
       status.mark_progress();
     }
     if let Some(to) = report.to {
-      status.local_tip.store(i64::from(to.0), Ordering::Relaxed);
+      status
+        .local_tip
+        .store(i64::from(to.get()), Ordering::Relaxed);
     }
     status.sync_mode.store(
       match report.mode {
@@ -804,8 +806,8 @@ async fn advance_until_settled(
 
 fn blocks_connected(from: &Option<HyDbHeight>, to: &Option<HyDbHeight>) -> u64 {
   match (from, to) {
-    (Some(from), Some(to)) if to.0 > from.0 => u64::from(to.0 - from.0),
-    (None, Some(to)) => u64::from(to.0) + 1,
+    (Some(from), Some(to)) if to.get() > from.get() => u64::from(to.get() - from.get()),
+    (None, Some(to)) => u64::from(to.get()) + 1,
     _ => 0,
   }
 }
@@ -816,7 +818,7 @@ async fn read_local_tip(db: &HyphenDb) -> Result<i64, DaemonError> {
       .tip()
       .await
       .map_err(|e| DaemonError::storage("read canonical tip", e))?
-      .map_or(-1i64, |tip| i64::from(tip.height.0)),
+      .map_or(-1i64, |tip| i64::from(tip.height.get())),
   )
 }
 

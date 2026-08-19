@@ -227,7 +227,7 @@ impl HyDbBlockIdx for PgBlockIdx {
     let next = items
       .last()
       .filter(|_| has_more)
-      .map(|b| HyDbCursor(b.height.0.to_string()));
+      .map(|b| HyDbCursor(b.height.get().to_string()));
     Ok(HyDbPage::new(items, next))
   }
 
@@ -237,7 +237,7 @@ impl HyDbBlockIdx for PgBlockIdx {
                 tx_count, chainwork, cb_height, cb_merkle_root, cb_merkle_flags,
                 cb_best_cl_height, cb_best_cl_sig, cb_credit_pool
            FROM blocks WHERE height = $1"#,
-      height.0 as i32
+      height.as_i32()?
     )
     .fetch_optional(&self.pg.query)
     .await
@@ -335,7 +335,7 @@ impl HyDbBlockIdx for PgBlockIdx {
              FROM transactions
             WHERE block_height = $1 AND (block_pos > $2 OR (block_pos = $2 AND txid > $3))
             ORDER BY block_pos ASC, txid ASC LIMIT $4"#,
-        height.0 as i32,
+        height.as_i32()?,
         pos,
         &txid[..],
         fetch
@@ -364,7 +364,7 @@ impl HyDbBlockIdx for PgBlockIdx {
              FROM transactions
             WHERE block_height = $1
             ORDER BY block_pos ASC, txid ASC LIMIT $2"#,
-        height.0 as i32,
+        height.as_i32()?,
         fetch
       )
       .fetch_all(&self.pg.query)
@@ -473,7 +473,7 @@ impl HyDbBlockIdx for PgBlockIdx {
   }
 
   async fn exists(&self, height: HyDbHeight) -> HyDbResult<bool> {
-    let row = sqlx::query_scalar!("SELECT 1 FROM blocks WHERE height = $1", height.0 as i32)
+    let row = sqlx::query_scalar!("SELECT 1 FROM blocks WHERE height = $1", height.as_i32()?)
       .fetch_optional(&self.pg.query)
       .await
       .map_err(|e| HyDbError::pg("block exists", e))?;
@@ -489,10 +489,13 @@ impl HyDbBlockIdx for PgBlockIdx {
   }
 
   async fn hash_for_height(&self, height: HyDbHeight) -> HyDbResult<Option<HyDbHash>> {
-    let row = sqlx::query_scalar!("SELECT hash FROM blocks WHERE height = $1", height.0 as i32)
-      .fetch_optional(&self.pg.query)
-      .await
-      .map_err(|e| HyDbError::pg("block hash for height", e))?;
+    let row = sqlx::query_scalar!(
+      "SELECT hash FROM blocks WHERE height = $1",
+      height.as_i32()?
+    )
+    .fetch_optional(&self.pg.query)
+    .await
+    .map_err(|e| HyDbError::pg("block hash for height", e))?;
     row.map(|h| HyDbHash::from_slice(&h)).transpose()
   }
 }

@@ -136,7 +136,7 @@ pub async fn get_tx(
     return Ok(Json(TxDetail {
       as_of_height: Some(stage.height),
       txid: utils::view_hex(&txid_bytes, HashEndian::Ser),
-      block_height: Some(detail.block_height.0 as i32),
+      block_height: Some(detail.block_height.get() as i32),
       block_pos: Some(detail.block_pos),
       version: detail.version as i16,
       tx_type: public_tx_type.to_owned(),
@@ -291,7 +291,7 @@ pub async fn list_txs(
       .map(|row| {
         encode_cursor(&TxCursor {
           as_of_height,
-          block_height: row.block_height.0 as i32,
+          block_height: row.block_height.get() as i32,
           block_pos: row.block_pos,
           txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
         })
@@ -306,7 +306,7 @@ pub async fn list_txs(
     .iter()
     .map(|row| TxSummary {
       txid: utils::view_hex(row.txid.as_bytes(), HashEndian::Ser),
-      block_height: row.block_height.0 as i32,
+      block_height: row.block_height.get() as i32,
       block_pos: row.block_pos,
       version: row.version as i16,
       tx_type: tx_type_str(row.tx_type).to_owned(),
@@ -577,7 +577,7 @@ mod tests {
     let txid = vec![0x44; 32];
     let detail = hyphen_db::query::HyDbQrTxDetail {
       txid: hyphen_db::HyDbHash::from_slice(&txid)?,
-      block_height: hyphen_db::HyDbHeight(12),
+      block_height: hyphen_db::HyDbHeight::new(12),
       block_pos: 1,
       version: 1,
       tx_type: hyphen_db::HyDbTxType::Normal,

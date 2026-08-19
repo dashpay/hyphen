@@ -307,7 +307,7 @@ pub(super) async fn advance(
         .map_err(|e| HyDbError::pg("reorg: commit", e))?;
 
       let reorg = (!disconnected.is_empty()).then(|| HyDbReorg {
-        fork_height: HyDbHeight(floor.max(0) as u32),
+        fork_height: HyDbHeight::new(floor.max(0) as u32),
         disconnected,
         full_rederive: false,
       });
@@ -357,22 +357,40 @@ pub(super) async fn rewind(
   let from = from_tip
     .map(|(h, _)| HyDbHeight::try_from_i32(h))
     .transpose()?;
-  let floor = target.0 as i32;
+  let floor = target.as_i32()?;
   let from_height = from_tip.map(|(h, _)| h).unwrap_or(-1);
 
   // --- Admissibility. Nothing below this block has mutated anything. -------
 
+  // A target at or above the tip has nothing to disconnect. Returning here
+  // rather than falling through keeps the side effects below — leaving
+  // stepped mode, re-applying the storage profile, settling the open
+  // partition's deferred indexes — off a call that changes no rows. Those
+  // builds take minutes on a cold sync and hold the ingest lock throughout.
+  if floor >= from_height {
+    return Ok(HyDbTipReport {
+      from,
+      to: from,
+      target: Some(target),
+      reorg: None,
+      mode: stepped.mode(),
+    });
+  }
+
   // The reorg path refuses a span deeper than the retained undo window. The
   // undo tables cannot tell the two callers apart, so neither can this bound:
   // `ipc/verb/rewind` used to hand the operator's number straight through.
+  //
+  // The subtraction widens first. Done in `i32` it overflows for a target
+  // far below the tip, and a wrapped depth reads as admissible.
   let max_reorg = max_reorg_depth();
-  let depth = i64::from(from_height - floor);
+  let depth = i64::from(from_height) - i64::from(floor);
   if depth > max_reorg {
     return Err(HyDbError::Derive(format!(
       "rewind from height {from_height} to target {floor} is {depth} blocks deep and \
        exceeds the supported depth ({max_reorg}) — a disconnect replays undo \
-       pre-images and anything below [db.ingest] undo_keep_depth has been pruned. \
-       Nothing was rewound; target height {} or above, or re-sync from scratch.",
+       pre-images and anything below [db.ingest] undo_keep_depth has been pruned; \
+       nothing was rewound, so target height {} or above, or re-sync from scratch",
       i64::from(from_height) - max_reorg
     )));
   }
@@ -443,7 +461,7 @@ pub(super) async fn rewind(
     .map(|(h, _)| HyDbHeight::try_from_i32(h))
     .transpose()?;
   let reorg = (!disconnected.is_empty()).then(|| HyDbReorg {
-    fork_height: HyDbHeight(floor.max(0) as u32),
+    fork_height: HyDbHeight::new(floor.max(0) as u32),
     disconnected,
     full_rederive: false,
   });

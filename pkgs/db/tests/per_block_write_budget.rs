@@ -716,7 +716,7 @@ async fn empty_tail(tmp: &TempDb) -> TestResult {
     "a height with no undo row is a height that cannot be disconnected"
   );
 
-  ingest.rewind_to(HyDbHeight(empty - 1)).await?;
+  ingest.rewind_to(HyDbHeight::new(empty - 1)).await?;
   assert_eq!(
     summaries(&pool).await?,
     before,
