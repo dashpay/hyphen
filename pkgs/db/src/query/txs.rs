@@ -301,34 +301,60 @@ impl PgTxIdx {
     let from = i64::from(from_index);
     // The window is taken on `tx_outputs` before the `spends` join, so the
     // join runs against at most `limit` rows rather than the whole output set.
-    let rows = sqlx::query!(
-      r#"SELECT o.vout_index, o.value, o.script_pubkey, o.address,
-                o.address_type AS "address_type: HyDbAddrType",
-                s.spending_txid AS "spending_txid?", s.spending_vin AS "spending_vin?"
-           FROM (SELECT vout_index, value, script_pubkey, address, address_type, outpoint
-                   FROM tx_outputs
-                  WHERE txid = $1 AND block_height = $2 AND vout_index >= $3
-                  ORDER BY vout_index LIMIT $4) o
-           LEFT JOIN spends s ON s.outpoint = o.outpoint
-          ORDER BY o.vout_index"#,
-      key,
-      height,
-      i32::try_from(from).unwrap_or(i32::MAX),
-      limit
+    //
+    // The spend is picked laterally and bounded below by this occurrence's
+    // height. An outpoint is unique only within an occurrence: a txid that
+    // recurs — which this module pins a height precisely because it can —
+    // produces the same 36-byte outpoint twice, so a plain equi-join on the
+    // outpoint alone matched the *other* occurrence's spend row. Serving the
+    // newest occurrence, that reported an unspent output as spent, and where
+    // both occurrences were spent it returned the output twice, because the
+    // join multiplied the row it was meant to annotate.
+    //
+    // Written against the runtime API so it needs no offline-cache entry.
+    type OutRow = (
+      i32,
+      i64,
+      Vec<u8>,
+      Option<String>,
+      Option<HyDbAddrType>,
+      Option<Vec<u8>>,
+      Option<i32>,
+    );
+    let rows: Vec<OutRow> = sqlx::query_as(
+      "SELECT o.vout_index, o.value, o.script_pubkey, o.address, o.address_type, \
+              s.spending_txid, s.spending_vin \
+         FROM (SELECT vout_index, value, script_pubkey, address, address_type, outpoint \
+                 FROM tx_outputs \
+                WHERE txid = $1 AND block_height = $2 AND vout_index >= $3 \
+                ORDER BY vout_index LIMIT $4) o \
+         LEFT JOIN LATERAL ( \
+              SELECT sp.spending_txid, sp.spending_vin \
+                FROM spends sp \
+               WHERE sp.outpoint = o.outpoint AND sp.spend_height >= $2 \
+               ORDER BY sp.spend_height, sp.spending_txid, sp.spending_vin \
+               LIMIT 1) s ON TRUE \
+        ORDER BY o.vout_index",
     )
+    .bind(key)
+    .bind(height)
+    .bind(i32::try_from(from).unwrap_or(i32::MAX))
+    .bind(limit)
     .fetch_all(&self.pg.query)
     .await
     .map_err(|e| HyDbError::pg("transaction outputs", e))?;
 
     let mut outputs = Vec::with_capacity(rows.len());
-    for r in rows {
+    for (vout_index, value, script_pubkey, address, address_type, spending_txid, spending_vin) in
+      rows
+    {
       outputs.push(HyDbQrTxOut {
-        vout_index: r.vout_index,
-        value: r.value,
-        address: r.address.map(HyDbAddress),
-        address_type: r.address_type,
-        script_pubkey: r.script_pubkey,
-        spent_by: outpoint(r.spending_txid, r.spending_vin)?,
+        vout_index,
+        value,
+        address: address.map(HyDbAddress),
+        address_type,
+        script_pubkey,
+        spent_by: outpoint(spending_txid, spending_vin)?,
       });
     }
     Ok(outputs)
