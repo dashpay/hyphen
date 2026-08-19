@@ -71,6 +71,7 @@ fn run() -> Result<(), DaemonError> {
   }
 
   let options = Options::resolve(&args, &cfg)?;
+  options.log_capabilities();
 
   datadir::check_free_space(&dir)?;
   info!("disk space OK");

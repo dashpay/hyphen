@@ -192,6 +192,77 @@ impl Options {
     })
   }
 
+  /// The optional capabilities this run has, as `(name, enabled)` pairs.
+  ///
+  /// The structs are destructured rather than field-accessed on purpose: add a
+  /// flag to `LiveOptions`, `OverlayOptions` or `IndexOptions` and this stops
+  /// compiling until the flag is named here too, so the startup report cannot
+  /// silently fall behind the configuration it claims to describe.
+  pub fn capability_flags(&self) -> Vec<(&'static str, bool)> {
+    let LiveOptions {
+      mempool,
+      islock,
+      chainlock: live_chainlock,
+      governance,
+      network,
+      stream,
+    } = self.live;
+    let OverlayOptions {
+      protx,
+      chainlock: overlay_chainlock,
+    } = self.overlays;
+    let IndexOptions {
+      address,
+      validator,
+      metrics,
+    } = self.indices;
+    vec![
+      ("live.mempool", mempool),
+      ("live.islock", islock),
+      ("live.chainlock", live_chainlock),
+      ("live.governance", governance),
+      ("live.network", network),
+      ("live.stream", stream),
+      ("overlay.protx", protx),
+      ("overlay.chainlock", overlay_chainlock),
+      ("index.address", address),
+      ("index.validator", validator),
+      ("index.metrics", metrics),
+    ]
+  }
+
+  /// Report which optional capabilities this run has (task F1).
+  ///
+  /// Both halves are named. An earlier run shipped with every overlay off and
+  /// said nothing about it; the state was recoverable only by reading struct
+  /// defaults, so "off" has to be as loud as "on".
+  pub fn log_capabilities(&self) {
+    let flags = self.capability_flags();
+    let enabled: Vec<&str> = flags
+      .iter()
+      .filter(|(_, on)| *on)
+      .map(|(name, _)| *name)
+      .collect();
+    let disabled: Vec<&str> = flags
+      .iter()
+      .filter(|(_, on)| !*on)
+      .map(|(name, _)| *name)
+      .collect();
+
+    if enabled.is_empty() {
+      tracing::warn!(
+        disabled = %disabled.join(","),
+        "every optional capability is off: this run indexes blocks only, with no live, overlay or secondary-index surfaces"
+      );
+    } else {
+      tracing::info!(
+        enabled = %enabled.join(","),
+        disabled = %if disabled.is_empty() { "none".to_owned() } else { disabled.join(",") },
+        "optional capabilities resolved"
+      );
+    }
+  }
+
   /// Build the runtime config snapshot published to IPC and the console.
   ///
   /// # Errors
@@ -304,6 +375,43 @@ impl ApiOptions {
 #[cfg(test)]
 mod tests {
   use super::{Options, StartupMode};
+
+  /// F1: the startup report must name every optional capability, in both
+  /// states. A run with all of them off looked identical to a normal one.
+  #[test]
+  fn capability_flags_name_every_optional_feature() {
+    let args = default_args();
+    let cfg = crate::config::Config::default();
+    let options = Options::resolve(&args, &cfg).expect("default config resolves");
+
+    let flags = options.capability_flags();
+    let names: Vec<&str> = flags.iter().map(|(name, _)| *name).collect();
+    for expected in [
+      "live.mempool",
+      "live.islock",
+      "live.chainlock",
+      "live.governance",
+      "live.network",
+      "live.stream",
+      "overlay.protx",
+      "overlay.chainlock",
+      "index.address",
+      "index.validator",
+      "index.metrics",
+    ] {
+      assert!(names.contains(&expected), "{expected} is not reported");
+    }
+    assert_eq!(flags.len(), names.len());
+    // The eight live/overlay flags are the ones F1 was raised about.
+    let overlays = flags
+      .iter()
+      .filter(|(name, _)| name.starts_with("live.") || name.starts_with("overlay."))
+      .count();
+    assert_eq!(overlays, 8, "the eight overlays must all be reported");
+
+    // Reporting must not crash on the all-off shape that went unnoticed.
+    options.log_capabilities();
+  }
 
   fn default_args() -> crate::init::Args {
     crate::init::Args {
