@@ -91,14 +91,20 @@ async fn run(tmp: &TempDb) -> TestResult {
   .await?;
   sqlx::query("ANALYZE address_txs").execute(&pool).await?;
 
+  // One connection for both statements. `SET` is per session, so run against
+  // the pool the setting could land on a different connection than the
+  // `EXPLAIN` — leaving the plan decided by the server's own default and the
+  // assertion passing or failing for reasons unrelated to the index.
+  let mut conn = pool.acquire().await?;
   sqlx::query("SET enable_seqscan = off")
-    .execute(&pool)
+    .execute(&mut *conn)
     .await?;
   let plan: String =
     sqlx::query_scalar::<_, String>("EXPLAIN DELETE FROM address_txs WHERE block_height = 700")
-      .fetch_all(&pool)
+      .fetch_all(&mut *conn)
       .await?
       .join("\n");
+  drop(conn);
   // The plan names the partition's child index, which Postgres auto-names; ask
   // the catalog which one belongs to the parent rather than hard-coding it.
   let child: String = sqlx::query_scalar(

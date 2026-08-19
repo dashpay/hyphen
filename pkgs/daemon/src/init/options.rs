@@ -379,12 +379,13 @@ mod tests {
   /// F1: the startup report must name every optional capability, in both
   /// states. A run with all of them off looked identical to a normal one.
   #[test]
-  fn capability_flags_name_every_optional_feature() {
+  fn capability_flags_name_every_optional_feature() -> Result<(), Box<dyn std::error::Error>> {
     let args = default_args();
     let cfg = crate::config::Config::default();
-    let resolved = Options::resolve(&args, &cfg);
-    assert!(resolved.is_ok(), "the default config must resolve");
-    let Ok(options) = resolved else { return };
+    // `?` rather than an assert followed by an else-return. The crate denies
+    // `expect`, and a returning else-arm is the shape that let vacuous skips
+    // accumulate elsewhere, so the test carries a `Result` instead.
+    let options = Options::resolve(&args, &cfg)?;
 
     let flags = options.capability_flags();
     let names: Vec<&str> = flags.iter().map(|(name, _)| *name).collect();
@@ -413,6 +414,7 @@ mod tests {
 
     // Reporting must not crash on the all-off shape that went unnoticed.
     options.log_capabilities();
+    Ok(())
   }
 
   fn default_args() -> crate::init::Args {

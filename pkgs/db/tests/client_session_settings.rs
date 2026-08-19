@@ -25,6 +25,8 @@ use hyphen_db::{HyDbAdminCfg, HyDbClientCfg, HyDbHeavyCfg, HyDbQueryCfg, HyDbWri
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Executor as _, PgPool, Row as _};
 
+type Res = Result<(), Box<dyn std::error::Error>>;
+
 /// A one-connection pool with an explicit `statement_timeout`, for the one
 /// assertion that needs to *provoke* the timeout rather than read it back.
 /// The pools the daemon actually builds are covered by
@@ -72,25 +74,20 @@ fn contrasting(current: &str, a: &str, b: &str) -> String {
 }
 
 #[tokio::test]
-async fn each_pool_runs_with_its_own_server_side_settings() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
+async fn each_pool_runs_with_its_own_server_side_settings() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_each_pool_runs_with_its_own_server_side_settings(&temp).await;
+  temp.drop_now().await;
+  result
+}
 
+async fn run_each_pool_runs_with_its_own_server_side_settings(temp: &TempDb) -> Res {
   // Read the cluster's own values first. Everything below is asserted
   // relative to these, never against a hard-coded literal: the server used
   // here happens to run `synchronous_commit = off` cluster-wide, which is
   // exactly the trap — a test asserting the literal value would pass with no
   // `SET` applied at all.
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
+  let pool = temp.seed_pool().await?;
   let default_sync = setting(&pool, "synchronous_commit").await;
   let default_work_mem = setting(&pool, "work_mem").await;
   let default_maint = setting(&pool, "maintenance_work_mem").await;
@@ -127,10 +124,7 @@ async fn each_pool_runs_with_its_own_server_side_settings() {
 
   // Through the real connect path, so this tests the shipped builder rather
   // than a copy of it.
-  let Ok(db) = temp.open_with(client.clone()).await else {
-    temp.drop_now().await;
-    return;
-  };
+  let db = temp.open_with(client.clone()).await?;
   let sessions = db.pool_sessions().await.unwrap_or_default();
   assert_eq!(sessions.len(), 4, "{sessions:#?}");
   let get = |name: &str| {
@@ -196,27 +190,25 @@ async fn each_pool_runs_with_its_own_server_side_settings() {
   assert_eq!(admin.jit, default_jit);
 
   drop(db);
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(base) = temp.client_cfg() else {
-    temp.drop_now().await;
-    return;
-  };
-  let Some(query) = pool_with_timeout(&base.url, 250).await else {
-    temp.drop_now().await;
-    return;
-  };
+async fn a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool() -> Res {
+  let temp = TempDb::create().await?;
+  let result =
+    run_a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool(
+  temp: &TempDb,
+) -> Res {
+  let base = temp.client_cfg()?;
+  let query = pool_with_timeout(&base.url, 250)
+    .await
+    .ok_or("a one-connection pool with a statement_timeout must build")?;
 
   let started = std::time::Instant::now();
   let result = sqlx::query("SELECT pg_sleep(10)").fetch_one(&query).await;
@@ -245,21 +237,20 @@ async fn a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool() 
   assert!(alive.is_ok(), "{alive:?}");
 
   query.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn app_name_attributes_backends_to_a_pool_in_pg_stat_activity() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
+async fn app_name_attributes_backends_to_a_pool_in_pg_stat_activity() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_app_name_attributes_backends_to_a_pool_in_pg_stat_activity(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_app_name_attributes_backends_to_a_pool_in_pg_stat_activity(temp: &TempDb) -> Res {
   let app_name = format!("hyphend-attrib-{}", std::process::id());
-  let Ok(db) = temp
+  let db = temp
     .open_with(HyDbClientCfg {
       app_name: app_name.clone(),
       write: HyDbWriteCfg {
@@ -280,21 +271,14 @@ async fn app_name_attributes_backends_to_a_pool_in_pg_stat_activity() {
       },
       ..HyDbClientCfg::default()
     })
-    .await
-  else {
-    temp.drop_now().await;
-    return;
-  };
+    .await?;
   // Touch every pool so each has a live backend on the server.
   let _ = db.pool_sessions().await;
 
   // Read from an unrelated connection: this is the operator's view, the one
   // that was previously coarse enough to say "86–100% idle" without being
   // able to say *which* pool was idle.
-  let Ok(observer) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
+  let observer = temp.seed_pool().await?;
   let names: Vec<String> = sqlx::query(
     "SELECT application_name FROM pg_stat_activity \
        WHERE application_name LIKE $1 ORDER BY application_name",
@@ -319,37 +303,29 @@ async fn app_name_attributes_backends_to_a_pool_in_pg_stat_activity() {
 
   observer.close().await;
   drop(db);
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn a_configured_unix_socket_carries_a_real_connection() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(observer) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
+async fn a_configured_unix_socket_carries_a_real_connection() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_a_configured_unix_socket_carries_a_real_connection(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_a_configured_unix_socket_carries_a_real_connection(temp: &TempDb) -> Res {
+  let observer = temp.seed_pool().await?;
 
   // The server's own socket directory, asked for rather than assumed — /tmp
   // on Homebrew, /var/run/postgresql on Debian.
   let dirs = setting(&observer, "unix_socket_directories").await;
-  let Some(dir) = dirs
+  let dir = dirs
     .split(',')
     .map(str::trim)
     .find(|d| !d.is_empty())
     .map(str::to_owned)
-  else {
-    observer.close().await;
-    temp.drop_now().await;
-    return;
-  };
+    .ok_or("the server must report at least one unix_socket_directory")?;
 
   let app_name = format!("hyphend-sock-{}", std::process::id());
   let client = HyDbClientCfg {
@@ -377,11 +353,7 @@ async fn a_configured_unix_socket_carries_a_real_connection() {
 
   // A full connect: migrations, the layout contract and the four pools all
   // go over the socket, not just a bare handshake.
-  let Ok(db) = temp.open_with(client).await else {
-    observer.close().await;
-    temp.drop_now().await;
-    return;
-  };
+  let db = temp.open_with(client).await?;
   let sessions = db.pool_sessions().await.unwrap_or_default();
   assert_eq!(sessions.len(), 4, "{sessions:#?}");
 
@@ -419,5 +391,5 @@ async fn a_configured_unix_socket_carries_a_real_connection() {
 
   observer.close().await;
   drop(db);
-  temp.drop_now().await;
+  Ok(())
 }

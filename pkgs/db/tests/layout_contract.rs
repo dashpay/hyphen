@@ -23,6 +23,8 @@ use common::TempDb;
 use hyphen_db::layout::{self, HyDbLayout, HyDbLayoutCfg, HyDbLayoutGrade, LAYOUT_KEYS};
 use sqlx::PgPool;
 
+type Res = Result<(), Box<dyn std::error::Error>>;
+
 const CREATED_BY: &str = "hyphend/test";
 
 fn cfg_from(layout: &HyDbLayout) -> HyDbLayoutCfg {
@@ -39,64 +41,50 @@ fn cfg_from(layout: &HyDbLayout) -> HyDbLayoutCfg {
 
 /// The layout a freshly migrated database ends up with: defaults, except that
 /// `schema_version` follows the embedded migration set.
-async fn baseline(pool: &PgPool) -> HyDbLayout {
-  let rows = layout::read_store(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default();
+async fn baseline(pool: &PgPool) -> Result<HyDbLayout, Box<dyn std::error::Error>> {
+  let rows = layout::read_store(pool).await?.unwrap_or_default();
   let mut base = HyDbLayout::default();
   for row in &rows {
     if row.key == "schema_version" {
       base.schema_version = row.value.parse().unwrap_or_default();
     }
   }
-  base
+  Ok(base)
 }
 
-async fn store_keys(pool: &PgPool) -> Vec<String> {
-  layout::read_store(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default()
-    .into_iter()
-    .map(|r| r.key)
-    .collect()
+async fn store_keys(pool: &PgPool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+  Ok(
+    layout::read_store(pool)
+      .await?
+      .unwrap_or_default()
+      .into_iter()
+      .map(|r| r.key)
+      .collect(),
+  )
 }
 
-async fn delete_key(pool: &PgPool, key: &str) {
-  let _ = sqlx::query("DELETE FROM init_params WHERE key = $1")
+async fn delete_key(pool: &PgPool, key: &str) -> Res {
+  sqlx::query("DELETE FROM init_params WHERE key = $1")
     .bind(key)
     .execute(pool)
-    .await;
+    .await?;
+  Ok(())
 }
 
 #[tokio::test]
-async fn case1_first_run_records_the_whole_layout() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  // `open()` migrates and runs the contract for the first time.
-  let Ok(_db) = temp.open().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
+async fn case1_first_run_records_the_whole_layout() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_case1_first_run_records_the_whole_layout(&temp).await;
+  temp.drop_now().await;
+  result
+}
 
-  let rows = layout::read_store(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default();
+async fn run_case1_first_run_records_the_whole_layout(temp: &TempDb) -> Res {
+  // `open()` migrates and runs the contract for the first time.
+  let _db = temp.open().await?;
+  let pool = temp.seed_pool().await?;
+
+  let rows = layout::read_store(&pool).await?.unwrap_or_default();
   assert_eq!(
     rows.len(),
     LAYOUT_KEYS.len(),
@@ -127,43 +115,28 @@ async fn case1_first_run_records_the_whole_layout() {
   );
 
   pool.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn case2_unchanged_layout_is_accepted_and_rewrites_nothing() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(_db) = temp.open().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let base = baseline(&pool).await;
+async fn case2_unchanged_layout_is_accepted_and_rewrites_nothing() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_case2_unchanged_layout_is_accepted_and_rewrites_nothing(&temp).await;
+  temp.drop_now().await;
+  result
+}
 
-  let before = layout::read_store(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default();
+async fn run_case2_unchanged_layout_is_accepted_and_rewrites_nothing(temp: &TempDb) -> Res {
+  let _db = temp.open().await?;
+  let pool = temp.seed_pool().await?;
+  let base = baseline(&pool).await?;
+
+  let before = layout::read_store(&pool).await?.unwrap_or_default();
   let again = layout::verify(&pool, &cfg_from(&base), CREATED_BY).await;
   assert!(again.is_ok(), "matching layout must start: {again:?}");
   assert_eq!(again.ok(), Some(base));
 
-  let after = layout::read_store(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default();
+  let after = layout::read_store(&pool).await?.unwrap_or_default();
   assert_eq!(before.len(), after.len());
   for (b, a) in before.iter().zip(after.iter()) {
     assert_eq!(b.key, a.key);
@@ -175,28 +148,21 @@ async fn case2_unchanged_layout_is_accepted_and_rewrites_nothing() {
   }
 
   pool.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn case3_mismatch_names_every_key_with_its_own_remedy() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(_db) = temp.open().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let base = baseline(&pool).await;
+async fn case3_mismatch_names_every_key_with_its_own_remedy() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_case3_mismatch_names_every_key_with_its_own_remedy(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_case3_mismatch_names_every_key_with_its_own_remedy(temp: &TempDb) -> Res {
+  let _db = temp.open().await?;
+  let pool = temp.seed_pool().await?;
+  let base = baseline(&pool).await?;
 
   // Three changes at once: two hard, one rebuildable. An operator who changed
   // three things must be told about three things.
@@ -248,37 +214,32 @@ async fn case3_mismatch_names_every_key_with_its_own_remedy() {
   );
 
   // Nothing was written on the way out.
-  let after = store_keys(&pool).await;
+  let after = store_keys(&pool).await?;
   assert_eq!(after.len(), LAYOUT_KEYS.len());
 
   pool.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(_db) = temp.open().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let base = baseline(&pool).await;
+async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_case4_missing_key_is_adopted_when_defaultable_and_refused_when_not(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_case4_missing_key_is_adopted_when_defaultable_and_refused_when_not(
+  temp: &TempDb,
+) -> Res {
+  let _db = temp.open().await?;
+  let pool = temp.seed_pool().await?;
+  let base = baseline(&pool).await?;
 
   // A defaultable key the store has never seen is adopted and recorded.
   // `schema_version` is defaultable because nothing on disk was written
   // against it — it records which schema wrote the rest, not how to read it.
-  delete_key(&pool, "schema_version").await;
+  delete_key(&pool, "schema_version").await?;
   let adopted = layout::verify(&pool, &cfg_from(&base), CREATED_BY).await;
   assert!(
     adopted.is_ok(),
@@ -286,7 +247,7 @@ async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
   );
   assert!(
     store_keys(&pool)
-      .await
+      .await?
       .iter()
       .any(|k| k == "schema_version"),
     "an adopted key must be written back, or the next startup adopts it again"
@@ -295,7 +256,7 @@ async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
   // `rich_list_floor` is rebuildable but NOT defaultable: `address_rich` was
   // materialised at whatever floor was in force, so adopting a configured one
   // silently skips the rebuild that would make the table match it.
-  delete_key(&pool, "rich_list_floor").await;
+  delete_key(&pool, "rich_list_floor").await?;
   let refused = layout::verify(&pool, &cfg_from(&base), CREATED_BY).await;
   let msg = refused.err().map(|e| e.to_string()).unwrap_or_default();
   assert!(msg.contains("rich_list_floor"), "{msg}");
@@ -303,42 +264,35 @@ async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
 
   // A hard key the store has never seen is refused: adopting it would decide,
   // silently, how to read data that is already on disk.
-  delete_key(&pool, "partition_span").await;
+  delete_key(&pool, "partition_span").await?;
   let refused = layout::verify(&pool, &cfg_from(&base), CREATED_BY).await;
   let msg = refused.err().map(|e| e.to_string()).unwrap_or_default();
   assert!(msg.contains("partition_span"), "{msg}");
   assert!(msg.contains("stored=<absent>"), "{msg}");
   assert!(
     !store_keys(&pool)
-      .await
+      .await?
       .iter()
       .any(|k| k == "partition_span"),
     "a refused key must not be written"
   );
 
   pool.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn case5_key_dropped_from_config_uses_the_stored_value() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(_db) = temp.open().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let base = baseline(&pool).await;
+async fn case5_key_dropped_from_config_uses_the_stored_value() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_case5_key_dropped_from_config_uses_the_stored_value(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_case5_key_dropped_from_config_uses_the_stored_value(temp: &TempDb) -> Res {
+  let _db = temp.open().await?;
+  let pool = temp.seed_pool().await?;
+  let base = baseline(&pool).await?;
 
   // Pretend the database was built with a non-default floor, then drop the
   // key from the config entirely.
@@ -356,28 +310,21 @@ async fn case5_key_dropped_from_config_uses_the_stored_value() {
   );
 
   pool.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[tokio::test]
-async fn show_layout_renders_stored_beside_configured() {
-  // NOTE: still a silent skip on error, unlike the rest of the suite — this
-  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
-  // means giving every test in this file a `Result` return and an explicit
-  // cleanup path. What `TempDb::create` can no longer do is succeed with
-  // "no database": the vacuous `Ok(None)` arm is gone.
-  let Ok(temp) = TempDb::create().await else {
-    return;
-  };
-  let Ok(_db) = temp.open().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let Ok(pool) = temp.seed_pool().await else {
-    temp.drop_now().await;
-    return;
-  };
-  let base = baseline(&pool).await;
+async fn show_layout_renders_stored_beside_configured() -> Res {
+  let temp = TempDb::create().await?;
+  let result = run_show_layout_renders_stored_beside_configured(&temp).await;
+  temp.drop_now().await;
+  result
+}
+
+async fn run_show_layout_renders_stored_beside_configured(temp: &TempDb) -> Res {
+  let _db = temp.open().await?;
+  let pool = temp.seed_pool().await?;
+  let base = baseline(&pool).await?;
 
   let mut cfg = cfg_from(&base);
   cfg.network = Some("testnet".to_owned());
@@ -397,7 +344,7 @@ async fn show_layout_renders_stored_beside_configured() {
   );
 
   pool.close().await;
-  temp.drop_now().await;
+  Ok(())
 }
 
 #[test]
