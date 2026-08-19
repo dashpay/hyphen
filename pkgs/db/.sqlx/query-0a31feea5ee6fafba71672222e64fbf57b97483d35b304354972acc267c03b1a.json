@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lo AS \"lo!\", hi AS \"hi!\"\n         FROM (SELECT height + 1 AS lo,\n                      LEAD(height) OVER (ORDER BY height) - 1 AS hi\n                 FROM undo_blocks\n                WHERE height <= $1) runs\n        WHERE hi IS NOT NULL AND hi >= lo\n        ORDER BY lo\n        LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lo!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "hi!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "0a31feea5ee6fafba71672222e64fbf57b97483d35b304354972acc267c03b1a"
+}

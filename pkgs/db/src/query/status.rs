@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use super::PgRead;
 use crate::error::{HyDbError, HyDbResult};
 use crate::types::{HyDbHash, HyDbHeight};
+use crate::verify::{self, HyDbUndoReport};
 
 /// The canonical chain tip as recorded in the projection.
 #[derive(Debug, Clone, Copy)]
@@ -101,8 +102,22 @@ pub trait HyDbStatus: Send + Sync {
 
   /// The height span currently covered by the undo tables, or `None` when
   /// they are empty. The upper bound trails the canonical tip.
+  ///
+  /// Bounds only: a range cannot show a hole inside itself. Anything deciding
+  /// whether a rollback is actually possible wants [`Self::undo_coverage`].
   async fn undo_span(&self) -> HyDbResult<Option<(HyDbHeight, HyDbHeight)>> {
     Ok(None)
+  }
+
+  /// Read-only undo-coverage health, counted rather than bounded: whether the
+  /// retained undo window reaches the canonical tip with no gaps, and how what
+  /// it retains compares with the prune horizon.
+  ///
+  /// The same check the startup gate in [`crate::HyphenDb::connect`] applies,
+  /// exposed for an operator diagnostic — one implementation, two callers, so
+  /// a health verb can never disagree with the gate that refused startup.
+  async fn undo_coverage(&self) -> HyDbResult<HyDbUndoReport> {
+    Err(HyDbError::MockGap("status.undo_coverage"))
   }
 }
 
@@ -134,6 +149,15 @@ impl HyDbStatus for PgStatus {
     }
     if tip.is_none() {
       notes.push("projection is empty (no canonical blocks yet)".to_owned());
+    }
+
+    // Undo coverage, in the surface an operator already looks at. Cheap in the
+    // healthy case (one aggregate over a depth-bounded table) and the only
+    // place the console can see the condition that would refuse the *next*
+    // startup — reporting it while the daemon is still up is the difference
+    // between a planned re-derive and a failed restart.
+    for defect in self.undo_coverage().await?.defects {
+      notes.push(defect.describe());
     }
 
     Ok(HyDbQrHealth {
@@ -186,6 +210,10 @@ impl HyDbStatus for PgStatus {
       work_mem: row.work_mem,
       effective_cache_size: row.effective_cache_size,
     })
+  }
+
+  async fn undo_coverage(&self) -> HyDbResult<HyDbUndoReport> {
+    verify::undo_coverage(&self.pg.query).await
   }
 
   async fn undo_span(&self) -> HyDbResult<Option<(HyDbHeight, HyDbHeight)>> {

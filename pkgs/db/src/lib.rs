@@ -37,6 +37,7 @@ pub mod stepped;
 pub mod tuning;
 pub mod types;
 mod util;
+pub mod verify;
 
 #[cfg(any(test, feature = "tests"))]
 pub mod tests;
@@ -134,8 +135,9 @@ impl HyphenDb {
   ///
   /// [`HyDbError::Config`] if the URL is unparseable, [`HyDbError::Pg`] if a
   /// pool cannot connect, [`HyDbError::Migrate`] if the schema fails to apply,
-  /// or [`HyDbError::Layout`] if `[db.layout]` disagrees with the layout this
-  /// database was created with.
+  /// [`HyDbError::Layout`] if `[db.layout]` disagrees with the layout this
+  /// database was created with, or [`HyDbError::Consistency`] if the undo
+  /// ledger does not cover the canonical tip contiguously.
   pub async fn connect(cfg: HyDbConfig) -> HyDbResult<Self> {
     let pools = pool::HyDbPools::connect(&cfg.client).await?;
     migrate::apply(&pools.write).await?;
@@ -158,6 +160,33 @@ impl HyphenDb {
     layout::install(resolved)?;
     tuning::install(cfg.ingest.clone())?;
     tuning::apply_storage(&pools.admin, &cfg.ingest).await?;
+
+    // The one pass over *chain* data on the startup path. Everything above it
+    // checked schema and layout metadata; this checks that the undo ledger can
+    // still reverse the tip it is sitting under. It runs last because it reads
+    // `undo_span` from the installed layout and `undo_keep_depth` from the
+    // installed tuning, and before the facade exists because a caller holding
+    // an ingest handle over a database that cannot roll back is precisely the
+    // state being refused.
+    //
+    // Read-only, and it takes no advisory lock: a second process mid-advance
+    // can only make the answer more complete — a healthy concurrent writer
+    // cannot produce any of the states this refuses on.
+    let undo = verify::undo_coverage(&pools.write).await?;
+    if let Some(refusal) = undo.startup_refusal() {
+      return Err(HyDbError::Consistency(refusal));
+    }
+    for defect in undo.warnings() {
+      tracing::warn!("undo ledger: {}", defect.describe());
+    }
+    tracing::debug!(
+      tip = ?undo.tip.map(|t| t.0),
+      undo_lo = ?undo.undo_lo.map(|h| h.0),
+      undo_hi = ?undo.undo_hi.map(|h| h.0),
+      covered_rows = undo.covered_rows,
+      expected_rows = undo.expected_rows,
+      "undo coverage verified against the canonical tip"
+    );
 
     let read = PgRead {
       query: pools.query.clone(),

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MAX(height) AS \"tip\" FROM blocks",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tip",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b4d666432531d2fc138dbce66920be97da04aebc580358f692f016582f3ff57a"
+}
