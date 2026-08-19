@@ -15,7 +15,6 @@ mod base;
 mod chain;
 mod derive;
 mod pipeline;
-mod prefetch;
 mod scratch;
 mod stats;
 mod validators;
@@ -89,7 +88,7 @@ impl HyDbIngest {
     let _op = self.op_lock.lock().await;
     let report = pipeline::advance(
       &self.write,
-      &self.data_src,
+      self.data_src.as_ref(),
       node_tip,
       &self.progress_tx,
       &self.stepped,

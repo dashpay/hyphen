@@ -51,27 +51,11 @@ impl HyDbBlockSource {
 }
 
 impl hyphen_db::HyDbDataSrc for HyDbBlockSource {
-  /// Identity from the 80-byte header alone.
-  ///
-  /// This used to decode the entire block — every transaction, every
-  /// script, every special-transaction payload — to read two hashes, one of
-  /// which it then recomputed from the header anyway. It runs once per block
-  /// on the absorb path, in front of the `ser_blocks` insert, so a 2 MB block
-  /// paid a full consensus decode to answer a question the first 36 bytes
-  /// already contain. The trait calls this "cheap identity"; now it is.
-  ///
-  /// The header is fixed-layout: version (4), `prev_hash` (32), merkle root
-  /// (32), time, bits, nonce. `prev_hash` is stored in the same internal byte
-  /// order the decoder yields, and a test holds the two answers together so
-  /// this cannot drift from the decoder it replaced.
   fn identify(&self, raw: &[u8]) -> HyDbResult<HyDbBlockId> {
-    let hash = Self::block_hash(raw)?; // also enforces the 80-byte minimum
-    let prev: [u8; 32] = raw[4..36]
-      .try_into()
-      .map_err(|_| HyDbError::Derive("block header too short for prev_hash".to_owned()))?;
+    let block = Self::decode_block(raw)?;
     Ok(HyDbBlockId {
-      hash,
-      prev_hash: HyDbHash(prev),
+      hash: Self::block_hash(raw)?,
+      prev_hash: HyDbHash(block.header.prev_hash.to_bytes()),
     })
   }
 
@@ -340,66 +324,4 @@ fn register(insert: ValidatorInsert) -> Option<HyDbVlRegister> {
     operator_reward: insert.operator_reward,
     validator_type: vl_type(&insert.validator_type),
   })
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use hyphen_db::HyDbDataSrc;
-
-  /// Real mainnet block 1, whole. Small enough to embed, real enough that the
-  /// header-only identity is checked against the actual decoder rather than
-  /// against a synthetic encoding that shares its assumptions.
-  const MAINNET_BLOCK_1: &str = "02000000b67a40f3cd5804437a108f105533739c37e6229bc1adcab385140b59fd0f0000a71c1aade44bf8425bec0deb611c20b16da3442818ef20489ca1e2512be43eef814cdb52f0ff0f1edbf701000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0a510101062f503253482fffffffff0100743ba40b000000232103a69850243c993c0645a6e8b38c774174174cc766cd3ec2140afd24d831b84c41ac00000000";
-
-  fn raw() -> HyDbResult<Vec<u8>> {
-    hex::decode(MAINNET_BLOCK_1).map_err(HyDbError::from)
-  }
-
-  fn src() -> HyDbBlockSource {
-    HyDbBlockSource::new(76, 16)
-  }
-
-  #[test]
-  fn header_only_identity_agrees_with_the_full_decode() -> HyDbResult<()> {
-    let raw = raw()?;
-    let id = src().identify(&raw)?;
-    let decoded = src().decode(&raw)?;
-    assert_eq!(
-      id.hash, decoded.header.hash,
-      "the header hash must be the block hash the decoder reports"
-    );
-    assert_eq!(
-      id.prev_hash, decoded.header.prev_hash,
-      "reading prev_hash out of the header bytes must give what decoding the \
-       whole block gives — this is the assumption the fast path rests on"
-    );
-    Ok(())
-  }
-
-  #[test]
-  fn identity_is_the_parent_link_the_chain_expects() -> HyDbResult<()> {
-    let id = src().identify(&raw()?)?;
-    let mut display = id.prev_hash.0;
-    display.reverse();
-    assert_eq!(
-      hex::encode(display),
-      "00000ffd590b1485b3caadc19b22e6379c733355108f107a430458cdf3407ab6",
-      "block 1's parent is the mainnet genesis block"
-    );
-    Ok(())
-  }
-
-  #[test]
-  fn a_truncated_header_is_refused_rather_than_indexed() -> HyDbResult<()> {
-    match src().identify(&[0u8; 40]) {
-      Ok(_) => Err(HyDbError::Derive(
-        "40 bytes is not a header and must not identify".to_owned(),
-      )),
-      Err(e) => {
-        assert!(e.to_string().contains("too short"), "{e}");
-        Ok(())
-      }
-    }
-  }
 }

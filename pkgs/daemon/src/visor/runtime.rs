@@ -222,7 +222,6 @@ impl ServeRuntime {
       Arc::clone(&source),
       Arc::clone(&lifecycle),
       crate::ingest::DEFAULT_POLL_SECS,
-      cfg.core.rest_concurrency,
     );
 
     let api_metrics = Arc::new(ApiServerMetrics::default());

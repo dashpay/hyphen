@@ -6,11 +6,8 @@
 
 //! The ingest pipeline, as a reversible sequence of stages.
 //!
-//! A bounded look-ahead ([`prefetch`]) reads each planned block out of
-//! `ser_blocks` and decodes it *ahead of* the writer — both are pure with
-//! respect to the branch, so neither belongs inside a transaction. One
-//! read-only [`IngestDerive`] then turns the decoded block into a [`Scratch`]
-//! of derived facts (resolved spends, per-address deltas, per-tx
+//! One read-only [`IngestDerive`] turns a block's raw bytes into a [`Scratch`]
+//! of derived facts (decoded block, resolved spends, per-address deltas, per-tx
 //! fees, spent outpoints, chainwork, metric inputs). An ordered set of
 //! [`IngestStage`s](IngestStage) then consumes that scratch, each owning a
 //! slice of the projection and both directions of its mutation: `connect`
@@ -28,19 +25,16 @@
 //! transaction: queries never observe a half-rewound chain, and a failure
 //! while connecting the replacement branch preserves the old canonical state.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use sqlx::PgPool;
 use tokio::sync::watch;
 
 use super::derive::PgDeriver;
-use super::prefetch::{DecodeQueue, PrefetchCfg, Prefetched};
 use super::scratch::{HyDbDeriveError, HyDbStageError, PipelineError, Scratch};
 use super::{balances, base, chain, stats, validators};
 use super::{HyDbBlockSeen, HyDbProgress, HyDbReorg, HyDbStage, HyDbTipReport};
 use crate::error::{HyDbError, HyDbResult};
-use crate::records::{HyDbBlock, HyDbDataSrc, PgTx};
+use crate::records::{HyDbDataSrc, PgTx};
 use crate::stepped::{HyDbSyncMode, SteppedSync};
 use crate::tuning;
 use crate::types::{HyDbHash, HyDbHeight};
@@ -99,21 +93,16 @@ pub(super) async fn absorb(
 // The two roles: read-only derivation, and reversible per-slice writes
 // ===========================================================================
 
-/// Turns an already-decoded block into the derived facts a connect needs,
-/// writing nothing. Runs inside the write transaction (so it sees the
-/// transaction's own prior connects during a reorg); a disconnect never calls
-/// it (every mutation's inverse lives in an [`IngestStage`]).
-///
-/// The *decode* is not part of this: it is a pure function of the block's
-/// bytes, so A4 moved it out to [`prefetch`], ahead of the writer. What is
-/// left here is exactly the part that has to see the transaction's own view —
-/// the parent's chainwork and the UTXO set.
+/// Turns a block's raw bytes into the derived facts a connect needs, writing
+/// nothing. Runs inside the write transaction (so it sees the transaction's
+/// own prior connects during a reorg); a disconnect never calls it (every
+/// mutation's inverse lives in an [`IngestStage`]).
 #[async_trait]
 pub(super) trait IngestDerive: Send + Sync {
   async fn derive(
     &self,
     tx: &mut PgTx<'_>,
-    block: HyDbBlock,
+    data_src: &dyn HyDbDataSrc,
     scratch: &mut Scratch,
   ) -> Result<(), HyDbDeriveError>;
 }
@@ -171,7 +160,7 @@ enum Plan {
 /// [`max_advance_blocks`] blocks. Publishes per-block progress on `progress`.
 pub(super) async fn advance(
   pool: &PgPool,
-  data_src: &Arc<dyn HyDbDataSrc>,
+  data_src: &dyn HyDbDataSrc,
   node_tip: HyDbHash,
   progress: &watch::Sender<HyDbProgress>,
   stepped: &SteppedSync,
@@ -232,20 +221,10 @@ pub(super) async fn advance(
         // created one is never written to under the wrong regime.
         stepped.ensure_settled(first.1).await?;
       }
-      // Read and decode run ahead of the writer from here; the writer below
-      // still opens one transaction per block and applies them in the order
-      // the queue hands them over, which is the order they were planned in.
-      // Dropping the queue at any exit from this arm discards the look-ahead —
-      // which is how a branch that turns out to be wrong is abandoned.
-      let mut queue = DecodeQueue::spawn(
-        pool.clone(),
-        Arc::clone(data_src),
-        segment.clone(),
-        PrefetchCfg::resolved(),
-      );
       let mut connected_to: Option<i32> = None;
-      while let Some(item) = queue.next().await {
-        let stumble = |e: PipelineError, height: i32| {
+      for (hash, height) in &segment {
+        publish(*height, HyDbStage::Derive);
+        if let Err(e) = connect_block(pool, data_src, *height, hash).await {
           // Everything up to the previous block is committed and visible;
           // publish what completed before surfacing the failure.
           if let Some(done) = connected_to {
@@ -256,28 +235,11 @@ pub(super) async fn advance(
               "advance stopped mid-segment; committed progress is preserved"
             );
           }
-          flatten(e)
-        };
-        // A read or decode that failed arrives here at its own height, so a
-        // hole in the look-ahead stops the advance instead of silently
-        // shortening it.
-        let block = match item {
-          Ok(block) => block,
-          Err(e) => return Err(stumble(e.into(), connected_to.map_or(-1, |h| h + 1))),
-        };
-        let height = block.height;
-        publish(height, HyDbStage::Derive);
-        if let Err(e) = connect_prefetched(pool, block).await {
-          return Err(stumble(e, height));
+          return Err(flatten(e));
         }
-        connected_to = Some(height);
-        publish(height, HyDbStage::Accumulate);
+        connected_to = Some(*height);
+        publish(*height, HyDbStage::Accumulate);
       }
-      // The segment is written; the look-ahead has nothing left to feed. Drop
-      // it before the index maintenance below rather than leaving it in scope
-      // across DDL — it is drained by construction at this point, and saying
-      // so is cheaper than requiring the next reader to prove it.
-      drop(queue);
       // ...and again after, which is where a partition the tip has just moved
       // past gets its deferred indexes built.
       if let Some(reached) = connected_to {
@@ -327,7 +289,7 @@ pub(super) async fn advance(
         h -= 1;
       }
       for (hash, height) in &segment {
-        connect_block_in(&mut tx, data_src.as_ref(), *height, hash)
+        connect_block_in(&mut tx, data_src, *height, hash)
           .await
           .map_err(flatten)?;
       }
@@ -527,27 +489,25 @@ fn flatten(e: PipelineError) -> HyDbError {
 // Connect one block: derive read-only, then run the stages forward
 // ===========================================================================
 
-/// Connect one prefetched block in its own transaction (the forward path).
-///
-/// The transaction opens with the block already decoded, which is the whole
-/// point of A4: the only thing between `BEGIN` and `COMMIT` is work that needs
-/// the transaction.
-async fn connect_prefetched(pool: &PgPool, block: Prefetched) -> Result<(), PipelineError> {
+/// Connect one block in its own transaction (the forward path).
+async fn connect_block(
+  pool: &PgPool,
+  data_src: &dyn HyDbDataSrc,
+  height: i32,
+  hash: &HyDbHash,
+) -> Result<(), PipelineError> {
   let mut tx = pool
     .begin()
     .await
     .map_err(|e| HyDbError::pg("connect: begin", e))?;
-  connect_decoded_in(&mut tx, block.height, block.raw_len, block.block).await?;
+  connect_block_in(&mut tx, data_src, height, hash).await?;
   tx.commit()
     .await
     .map_err(|e| HyDbError::pg("connect: commit", e))?;
   Ok(())
 }
 
-/// Read + decode + connect inside a caller-owned transaction. The reorg path's
-/// entry point: a reorg replaces a branch inside ONE transaction, so its
-/// blocks cannot be read ahead of a writer that has not started yet, and
-/// decoding them inline is the correct trade for a rare, atomic operation.
+/// Derive + run the stages forward inside a caller-owned transaction.
 async fn connect_block_in(
   tx: &mut PgTx<'_>,
   data_src: &dyn HyDbDataSrc,
@@ -555,24 +515,9 @@ async fn connect_block_in(
   hash: &HyDbHash,
 ) -> Result<(), PipelineError> {
   let raw = chain::raw_bytes(&mut **tx, hash).await?;
-  let raw_len = raw.len() as i64;
-  let block = data_src
-    .decode(&raw)
-    .map_err(|e| HyDbDeriveError::Decode(e.to_string()))?;
-  connect_decoded_in(tx, height, raw_len, block).await
-}
 
-/// **The** write path for a connect. Both the forward look-ahead and the reorg
-/// replay land here, so there is exactly one place that applies a block —
-/// they differ only in where the decoded block came from.
-async fn connect_decoded_in(
-  tx: &mut PgTx<'_>,
-  height: i32,
-  raw_len: i64,
-  block: HyDbBlock,
-) -> Result<(), PipelineError> {
-  let mut scratch = Scratch::new(height, raw_len);
-  PgDeriver.derive(tx, block, &mut scratch).await?;
+  let mut scratch = Scratch::new(height, raw);
+  PgDeriver.derive(tx, data_src, &mut scratch).await?;
 
   base::BaseStage.connect(tx, &scratch).await?;
   balances::BalancesStage.connect(tx, &scratch).await?;
