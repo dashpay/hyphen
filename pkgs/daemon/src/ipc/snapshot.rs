@@ -74,6 +74,14 @@ impl HeartbeatState {
   }
 }
 
+/// How long recent ingest progress stands in for a reachable source.
+///
+/// A ping can fail while the source is fine — one refused connection during a
+/// restart, a momentary timeout — and blinking the indicator on that is noise.
+/// Progress inside this window means blocks were arriving, which is stronger
+/// evidence than a single ping either way. Beyond it, the ping decides.
+const SOURCE_PROGRESS_GRACE_SECS: u64 = 60;
+
 fn unix_now() -> u64 {
   SystemTime::now()
     .duration_since(UNIX_EPOCH)
@@ -94,13 +102,24 @@ fn stage_meta(stage: Stage) -> (&'static str, &'static str) {
 
 /// Build one heartbeat snapshot.
 pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) -> DaemonSnapshot {
-  let ping_ok = tokio::time::timeout(
-    std::time::Duration::from_secs(API_DATA_SOURCE_TIMEOUT_SECS),
-    ctx.source.ping(),
-  )
-  .await
-  .is_ok();
-  let ingesting = ctx.ingest_status.blocks_ingested_total() > 0;
+  // Both levels matter. `timeout` returns `Ok(Err(..))` when the call came back
+  // quickly *and failed* — connection refused, or an HTTP error — so testing
+  // only the outer `Ok` reported a node that answered "no" as connected.
+  let ping_ok = matches!(
+    tokio::time::timeout(
+      std::time::Duration::from_secs(API_DATA_SOURCE_TIMEOUT_SECS),
+      ctx.source.ping(),
+    )
+    .await,
+    Ok(Ok(())),
+  );
+  // Recent progress, not "ever ingested". A lifetime block count is permanent
+  // once the first block lands, so it stood in for a live source for the rest of
+  // the process, masking every later disconnection behind it.
+  let ingesting = ctx
+    .ingest_status
+    .last_progress_epoch()
+    .is_some_and(|epoch| unix_now().saturating_sub(epoch) < SOURCE_PROGRESS_GRACE_SECS);
   let data_source = if ping_ok || ingesting {
     RestSourceState::Connected
   } else {
