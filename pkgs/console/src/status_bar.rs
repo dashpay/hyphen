@@ -24,6 +24,9 @@ fn stepped_status(state: &AppState) -> Option<String> {
   (mode == "stepped").then(|| "mode=stepped".to_owned())
 }
 
+/// Reorg recovery, held for a window by the daemon after it happens (E2.5).
+/// `undo-replay` is routine; `rederive` means the undo coverage was not deep
+/// enough for the fork and the projection had to be rebuilt.
 fn recovery_status(state: &AppState) -> Option<String> {
   let snap = state.snapshot.as_ref()?;
   let progress = &snap.chain_progress_diag;

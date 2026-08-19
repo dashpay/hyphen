@@ -40,6 +40,13 @@ pub(crate) const DEFAULT_POLL_SECS: u64 = 5;
 /// Blocks absorbed per chunk before the engine is asked to connect them.
 const ABSORB_CHUNK_BLOCKS: u32 = 512;
 
+/// How long after a reorg the recovery indicator keeps reporting it.
+///
+/// A reorg is an event, not a state, and the engine exposes no "recovering"
+/// flag to poll. Holding the last one for a window is what makes it visible to
+/// an operator who was not watching the log at the moment it happened.
+const RECOVERY_STICKY_SECS: u64 = 300;
+
 /// Seconds between refreshes of the node's chain-wide transaction count.
 const CHAIN_TX_STATS_REFRESH_SECS: u64 = 300;
 
@@ -80,6 +87,14 @@ pub(crate) struct IngestStatus {
   /// process has absorbed. Chain density rises roughly 6x from genesis to the
   /// mainnet tip, so a projection needs the *recent* rate, not the average.
   txs_per_block_milli: AtomicU64,
+  /// Epoch of the last reorg this process applied (0 = none).
+  last_reorg_epoch: AtomicU64,
+  /// Fork height of that reorg (-1 = none).
+  last_reorg_fork_height: AtomicI64,
+  /// Whether that reorg fell back to full re-derivation rather than bounded
+  /// undo replay. The distinction is the whole point of the indicator: one is
+  /// routine, the other means the undo coverage was not enough.
+  last_reorg_full_rederive: AtomicBool,
   /// Set when a non-transient ingest failure has parked the loop. Ingestion
   /// stays down until an operator command clears it, which is the difference
   /// between "wedged, needs a human" and "briefly busy". Shared as an
@@ -194,6 +209,9 @@ impl IngestStatus {
       last_progress_epoch: Arc::new(AtomicU64::new(0)),
       started_epoch: AtomicU64::new(unix_now()),
       transactions_ingested_total: AtomicU64::new(0),
+      last_reorg_epoch: AtomicU64::new(0),
+      last_reorg_fork_height: AtomicI64::new(-1),
+      last_reorg_full_rederive: AtomicBool::new(false),
       network_transactions_total: AtomicU64::new(0),
       transactions_baseline: AtomicU64::new(0),
       transactions_baseline_known: AtomicBool::new(false),
@@ -224,6 +242,37 @@ impl IngestStatus {
       previous.saturating_add_signed(delta)
     };
     self.txs_per_block_milli.store(next, Ordering::Relaxed);
+  }
+
+  /// Record a reorg the engine reported (task E2.5).
+  fn note_reorg(&self, fork_height: u32, full_rederive: bool) {
+    self.last_reorg_epoch.store(unix_now(), Ordering::Relaxed);
+    self
+      .last_reorg_fork_height
+      .store(i64::from(fork_height), Ordering::Relaxed);
+    self
+      .last_reorg_full_rederive
+      .store(full_rederive, Ordering::Relaxed);
+  }
+
+  /// Recovery state for the IPC snapshot: what happened, and where.
+  ///
+  /// `("clean", None)` when this process has applied no reorg, or the last one
+  /// has aged out of [`RECOVERY_STICKY_SECS`]. The console's recovery
+  /// indicator reads exactly this pair, and before E2.5 nothing wrote it — it
+  /// was hardcoded `"clean"`, so the panel was structurally unable to fire.
+  pub(crate) fn recovery_state(&self) -> (&'static str, Option<u32>) {
+    let epoch = self.last_reorg_epoch.load(Ordering::Relaxed);
+    if epoch == 0 || unix_now().saturating_sub(epoch) > RECOVERY_STICKY_SECS {
+      return ("clean", None);
+    }
+    let label = if self.last_reorg_full_rederive.load(Ordering::Relaxed) {
+      "rederive"
+    } else {
+      "undo-replay"
+    };
+    let height = u32::try_from(self.last_reorg_fork_height.load(Ordering::Relaxed)).ok();
+    (label, height)
   }
 
   /// Record the node's chain-wide transaction count.
@@ -723,8 +772,10 @@ async fn advance_until_settled(
       info!(
         fork_height = reorg.fork_height.0,
         disconnected = reorg.disconnected.len(),
+        full_rederive = reorg.full_rederive,
         "chain reorganization applied"
       );
+      status.note_reorg(reorg.fork_height.0, reorg.full_rederive);
     }
     let connected = blocks_connected(&report.from, &report.to);
     if connected > 0 {
@@ -981,6 +1032,29 @@ mod tests {
     assert_eq!(progress.block_pct, Some(50.0));
     assert_eq!(progress.transactions_indexed, None);
     assert_eq!(progress.tx_pct, None);
+  }
+
+  /// E2.5: the recovery indicator must be able to fire. It was hardcoded to
+  /// `"clean"` while the console rendered it, so a reorg — routine or a full
+  /// re-derivation — was invisible on the panel built to show it.
+  #[test]
+  fn a_reorg_shows_up_in_the_recovery_indicator() {
+    let status = IngestStatus::new();
+    assert_eq!(status.recovery_state(), ("clean", None));
+
+    status.note_reorg(1_234_567, false);
+    assert_eq!(status.recovery_state(), ("undo-replay", Some(1_234_567)));
+
+    // A deep fork that needed full re-derivation must read differently: one is
+    // routine, the other says the undo coverage was not enough.
+    status.note_reorg(1_234_000, true);
+    assert_eq!(status.recovery_state(), ("rederive", Some(1_234_000)));
+
+    // It ages out rather than staying on forever.
+    status
+      .last_reorg_epoch
+      .store(unix_now() - RECOVERY_STICKY_SECS - 1, Ordering::Relaxed);
+    assert_eq!(status.recovery_state(), ("clean", None));
   }
 
   /// A pause is visible on the wire and clearable through the shared handle
