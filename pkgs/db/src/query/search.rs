@@ -25,12 +25,47 @@
 //! number of pools actually reached rather than by a fixed four, and the
 //! probes run concurrently — a flood of block matches can never crowd out the
 //! transaction the user actually searched for.
+//!
+//! # Relationship to the REST search endpoint (task C6)
+//!
+//! [`HyDbSearch::prefix`] still has NO production caller: `rest/search.rs`
+//! drives the four per-kind `search_prefix` probes itself. The db-side half of
+//! the consolidation is done here — `prefix` no longer holds its own copies of
+//! those four queries, it calls the same domain methods REST calls, so the two
+//! paths cannot drift again (they already had: see the validator ordering note
+//! below).
+//!
+//! What is left is NOT a mechanical swap of one call for four, and the
+//! difference is not a rounding error. Before REST can be pointed at this
+//! function, it needs from it:
+//!
+//! - **Result payloads.** REST answers with per-hit detail this trait cannot
+//!   express: validator `status`, block `canonical`/`orphan` labels, tx
+//!   `mined`/`coinbase` tags. [`HyDbQrSearchHit`] carries `kind` + `id` only,
+//!   which is exactly why the REST validator arm re-fetches each hit
+//!   (`validators().get()`) after its prefix probe.
+//! - **Arms with no Postgres pool behind them.** The numeric block-height
+//!   lookup (a primary-key hit that short-circuits the fan-out), the exact
+//!   64-hex both-endian probes, the mempool overlay for txs, the orphan-block
+//!   fallback, and governance (served from in-memory live state, and matching
+//!   free text rather than a prefix) all live above this seam.
+//! - **A decision about trim direction, which is a real behavioral choice.**
+//!   This function merges most-specific-first and sheds BLOCKS when the total
+//!   overshoots; REST appends blocks FIRST and stops at ten, so it sheds
+//!   transactions, addresses and governance instead. And REST asks every kind
+//!   for the full ten rather than a quota, so a flooding prefix can take all
+//!   ten slots. Consolidating changes which results a user sees; it is not a
+//!   refactor, and it is not this crate's call to make silently.
 
 use async_trait::async_trait;
 
+use super::addrs::{HyDbAddrIdx as _, PgAddrIdx};
+use super::blocks::{HyDbBlockIdx as _, PgBlockIdx};
+use super::txs::{HyDbTxIdx as _, PgTxIdx};
+use super::validators::{HyDbVlIdx as _, PgVlIdx};
 use super::PgRead;
-use crate::error::{HyDbError, HyDbResult};
-use crate::util::{escape_like, hex_prefix_pattern};
+use crate::error::HyDbResult;
+use crate::types::HyDbHash;
 
 /// A single search result. `id` is the entity's natural identifier: a
 /// DISPLAY-order hex hash for blocks/txs/validators, or the address string.
@@ -54,12 +89,36 @@ pub enum HyDbSearchKind {
 pub trait HyDbSearch: Send + Sync {
   /// Resolve a user-entered prefix to matching entities across all domains,
   /// capped at `limit` hits total (each kind receives its own quota).
+  ///
+  /// Length policy is the caller's: this returns an empty vector for a query
+  /// too short to be selective, rather than rejecting it. REST's four-character
+  /// minimum (and its 400) is a transport decision made above this seam.
+  ///
+  /// # Errors
+  ///
+  /// Propagates query failure from any probed domain.
   async fn prefix(&self, query: String, limit: u32) -> HyDbResult<Vec<HyDbQrSearchHit>>;
 }
 
 #[derive(Debug)]
 pub(crate) struct PgSearch {
   pub(crate) pg: PgRead,
+}
+
+/// A hash in DISPLAY order — the byte-reverse of the stored bytes, which is
+/// what a UI renders and a user copies (see the search contract above). The
+/// per-kind probes match on the SQL `display_hex()` of the same value, so this
+/// is the Rust side of one convention, not a second one.
+fn display_hex(hash: &HyDbHash) -> String {
+  hash
+    .as_bytes()
+    .iter()
+    .rev()
+    .fold(String::with_capacity(64), |mut out, b| {
+      use core::fmt::Write as _;
+      let _ = write!(out, "{b:02x}");
+      out
+    })
 }
 
 #[async_trait]
@@ -82,102 +141,80 @@ impl HyDbSearch for PgSearch {
     // actually probed rather than a fixed four — once dispatch narrows a query
     // to one kind, that kind should get the whole limit. The remainder (if the
     // quotas overshoot) is trimmed at the end, blocks last.
-    let each = i64::from(limit.div_ceil(pools).max(1));
-    let hex_pattern = hex_prefix_pattern(&query);
-    let addr_pattern = format!("{}%", escape_like(&query));
+    let each = limit.div_ceil(pools).max(1);
 
-    // Recency ordering is kept here: block hashes share a long run of leading
-    // zeros, so a short prefix matches most of the table and the planner walks
-    // `blocks_pkey` backwards and stops at the limit (~0.4 ms on mainnet).
+    // Each arm is the domain's own `search_prefix`, not a second copy of its
+    // query. The copies had already drifted: this function used to order
+    // validators by `(last_updated_height DESC, protx_hash ASC)` while
+    // `validators::search_prefix` tie-breaks on `registered_height DESC`
+    // between them, so the two paths returned different validators for the
+    // same prefix. Sharing the probe is what makes "both paths order
+    // identically" a property of the code rather than a claim about it —
+    // including the pieces of reasoning that live in those methods (why blocks
+    // are ordered by recency and txs and addresses deliberately are not).
     let blocks_q = async {
       if !want_hex {
-        return Ok::<Vec<String>, sqlx::Error>(Vec::new());
+        return Ok(Vec::new());
       }
-      sqlx::query_scalar!(
-        r#"SELECT display_hex(hash) AS "hex!" FROM blocks
-            WHERE display_hex(hash) LIKE $1 ESCAPE '\' ORDER BY height DESC LIMIT $2"#,
-        hex_pattern,
-        each
-      )
-      .fetch_all(&self.pg.query)
+      PgBlockIdx {
+        pg: self.pg.clone(),
+      }
+      .search_prefix(query.clone(), each)
       .await
     };
-
-    // No ORDER BY, deliberately. `LIMIT n` over the display_hex prefix index
-    // early-terminates after n matches; sorting by recency first forces every
-    // match to be enumerated and heap-fetched. Measured on the retained
-    // mainnet database (8.8M txs), a 4-character prefix costs 39-48 ms ordered
-    // against 0.4 ms unordered, and since txids are random, "most recent among
-    // prefix matches" is arbitrary UX anyway.
     let txs_q = async {
       if !want_hex {
-        return Ok::<Vec<String>, sqlx::Error>(Vec::new());
+        return Ok(Vec::new());
       }
-      sqlx::query_scalar!(
-        r#"SELECT display_hex(txid) AS "hex!" FROM transactions
-            WHERE display_hex(txid) LIKE $1 ESCAPE '\' LIMIT $2"#,
-        hex_pattern,
-        each
-      )
-      .fetch_all(&self.pg.query)
+      PgTxIdx {
+        pg: self.pg.clone(),
+      }
+      .search_prefix(query.clone(), each)
       .await
     };
-
-    // Same reasoning, and worse: the activity ordering is not covered by the
-    // prefix index, so it heap-fetched every match — 75 ms against 0.09 ms for
-    // a 4-character mainnet prefix. The index is text_pattern_ops, so the
-    // unordered scan already emits addresses in byte order.
     let addrs_q = async {
       if !want_addr {
-        return Ok::<Vec<String>, sqlx::Error>(Vec::new());
+        return Ok(Vec::new());
       }
-      sqlx::query_scalar!(
-        r#"SELECT address FROM address_stats
-            WHERE address LIKE $1 ESCAPE '\' LIMIT $2"#,
-        addr_pattern,
-        each
-      )
-      .fetch_all(&self.pg.query)
+      PgAddrIdx {
+        pg: self.pg.clone(),
+      }
+      .search_prefix(query.clone(), each)
       .await
     };
-
-    // Validators are a few thousand rows; the ordering is free.
     let validators_q = async {
       if !want_hex {
-        return Ok::<Vec<String>, sqlx::Error>(Vec::new());
+        return Ok(Vec::new());
       }
-      sqlx::query_scalar!(
-        r#"SELECT display_hex(protx_hash) AS "hex!" FROM validators
-            WHERE display_hex(protx_hash) LIKE $1 ESCAPE '\'
-            ORDER BY last_updated_height DESC, protx_hash ASC LIMIT $2"#,
-        hex_pattern,
-        each
-      )
-      .fetch_all(&self.pg.query)
+      PgVlIdx {
+        pg: self.pg.clone(),
+      }
+      .search_prefix(query.clone(), each)
       .await
     };
 
-    let (blocks, txs, addrs, validators) = tokio::try_join!(blocks_q, txs_q, addrs_q, validators_q)
-      .map_err(|e| HyDbError::pg("prefix search", e))?;
+    // Still concurrent: four pooled round trips on the latency-sensitive pool.
+    let (blocks, txs, addrs, validators) =
+      tokio::try_join!(blocks_q, txs_q, addrs_q, validators_q)?;
 
     // Merge with the most specific kinds first, so trimming to the total
     // limit sheds block hits (the broadest kind) before anything else.
     let mut hits: Vec<HyDbQrSearchHit> = Vec::new();
-    hits.extend(txs.into_iter().map(|id| HyDbQrSearchHit {
+    hits.extend(txs.iter().map(|txid| HyDbQrSearchHit {
       kind: HyDbSearchKind::Tx,
-      id,
+      id: display_hex(txid),
     }));
-    hits.extend(addrs.into_iter().map(|id| HyDbQrSearchHit {
+    hits.extend(addrs.into_iter().map(|addr| HyDbQrSearchHit {
       kind: HyDbSearchKind::Address,
-      id,
+      id: addr.0,
     }));
-    hits.extend(validators.into_iter().map(|id| HyDbQrSearchHit {
+    hits.extend(validators.iter().map(|protx| HyDbQrSearchHit {
       kind: HyDbSearchKind::Validator,
-      id,
+      id: display_hex(protx),
     }));
-    hits.extend(blocks.into_iter().map(|id| HyDbQrSearchHit {
+    hits.extend(blocks.iter().map(|block| HyDbQrSearchHit {
       kind: HyDbSearchKind::Block,
-      id,
+      id: display_hex(&block.hash),
     }));
     hits.truncate(limit as usize);
     Ok(hits)
