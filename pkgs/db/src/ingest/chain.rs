@@ -293,11 +293,36 @@ pub(super) async fn walk_to_fork(
     });
   }
 
-  if rows.len() as i64 >= max_depth {
+  // At exactly the bound the two remaining outcomes look identical from the row
+  // count, and they call for opposite responses: one is "this fork is too deep
+  // to reconnect", the other is "fetch the parent and try again". Deciding by
+  // length alone reported a fork whose ancestry genuinely ended as too deep, so
+  // the caller never fetched the block that would have unblocked it.
+  //
+  // The distinguishing fact is whether the deepest block's parent is absorbed.
+  // Asked only here, so the common paths keep their single round trip.
+  if rows.len() as i64 >= max_depth && parent_is_absorbed(pool, &deepest.hash).await? {
     return Ok(WalkOutcome::DepthExceeded);
   }
   // The recursion stopped because the parent of `deepest` is not absorbed.
   Ok(WalkOutcome::MissingAncestor)
+}
+
+/// Whether the parent of the block named by `hash` is itself absorbed.
+///
+/// # Errors
+///
+/// [`HyDbError::Pg`] if the probe fails.
+async fn parent_is_absorbed(pool: &PgPool, hash: &[u8]) -> HyDbResult<bool> {
+  sqlx::query_scalar(
+    "SELECT EXISTS ( \
+       SELECT 1 FROM ser_blocks c JOIN ser_blocks p ON p.hash = c.prev_hash \
+        WHERE c.hash = $1)",
+  )
+  .bind(hash)
+  .fetch_one(pool)
+  .await
+  .map_err(|e| HyDbError::pg("walk to fork: parent probe", e))
 }
 
 /// The canonical block hash at `height`, if any (used to name a disconnected
