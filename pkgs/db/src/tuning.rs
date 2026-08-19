@@ -48,12 +48,6 @@ pub const DEFAULT_STEPPED_SYNC: bool = true;
 /// the *open* partition and builds them when it closes, so a gap that could
 /// span more than one partition boundary has no single partition to close.
 pub const DEFAULT_STEPPED_SYNC_GAP: i64 = 25_000;
-/// Blocks fetched ahead of the writer by the prefetch pipeline (task A4).
-pub const DEFAULT_PREFETCH_BLOCKS: usize = 64;
-/// Decode threads feeding the writer (task A4).
-pub const DEFAULT_DECODE_WORKERS: usize = 4;
-/// Hard bound on how far the prefetcher may run ahead of the writer (A4).
-pub const DEFAULT_MAX_LEAD_BLOCKS: usize = 256;
 /// Blocks connected per `advance` call. Was `pipeline::MAX_SEGMENT_BLOCKS`.
 pub const DEFAULT_MAX_ADVANCE_BLOCKS: usize = 2_000;
 /// Deepest reorg the pipeline will unwind. Was `pipeline::MAX_REORG_DEPTH`.
@@ -120,12 +114,6 @@ pub struct HyDbIngestCfg {
   /// Block gap at which stepped sync engages. Checked against
   /// `[db.layout] partition_span` at load — see [`HyDbIngestCfg::validate`].
   pub stepped_sync_gap: i64,
-  /// Blocks fetched ahead of the writer.
-  pub prefetch_blocks: usize,
-  /// Threads decoding prefetched blocks.
-  pub decode_workers: usize,
-  /// Hard bound on decoded-but-unwritten blocks held in memory.
-  pub max_lead_blocks: usize,
   /// Blocks connected per `advance` call.
   pub max_advance_blocks: usize,
   /// Deepest reorg the pipeline will unwind. Must not exceed
@@ -160,9 +148,6 @@ impl Default for HyDbIngestCfg {
     Self {
       stepped_sync: DEFAULT_STEPPED_SYNC,
       stepped_sync_gap: DEFAULT_STEPPED_SYNC_GAP,
-      prefetch_blocks: DEFAULT_PREFETCH_BLOCKS,
-      decode_workers: DEFAULT_DECODE_WORKERS,
-      max_lead_blocks: DEFAULT_MAX_LEAD_BLOCKS,
       max_advance_blocks: DEFAULT_MAX_ADVANCE_BLOCKS,
       max_reorg_depth: DEFAULT_MAX_REORG_DEPTH,
       undo_keep_depth: DEFAULT_UNDO_KEEP_DEPTH,
@@ -201,21 +186,11 @@ impl HyDbIngestCfg {
       )))
     }
 
-    positive("decode_workers", self.decode_workers as i64)?;
-    positive("max_lead_blocks", self.max_lead_blocks as i64)?;
     positive("max_advance_blocks", self.max_advance_blocks as i64)?;
     positive("max_reorg_depth", self.max_reorg_depth)?;
     positive("undo_keep_depth", i64::from(self.undo_keep_depth))?;
     positive("batch_rows", self.batch_rows as i64)?;
     positive("stepped_sync_gap", self.stepped_sync_gap)?;
-
-    if self.max_lead_blocks < self.prefetch_blocks {
-      return Err(HyDbError::Config(format!(
-        "db.ingest.max_lead_blocks ({}) must be at least prefetch_blocks ({}) — \
-         the lead bound is what the prefetcher is allowed to fill",
-        self.max_lead_blocks, self.prefetch_blocks
-      )));
-    }
 
     // The invariant the constants carried in a doc comment, now checkable:
     // a disconnect replays undo rows, and anything below the keep depth has
@@ -756,15 +731,6 @@ mod tests {
         vacuum_cost_delay: Some(1_000),
         ..HyDbIngestCfg::default()
       },
-      HyDbIngestCfg {
-        decode_workers: 0,
-        ..HyDbIngestCfg::default()
-      },
-      HyDbIngestCfg {
-        prefetch_blocks: 512,
-        max_lead_blocks: 256,
-        ..HyDbIngestCfg::default()
-      },
     ] {
       assert!(cfg.validate(DEFAULT_PARTITION_SPAN).is_err(), "{cfg:?}");
     }
@@ -780,12 +746,9 @@ mod tests {
 
   #[test]
   fn every_ingest_key_fits_the_24_character_budget() {
-    const KEYS: [&str; 15] = [
+    const KEYS: [&str; 12] = [
       "stepped_sync",
       "stepped_sync_gap",
-      "prefetch_blocks",
-      "decode_workers",
-      "max_lead_blocks",
       "max_advance_blocks",
       "max_reorg_depth",
       "undo_keep_depth",

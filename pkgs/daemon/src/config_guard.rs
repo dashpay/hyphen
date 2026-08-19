@@ -82,7 +82,7 @@
 //! detection patterns with `concat!` so a repo-wide grep for a forbidden
 //! crate name does not land in the guard. The patterns here are the config
 //! keys themselves, and hiding those would be the wrong trade — someone
-//! grepping for `prefetch_blocks` should land on the declaration that says it
+//! grepping for `copy_threshold` should land on the declaration that says it
 //! is inert and why. The guard excludes itself from the read-site scan
 //! instead, so naming a key here never makes it look consumed.
 //!
@@ -265,28 +265,7 @@ mod tests {
     consumed("HyDbIngestCfg", "fillfactor"),
     consumed("HyDbIngestCfg", "stepped_sync"),
     consumed("HyDbIngestCfg", "stepped_sync_gap"),
-    pending(
-      "HyDbIngestCfg", "prefetch_blocks", "A4",
-      "the prefetch pipeline does not exist. This is the same key name that \
-       shipped inert under [performance]; it is declared here rather than \
-       quietly reintroduced",
-    ),
-    pending(
-      "HyDbIngestCfg", "decode_workers", "A4",
-      "no decode stage exists to have workers until the prefetch pipeline lands",
-    ),
-    pending(
-      "HyDbIngestCfg", "max_lead_blocks", "A4",
-      "the bound on how far the prefetcher may run ahead of the writer; there \
-       is nothing to bound yet",
-    ),
-    pending(
-      "HyDbIngestCfg", "batch_rows", "A6",
-      "the writer emits one UNNEST per table per block with no row cap, so a \
-       cap has nothing to cap. Capping it splits the block's write into \
-       several statements, which is a change to the hottest path and belongs \
-       with the batching work, not with a config task",
-    ),
+    consumed("HyDbIngestCfg", "batch_rows"),
     pending(
       "HyDbIngestCfg", "copy_threshold", "A6",
       "COPY is not used on the write path yet, so there is no threshold to \
