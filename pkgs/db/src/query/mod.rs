@@ -8,9 +8,6 @@
 //! implementation here and an in-memory implementation supplied by the daemon
 //! for its own tests. Row types (singular where they name one record) live
 //! beside the trait that returns them.
-//!
-//! Method bodies for the Postgres backend are ported per domain in Phase 2;
-//! until then they return [`crate::HyDbError::Unimplemented`].
 
 pub mod addrs;
 pub mod blocks;

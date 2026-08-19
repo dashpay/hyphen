@@ -199,12 +199,9 @@ fn build_storage_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
 fn ingest_state_label(state: IngestionStateName) -> &'static str {
   match state {
     IngestionStateName::Boot => "boot",
-    IngestionStateName::Reconciling => "reconciling",
     IngestionStateName::PollingTip => "polling",
     IngestionStateName::Idle => "idle",
     IngestionStateName::Paused => "paused",
-    IngestionStateName::Admitting => "admitting",
-    IngestionStateName::Throttled => "throttled",
     IngestionStateName::Fetching => "fetching",
     IngestionStateName::Committing => "committing",
     IngestionStateName::Backoff => "backoff",
@@ -452,14 +449,6 @@ fn build_status_lines(inner: Rect, state: &AppState) -> Vec<Line<'static>> {
             .last_forward_success_epoch
             .map(|epoch| format!("{}s ago", now_epoch().saturating_sub(epoch)))
             .unwrap_or_else(|| "--".into()),
-        ),
-        (
-          "Scheduler Truth",
-          if snap.core_pipeline_diag.stale_scheduler_state {
-            "stale".to_owned()
-          } else {
-            "fresh".to_owned()
-          },
         ),
         (
           "Recovery",

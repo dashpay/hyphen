@@ -77,7 +77,10 @@ impl Scratch {
   }
 
   /// Record everything the deriver computed for the block, in one shot.
-  #[allow(clippy::too_many_arguments)]
+  #[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct stage input with no natural grouping"
+  )]
   pub(super) fn fill(
     &mut self,
     block: HyDbBlock,
@@ -231,7 +234,7 @@ pub(super) enum HyDbStageError {
   /// A write against Postgres failed. Wraps the `HyDbError`, preserving code.
   /// `stage` names the culprit for diagnostics; it rides the `Debug` derive.
   Pg {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "read by the stage that consumes this scratch row")]
     stage: &'static str,
     source: HyDbError,
   },

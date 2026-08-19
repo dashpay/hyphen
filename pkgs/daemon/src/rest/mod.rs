@@ -202,8 +202,6 @@ pub struct AppState {
   pub indices: IndexCapabilities,
   pub live: LiveCapabilities,
   pub overlays: OverlayCapabilities,
-  #[allow(dead_code)]
-  pub recent_mempool_txs: usize,
   pub stream_hub: Option<Arc<StreamHub>>,
   pub live_state: Arc<LiveState>,
   pub stream_heartbeat_secs: u64,

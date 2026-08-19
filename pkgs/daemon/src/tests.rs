@@ -38,7 +38,6 @@ pub fn app_state() -> AppState {
       protx: false,
       chainlock: false,
     },
-    recent_mempool_txs: 0,
     stream_hub: None,
     live_state: Arc::new(crate::live::state::LiveState::new()),
     stream_heartbeat_secs: 1,

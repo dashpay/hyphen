@@ -205,30 +205,14 @@ pub struct IngestionDiag {
   pub state: IngestionStateName,
   /// Ingestion is explicitly paused by the control plane.
   pub paused: bool,
-  /// Ingestion is waiting for PostgreSQL indexing to catch up.
-  pub throttled: bool,
   /// Index-maintenance regime: `realtime` or `stepped` (task A3). Defaulted
   /// so a console talking to an older daemon still decodes the frame.
   #[serde(default)]
   pub sync_mode: String,
   /// Most recent upstream tip observed by block ingestion polling.
   pub last_polled_tip: Option<u32>,
-  /// Absorbed-block lead over the connected projection height.
-  pub lead_blocks: Option<u32>,
-  /// Configured maximum absorb lead before ingestion throttles.
-  pub max_lead_blocks: u32,
   /// Last time ingestion connected new blocks into the projection.
   pub last_progress_epoch: Option<u64>,
-  /// Last time throttling cleared and ingestion could proceed.
-  pub last_throttle_clear_epoch: Option<u64>,
-  /// Last time ingestion started fetching one approved batch.
-  pub last_fetch_start_epoch: Option<u64>,
-  /// First height in the currently active fetch batch.
-  pub current_batch_start: Option<u32>,
-  /// Last height in the currently active fetch batch.
-  pub current_batch_end: Option<u32>,
-  /// Last time the state machine entered its current state.
-  pub last_state_transition_epoch: Option<u64>,
   /// Current retry attempt for the in-flight batch, when applicable.
   pub retry_attempt: Option<u32>,
   /// Epoch when the current backoff sleep should end.
@@ -256,12 +240,9 @@ pub enum IngestionActivity {
 pub enum IngestionStateName {
   #[default]
   Boot,
-  Reconciling,
   PollingTip,
   Idle,
   Paused,
-  Admitting,
-  Throttled,
   Fetching,
   Committing,
   Backoff,
@@ -402,8 +383,6 @@ pub enum CorePipelineHealth {
   /// Ingest and indexing are progressing normally.
   #[default]
   Healthy,
-  /// Ingest is intentionally throttled while forward indexing still advances.
-  Backpressured,
   /// Runtime truth is stale or progress is degraded but not fully stalled.
   Degraded,
   /// Core pipeline progress appears stalled.
@@ -419,12 +398,6 @@ pub struct CorePipelineDiag {
   /// Whether ingest is currently paused by the control plane.
   #[serde(default)]
   pub paused: bool,
-  /// Whether ingest is currently throttled by the lead cap.
-  #[serde(default)]
-  pub backpressured: bool,
-  /// Whether scheduler truth appears stale relative to observed progress.
-  #[serde(default)]
-  pub stale_scheduler_state: bool,
   /// Unix timestamp of the last successful ingest commit.
   pub last_ingest_success_epoch: Option<u64>,
   /// Unix timestamp of the last successful forward block commit.

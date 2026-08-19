@@ -194,7 +194,10 @@ where
   }
 }
 
-#[allow(dead_code)]
+#[expect(
+  dead_code,
+  reason = "the gate is implemented ahead of the callers that will drive it"
+)]
 /// Lifecycle control shared by all long-lived supervisors.
 pub(crate) trait InterruptGate {
   /// Request graceful interruption.
@@ -204,7 +207,6 @@ pub(crate) trait InterruptGate {
   fn interrupt_point(&self) -> bool;
 }
 
-#[allow(dead_code)]
 /// Common lifecycle surface for daemon supervisors.
 #[async_trait]
 pub(crate) trait Visor: InterruptGate {

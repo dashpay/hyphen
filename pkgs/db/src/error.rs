@@ -45,9 +45,6 @@ pub enum HyDbError {
   /// A mock/in-memory backend method has no implementation yet. Never returned
   /// by the Postgres backend.
   MockGap(&'static str),
-  /// A Postgres backend method whose body has not yet been ported. Temporary:
-  /// removed as each domain is filled in.
-  Unimplemented(&'static str),
 }
 
 impl HyDbError {
@@ -59,9 +56,7 @@ impl HyDbError {
       Self::Layout(_) => Outcome::Fatal,
       Self::Consistency(_) => Outcome::Fatal,
       Self::Pg { code, message } => classify_pg(code.as_deref(), message),
-      Self::Decode(_) | Self::Derive(_) | Self::MockGap(_) | Self::Unimplemented(_) => {
-        Outcome::Error
-      }
+      Self::Decode(_) | Self::Derive(_) | Self::MockGap(_) => Outcome::Error,
     }
   }
 
@@ -94,7 +89,6 @@ impl fmt::Display for HyDbError {
       Self::Decode(msg) => write!(f, "row decode error: {msg}"),
       Self::Derive(msg) => write!(f, "derive error: {msg}"),
       Self::MockGap(name) => write!(f, "mock backend has no impl for `{name}`"),
-      Self::Unimplemented(name) => write!(f, "backend method `{name}` is not yet ported"),
     }
   }
 }
@@ -211,7 +205,6 @@ mod tests {
   #[case(HyDbError::Decode("bad row".into()))]
   #[case(HyDbError::Derive("bad block".into()))]
   #[case(HyDbError::MockGap("mock.method"))]
-  #[case(HyDbError::Unimplemented("pg.method"))]
   fn other_variants_are_plain_error(#[case] err: HyDbError) {
     assert_eq!(err.classify(), Outcome::Error);
     assert!(!err.is_transient());
@@ -225,7 +218,6 @@ mod tests {
   #[case(HyDbError::Decode("d".into()), "row decode error: d")]
   #[case(HyDbError::Derive("dr".into()), "derive error: dr")]
   #[case(HyDbError::MockGap("n"), "mock backend has no impl for `n`")]
-  #[case(HyDbError::Unimplemented("n"), "backend method `n` is not yet ported")]
   fn display_renders_each_variant(#[case] err: HyDbError, #[case] want: &str) {
     assert_eq!(err.to_string(), want);
   }

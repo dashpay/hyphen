@@ -81,7 +81,6 @@ impl RestVisor {
       indices: self.cfg.indices,
       live: self.cfg.live,
       overlays: self.cfg.overlays,
-      recent_mempool_txs: self.cfg.recent_mempool_txs,
       stream_hub: self.cfg.stream_hub.clone(),
       live_state: Arc::clone(&self.cfg.live_state),
       stream_heartbeat_secs: self.cfg.stream_heartbeat_secs,

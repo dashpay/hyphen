@@ -193,7 +193,10 @@ async fn undo_coverage_finds_holes_and_forgives_pruning() -> TestResult {
   result
 }
 
-#[allow(clippy::too_many_lines)] // one chain, many injuries; splitting it would rebuild the chain per case
+#[expect(
+  clippy::too_many_lines,
+  reason = "one chain, many injuries; splitting it would rebuild the chain per case"
+)]
 async fn scenarios(tmp: &TempDb) -> TestResult {
   let db = tmp.open().await?;
   let ingest = db.ingest(Arc::new(TestSrc)).await?;

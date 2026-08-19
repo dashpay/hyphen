@@ -25,8 +25,8 @@ use crate::sources::{RestSource, RpcSource, ZmqSource};
 use hyphend::wire::msg::{
   ChainProgressDiag, ConfigSnapshot, CorePipelineDiag, CorePipelineHealth, DaemonSnapshot,
   ForwardLaneDiag, ForwardLanePhase, ForwardProgressState, IndexSchedulerDiag, IndexSchedulerLane,
-  IngestionActivity, IngestionDiag, IngestionStateName, PostgresDiag, RestSourceState, RpcDiag,
-  SchedulerLoopPhase, StageProgress, StorageDiag, ZmqDiag,
+  IngestionDiag, IngestionStateName, PostgresDiag, RestSourceState, RpcDiag, SchedulerLoopPhase,
+  StageProgress, StorageDiag, ZmqDiag,
 };
 
 const PG_SIZE_REFRESH_SECS: u64 = 30;
@@ -200,17 +200,9 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
     activity: ctx.ingest_status.activity(),
     state: ctx.ingest_status.state_name(),
     paused: ctx.ingest_status.operator_pause_requested(),
-    throttled: false,
     sync_mode: ctx.ingest_status.sync_mode().to_owned(),
     last_polled_tip: network_tip,
-    lead_blocks: None,
-    max_lead_blocks: 0,
     last_progress_epoch: ctx.ingest_status.last_progress_epoch(),
-    last_throttle_clear_epoch: None,
-    last_fetch_start_epoch: None,
-    current_batch_start: None,
-    current_batch_end: None,
-    last_state_transition_epoch: None,
     retry_attempt: ctx.ingest_status.retry_attempt(),
     backoff_until_epoch: ctx.ingest_status.backoff_until_epoch(),
     stalled: ctx.ingest_status.stalled(),
@@ -375,16 +367,12 @@ fn pipeline_diag(ingestion: &IngestionDiag, _now_epoch: u64) -> CorePipelineDiag
     CorePipelineHealth::Stalled
   } else if ingestion.state == IngestionStateName::Backoff {
     CorePipelineHealth::Degraded
-  } else if ingestion.activity == IngestionActivity::Active {
-    CorePipelineHealth::Healthy
   } else {
     CorePipelineHealth::Healthy
   };
   CorePipelineDiag {
     health,
     paused: ingestion.paused,
-    backpressured: false,
-    stale_scheduler_state: false,
     last_ingest_success_epoch: ingestion.last_progress_epoch,
     last_forward_success_epoch: ingestion.last_progress_epoch,
     last_forward_attempt_epoch: ingestion.last_progress_epoch,

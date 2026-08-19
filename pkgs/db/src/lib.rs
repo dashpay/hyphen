@@ -210,7 +210,10 @@ impl HyphenDb {
   /// this to inject in-memory fakes for its own tests; the resulting facade has
   /// no ingest capability.
   #[cfg(any(test, feature = "tests"))]
-  #[allow(clippy::too_many_arguments)]
+  #[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct stage input with no natural grouping"
+  )]
   pub fn from_parts(
     blocks: Arc<dyn HyDbBlockIdx>,
     txs: Arc<dyn HyDbTxIdx>,
