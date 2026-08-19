@@ -210,9 +210,7 @@ fn branch(tag: u8, lo: u32, hi: u32, root: Option<(HyDbHash, HyDbHash)>) -> Vec<
 
 #[tokio::test]
 async fn the_look_ahead_keeps_order_and_a_reorg_discards_it() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Err("no test database".into());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result

@@ -200,9 +200,7 @@ async fn assert_consistent(pool: &PgPool, at: &str) -> TestResult {
 
 #[tokio::test]
 async fn rich_list_side_table_tracks_the_floor_in_both_directions() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result

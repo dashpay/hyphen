@@ -12,7 +12,8 @@
 //! reorg disconnects the spend/validator blocks to exercise the stage inverses
 //! (`ValidatorsStage::restore`, spend undo).
 //!
-//! Skips (returns `Ok`) when `HYPHEN_TEST_DATABASE_URL` is unset.
+//! Targets `HYPHEN_TEST_DATABASE_URL`, or the default local server when it is
+//! unset; an unreachable server fails the test rather than skipping it.
 //!
 //! A block is `hash(32) || prev_hash(32)`; the data source looks the rest up in
 //! a per-block spec it was constructed with, so a block's coinbase, optional
@@ -24,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use common::{TempDb, ENV};
+use common::TempDb;
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbDataSrc, HyDbHash, HyDbHeader,
   HyDbHeight, HyDbOutpoint, HyDbResult, HyDbTx, HyDbTxIn, HyDbTxOut, HyDbTxType, HyDbVlEvent,
@@ -328,10 +329,7 @@ fn build_src() -> Src {
 
 #[tokio::test]
 async fn ingest_spends_validators_and_reorgs() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    eprintln!("{ENV} unset; skipping spend/validator ingest test");
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result

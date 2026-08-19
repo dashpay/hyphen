@@ -530,9 +530,7 @@ fn chain() -> Src {
 
 #[tokio::test]
 async fn address_stats_reverses_bit_for_bit() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result

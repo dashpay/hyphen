@@ -131,7 +131,7 @@ fn ui_hex(hash: &[u8; 32]) -> String {
 
 #[tokio::test]
 async fn ui_rendered_prefix_finds_its_row() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_search(&tmp).await;
   tmp.drop_now().await;
   result
@@ -216,7 +216,7 @@ async fn run_search(tmp: &TempDb) -> TestResult {
 
 #[tokio::test]
 async fn multi_block_and_same_height_reorgs() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_reorg(&tmp).await;
   tmp.drop_now().await;
   result
@@ -368,7 +368,7 @@ async fn partitions_of(pool: &PgPool, parent: &str) -> Result<Vec<i32>, sqlx::Er
 
 #[tokio::test]
 async fn undo_is_pruned_by_dropping_partitions() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_prune(&tmp).await;
   tmp.drop_now().await;
   result
@@ -476,7 +476,7 @@ async fn run_prune(tmp: &TempDb) -> TestResult {
 /// and so the deepest undo row that must still exist — has to succeed.
 #[tokio::test]
 async fn deepest_reversible_reorg_survives_the_prune() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_deep_reorg(&tmp).await;
   tmp.drop_now().await;
   result
@@ -536,7 +536,7 @@ async fn run_deep_reorg(tmp: &TempDb) -> TestResult {
 /// return success having left the projection where the block put it.
 #[tokio::test]
 async fn disconnect_below_the_horizon_is_refused() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_below_horizon(&tmp).await;
   tmp.drop_now().await;
   result
@@ -589,7 +589,7 @@ async fn run_below_horizon(tmp: &TempDb) -> TestResult {
 /// moved exactly where the block put it.
 #[tokio::test]
 async fn missing_address_undo_is_refused_by_name() -> TestResult {
-  let tmp = TempDb::create().await?.ok_or("test database unavailable")?;
+  let tmp = TempDb::create().await?;
   let result = run_missing_address_undo(&tmp).await;
   tmp.drop_now().await;
   result

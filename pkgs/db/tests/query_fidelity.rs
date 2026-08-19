@@ -9,12 +9,13 @@
 //! crate's migrations via [`HyphenDb::connect`], seeds a minimal chain with raw
 //! SQL, then exercises the public query API.
 //!
-//! The whole suite skips (returns `Ok`) when `HYPHEN_TEST_DATABASE_URL` is
-//! unset, keeping `cargo test` green without a database.
+//! The suite targets `HYPHEN_TEST_DATABASE_URL`, or the default local server
+//! when it is unset. An unreachable server fails every test in it: green here
+//! means the read path ran, never that it was skipped.
 
 mod common;
 
-use common::{TempDb, ENV};
+use common::TempDb;
 use hyphen_db::query::HyDbSearchKind;
 use hyphen_db::{HyDbHash, HyDbHeight, HyDbVlType};
 use sqlx::PgPool;
@@ -119,10 +120,7 @@ async fn seed_minimal_chain(pool: &PgPool, txid: &[u8], address: &str, value: i6
 
 #[tokio::test]
 async fn read_path_round_trips_a_seeded_chain() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    eprintln!("{ENV} unset; skipping fidelity test");
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run_read_path(&tmp).await;
   tmp.drop_now().await;
   result
@@ -195,9 +193,7 @@ async fn run_read_path(tmp: &TempDb) -> TestResult {
 
 #[tokio::test]
 async fn empty_database_reports_no_tip() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = async {
     let db = tmp.open().await?;
     assert!(db.status().tip().await?.is_none(), "empty db has no tip");
@@ -215,10 +211,7 @@ async fn empty_database_reports_no_tip() -> TestResult {
 /// would surface as a swapped/mistyped field here rather than at compile time).
 #[tokio::test]
 async fn validator_round_trips_through_list_and_get() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    eprintln!("{ENV} unset; skipping validator fidelity test");
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run_validators(&tmp).await;
   tmp.drop_now().await;
   result

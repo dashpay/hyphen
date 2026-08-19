@@ -20,12 +20,8 @@ use sqlx::{Executor as _, Row as _};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-/// `TempDb::create` never returns `Ok(None)`; the `Option` is legacy shape, so
-/// this turns it into an error rather than a silently-green skip.
 async fn temp_db() -> Result<TempDb, Box<dyn std::error::Error>> {
-  TempDb::create()
-    .await?
-    .ok_or_else(|| "test database must be reachable".into())
+  TempDb::create().await
 }
 
 /// `reloptions` for a table, as a sorted list of `key=value` strings.
