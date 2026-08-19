@@ -28,7 +28,7 @@ use bytes::Bytes;
 use hyphen_db::{HyDbBlockSeen, HyDbHash, HyDbHeight, HyDbIngest, HyDbSyncMode, HyphenDb};
 use tracing::{error, info, warn};
 
-use crate::error::{DaemonError, Outcome};
+use crate::error::{DaemonError, Outcome, RestErrorKind};
 use crate::lifecycle::Lifecycle;
 use crate::sources::{RestSource, RpcSource};
 use crate::utils::{self, HashEndian};
@@ -822,14 +822,84 @@ async fn read_local_tip(db: &HyphenDb) -> Result<i64, DaemonError> {
   )
 }
 
+/// Record an ancestor about to be fetched, refusing a walk that cannot end.
+///
+/// Split out from the loop so both refusals are reachable without a storage
+/// engine or a node behind them.
+///
+/// # Errors
+///
+/// `RestSource` when the walk has already reached `max_ancestors`, or when this
+/// ancestor has been requested before, which means the reported chain loops.
+fn admit_ancestor_request(
+  parent: &HyDbHash,
+  requested: &mut std::collections::HashSet<[u8; 32]>,
+  max_ancestors: usize,
+) -> Result<(), DaemonError> {
+  let parent_hex = utils::view_hex(parent.as_bytes(), HashEndian::Ser);
+  if requested.len() >= max_ancestors {
+    return Err(DaemonError::RestSource {
+      message: format!(
+        "ancestor walk reached {max_ancestors} blocks without finding an \
+         absorbed parent, which is the deepest reorg this projection can \
+         reconnect; stopped at {parent_hex}"
+      ),
+      kind: RestErrorKind::Other,
+    });
+  }
+  if !requested.insert(*parent.as_bytes()) {
+    return Err(DaemonError::RestSource {
+      message: format!(
+        "ancestor {parent_hex} was requested twice, so the chain the source \
+         reports contains a cycle"
+      ),
+      kind: RestErrorKind::Other,
+    });
+  }
+  Ok(())
+}
+
+/// Refuse a fetched ancestor that is not the block that was asked for.
+///
+/// # Errors
+///
+/// `RestSource` when the hashes differ. A source that echoes the child back
+/// would otherwise have it absorbed under a hash it does not have, and the walk
+/// would never reach the parent it is looking for.
+fn verify_ancestor_response(wanted: &HyDbHash, got: &HyDbHash) -> Result<(), DaemonError> {
+  if got == wanted {
+    return Ok(());
+  }
+  Err(DaemonError::RestSource {
+    message: format!(
+      "asked for block {} and got {}",
+      utils::view_hex(wanted.as_bytes(), HashEndian::Ser),
+      utils::view_hex(got.as_bytes(), HashEndian::Ser)
+    ),
+    kind: RestErrorKind::Other,
+  })
+}
+
 /// Absorb a block, fetching (and absorbing) any ancestor the engine reports
 /// missing before retrying — the seam that also pulls in a reorg's branch.
+///
+/// Each `MissingParent` removes one entry from the stack and adds two, so the
+/// walk only terminates because the ancestry does. Three things make that a
+/// property of this function rather than of the endpoint's good behaviour: the
+/// fetched block must be the one that was asked for, an ancestor may not be
+/// requested twice, and the walk may not exceed the depth a reorg can
+/// reconnect. Without them a source that answers every parent request with the
+/// original block grows the stack until the process is out of memory.
 async fn absorb_with_ancestors(
   ingest: &HyDbIngest,
   source: &dyn RestSource,
   status: &IngestStatus,
   raw: Vec<u8>,
 ) -> Result<(), DaemonError> {
+  // Fetching past the retained undo window cannot pay off: a fork deeper than
+  // `max_reorg_depth` is refused by the disconnect path anyway.
+  let max_ancestors = usize::try_from(hyphen_db::tuning::max_reorg_depth().max(0)).unwrap_or(0);
+  let mut requested: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
   let mut stack = vec![raw];
   while let Some(raw) = stack.pop() {
     match ingest
@@ -838,8 +908,10 @@ async fn absorb_with_ancestors(
       .map_err(|e| DaemonError::storage("absorb block", e))?
     {
       HyDbBlockSeen::MissingParent(parent) => {
+        admit_ancestor_request(&parent, &mut requested, max_ancestors)?;
         let parent_hex = utils::view_hex(parent.as_bytes(), HashEndian::Ser);
         let parent_raw = source.raw_block(&parent_hex).await?;
+        verify_ancestor_response(&parent, &block_hash(&parent_raw)?)?;
         stack.push(raw);
         stack.push(parent_raw);
       }
@@ -866,6 +938,52 @@ mod tests {
   use super::*;
   use crate::error::RestErrorKind;
   use hyphen_db::HyDbError;
+
+  fn hash(byte: u8) -> HyDbHash {
+    HyDbHash([byte; 32])
+  }
+
+  /// Each `MissingParent` removes one stack entry and adds two, so without a
+  /// bound a source that never produces an absorbed parent grows the stack
+  /// until the process dies. This is that bound.
+  #[test]
+  fn the_ancestor_walk_stops_at_the_deepest_reconnectable_reorg() {
+    let mut requested = std::collections::HashSet::new();
+    for byte in 0..3u8 {
+      assert!(admit_ancestor_request(&hash(byte), &mut requested, 3).is_ok());
+    }
+    let err = admit_ancestor_request(&hash(9), &mut requested, 3)
+      .err()
+      .map(|e| e.to_string())
+      .unwrap_or_default();
+    assert!(err.contains("reached 3 blocks"), "got {err}");
+  }
+
+  /// A source that reports a parent it has already been asked for is
+  /// describing a loop, not an ancestry.
+  #[test]
+  fn a_repeated_ancestor_request_is_refused_as_a_cycle() {
+    let mut requested = std::collections::HashSet::new();
+    assert!(admit_ancestor_request(&hash(1), &mut requested, 100).is_ok());
+    let err = admit_ancestor_request(&hash(1), &mut requested, 100)
+      .err()
+      .map(|e| e.to_string())
+      .unwrap_or_default();
+    assert!(err.contains("cycle"), "got {err}");
+  }
+
+  /// The endpoint answering with something other than the requested block is
+  /// the shape that made the walk unbounded: the child comes back, is pushed
+  /// again, and reports the same missing parent forever.
+  #[test]
+  fn an_ancestor_that_is_not_the_requested_block_is_refused() {
+    assert!(verify_ancestor_response(&hash(1), &hash(1)).is_ok());
+    let err = verify_ancestor_response(&hash(1), &hash(2))
+      .err()
+      .map(|e| e.to_string())
+      .unwrap_or_default();
+    assert!(err.contains("asked for block"), "got {err}");
+  }
 
   fn pg(code: &str) -> DaemonError {
     DaemonError::storage(
