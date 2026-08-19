@@ -915,13 +915,20 @@ async fn absorb_with_ancestors(
         stack.push(raw);
         stack.push(parent_raw);
       }
-      // Counted on this arm only: a `MissingParent` block is pushed back and
-      // seen again, so counting on the way in would double it (task F2).
-      HyDbBlockSeen::New | HyDbBlockSeen::Known => {
+      // Counted here rather than on the way in, because a `MissingParent`
+      // block is pushed back and seen a second time.
+      //
+      // `New` only. `Known` means the engine already holds this block, so its
+      // transactions were counted when it was first absorbed. Counting them
+      // again made every re-delivery — a poll that returns the same tip, a
+      // reconnect, a retry — add to a total that has no compensating
+      // decrement, so reported progress climbed past 100% and stayed there.
+      HyDbBlockSeen::New => {
         if let Some(txs) = block_tx_count(&raw) {
           status.note_block_txs(txs);
         }
       }
+      HyDbBlockSeen::Known => {}
     }
   }
   Ok(())
