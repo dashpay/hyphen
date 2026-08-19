@@ -267,33 +267,36 @@ impl HyDbUndoReport {
 /// [`HyDbError::Pg`] if a read fails, [`HyDbError::Decode`] if a stored height
 /// is negative.
 pub async fn undo_coverage(pool: &PgPool) -> HyDbResult<HyDbUndoReport> {
-  let tip = sqlx::query_scalar!(r#"SELECT MAX(height) AS "tip" FROM blocks"#)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| HyDbError::pg("verify: canonical tip", e))?;
-
+  // The tip and the undo bounds are read by one statement, so they describe one
+  // snapshot. Read separately, an advance between them left every row the
+  // advance had just written sitting "above" a tip that had already moved, and
+  // the verifier reported `StaleAboveTip` against a healthy database.
+  //
   // `-1` for an empty projection keeps one code path: the window is empty and
   // every undo row, if any, counts as sitting above the tip.
-  let tip_or_below_genesis = tip.unwrap_or(-1);
-
-  let bounds = sqlx::query!(
-    r#"SELECT MIN(height) FILTER (WHERE height <= $1) AS lo,
-              MAX(height) FILTER (WHERE height <= $1) AS hi,
-              COUNT(*) FILTER (WHERE height <= $1) AS "in_window!",
-              COUNT(*) FILTER (WHERE height > $1) AS "above_tip!"
-         FROM undo_blocks"#,
-    tip_or_below_genesis
-  )
-  .fetch_one(pool)
-  .await
-  .map_err(|e| HyDbError::pg("verify: undo bounds", e))?;
+  //
+  // Runtime API rather than `query!` so it needs no offline-cache entry.
+  let (tip, lo, hi, in_window, above_tip): (Option<i32>, Option<i32>, Option<i32>, i64, i64) =
+    sqlx::query_as(
+      "WITH t AS (SELECT MAX(height) AS tip FROM blocks) \
+       SELECT t.tip, \
+              MIN(u.height) FILTER (WHERE u.height <= COALESCE(t.tip, -1)), \
+              MAX(u.height) FILTER (WHERE u.height <= COALESCE(t.tip, -1)), \
+              COUNT(u.height) FILTER (WHERE u.height <= COALESCE(t.tip, -1)), \
+              COUNT(u.height) FILTER (WHERE u.height > COALESCE(t.tip, -1)) \
+         FROM t LEFT JOIN undo_blocks u ON TRUE \
+        GROUP BY t.tip",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| HyDbError::pg("verify: undo coverage snapshot", e))?;
 
   let mut report = HyDbUndoReport {
     tip: tip.map(HyDbHeight::try_from_i32).transpose()?,
-    undo_lo: bounds.lo.map(HyDbHeight::try_from_i32).transpose()?,
-    undo_hi: bounds.hi.map(HyDbHeight::try_from_i32).transpose()?,
-    covered_rows: bounds.in_window,
-    rows_above_tip: bounds.above_tip,
+    undo_lo: lo.map(HyDbHeight::try_from_i32).transpose()?,
+    undo_hi: hi.map(HyDbHeight::try_from_i32).transpose()?,
+    covered_rows: in_window,
+    rows_above_tip: above_tip,
     prune_cutoff: tip.map(|t| i64::from(t) - i64::from(undo_keep_depth())),
     ..HyDbUndoReport::default()
   };
@@ -313,7 +316,7 @@ pub async fn undo_coverage(pool: &PgPool) -> HyDbResult<HyDbUndoReport> {
 
   // Both bounds are window-scoped (`FILTER (WHERE height <= tip)`): undo rows
   // above the tip are reported separately and must not move the floor.
-  let (Some(lo), Some(hi)) = (bounds.lo, bounds.hi) else {
+  let (Some(lo), Some(hi)) = (lo, hi) else {
     report
       .defects
       .push(HyDbUndoDefect::NoCoverage { tip: tip_h });
@@ -407,6 +410,29 @@ async fn interior_gaps(pool: &PgPool, tip: i32) -> HyDbResult<(Vec<HyDbUndoGap>,
 /// a stale horizon, or by hand — and rows individually absent inside a
 /// partition that is still there, which is what an interrupted write leaves.
 /// Both are fatal for coverage; they call for different operator responses.
+/// The distinct partition names the gaps fall in, at most
+/// [`MAX_NAMED_PARTITIONS`] of them.
+///
+/// Split out from the query so the cap is testable. The cap breaks out of both
+/// loops: breaking only the inner one let every remaining gap add another run of
+/// names on top of a list already at the limit, so a report meant to name at
+/// most 64 partitions could name half again as many.
+fn partitions_for_gaps(gaps: &[HyDbUndoGap], span: u32) -> Vec<String> {
+  let mut names: Vec<String> = Vec::new();
+  'gaps: for gap in gaps {
+    for idx in (gap.lo.get() / span)..=(gap.hi.get() / span) {
+      if names.len() >= MAX_NAMED_PARTITIONS {
+        break 'gaps;
+      }
+      let name = format!("undo_blocks_p{idx}");
+      if !names.contains(&name) {
+        names.push(name);
+      }
+    }
+  }
+  names
+}
+
 async fn absent_partitions(pool: &PgPool, gaps: &[HyDbUndoGap]) -> HyDbResult<Vec<String>> {
   let span = undo_span();
   if span <= 0 || gaps.is_empty() {
@@ -414,18 +440,7 @@ async fn absent_partitions(pool: &PgPool, gaps: &[HyDbUndoGap]) -> HyDbResult<Ve
   }
   let span = u32::try_from(span).unwrap_or(1);
 
-  let mut names: Vec<String> = Vec::new();
-  for gap in gaps {
-    for idx in (gap.lo.get() / span)..=(gap.hi.get() / span) {
-      let name = format!("undo_blocks_p{idx}");
-      if !names.contains(&name) {
-        names.push(name);
-      }
-      if names.len() >= MAX_NAMED_PARTITIONS {
-        break;
-      }
-    }
-  }
+  let mut names = partitions_for_gaps(gaps, span);
 
   let present: Vec<String> = sqlx::query_scalar!(
     r#"SELECT n AS "n!" FROM UNNEST($1::text[]) AS n WHERE to_regclass(n) IS NOT NULL"#,
@@ -452,6 +467,35 @@ mod tests {
       lo: h(lo),
       hi: h(hi),
     }
+  }
+
+  #[test]
+  fn the_named_partition_cap_holds_across_gaps() {
+    // One gap per partition, three times the cap of them. Breaking only the
+    // inner loop let each one past the limit add another name.
+    let gaps: Vec<HyDbUndoGap> = (0..MAX_NAMED_PARTITIONS as u32 * 3)
+      .map(|idx| gap(idx * 100, idx * 100 + 1))
+      .collect();
+    let names = partitions_for_gaps(&gaps, 100);
+    assert_eq!(names.len(), MAX_NAMED_PARTITIONS);
+  }
+
+  #[test]
+  fn named_partitions_are_distinct_and_cover_the_gap() {
+    // A gap spanning three partitions names three, and two gaps inside one
+    // partition name it once.
+    assert_eq!(
+      partitions_for_gaps(&[gap(0, 250)], 100),
+      vec![
+        "undo_blocks_p0".to_owned(),
+        "undo_blocks_p1".to_owned(),
+        "undo_blocks_p2".to_owned()
+      ]
+    );
+    assert_eq!(
+      partitions_for_gaps(&[gap(10, 20), gap(30, 40)], 100),
+      vec!["undo_blocks_p0".to_owned()]
+    );
   }
 
   /// The policy split, stated as such: only the three states in which a
