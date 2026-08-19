@@ -382,7 +382,9 @@ mod tests {
   fn capability_flags_name_every_optional_feature() {
     let args = default_args();
     let cfg = crate::config::Config::default();
-    let options = Options::resolve(&args, &cfg).expect("default config resolves");
+    let resolved = Options::resolve(&args, &cfg);
+    assert!(resolved.is_ok(), "the default config must resolve");
+    let Ok(options) = resolved else { return };
 
     let flags = options.capability_flags();
     let names: Vec<&str> = flags.iter().map(|(name, _)| *name).collect();
