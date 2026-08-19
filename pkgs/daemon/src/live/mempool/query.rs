@@ -379,10 +379,10 @@ const MAX_RESOLVED_PREVOUT_INPUTS: usize = 1_000;
 /// Two costs are bounded here:
 ///
 /// * **Repeats.** Inputs are grouped by their previous transaction, so a
-/// transaction spending twenty outputs of one parent costs one lookup, not
-/// twenty. `HyDbTxIdx::get` already returns every output of that parent.
+///   transaction spending twenty outputs of one parent costs one lookup, not
+///   twenty. `HyDbTxIdx::get` already returns every output of that parent.
 /// * **Volume.** Beyond [`MAX_RESOLVED_PREVOUT_INPUTS`] inputs nothing is
-/// resolved at all.
+///   resolved at all.
 ///
 /// What is *not* fixed here: each distinct parent still costs its own
 /// round trip, because `hyphen-db` exposes no batched outpoint read on its

@@ -13,11 +13,11 @@
 //! the contract here is not "read a setting", it is:
 //!
 //! 1. every parameter is written into `init_params` the first time a database
-//! is used, together with the daemon version that wrote it;
+//!    is used, together with the daemon version that wrote it;
 //! 2. on every later startup the configured set is compared against the
-//! stored set, and a disagreement refuses to start;
+//!    stored set, and a disagreement refuses to start;
 //! 3. the refusal names *every* differing key, not the first, and states the
-//! remedy that actually applies to that key.
+//!    remedy that actually applies to that key.
 //!
 //! # Grades
 //!
@@ -26,15 +26,15 @@
 //! false alarm that trains them to ignore the real ones.
 //!
 //! - [`HyDbLayoutGrade::Hard`] — the stored bytes were physically laid out or
-//! encoded under the old value. Repartitioning every height-partitioned
-//! table is a full rewrite; re-encoding every address is a full re-derive.
-//! There is no path but a resync into a fresh database.
+//!   encoded under the old value. Repartitioning every height-partitioned
+//!   table is a full rewrite; re-encoding every address is a full re-derive.
+//!   There is no path but a resync into a fresh database.
 //! - [`HyDbLayoutGrade::Rebuildable`] — the affected object is *derived*, so
-//! it can be recomputed offline without touching the base facts. Cheap,
-//! local, and emphatically not a resync.
+//!   it can be recomputed offline without touching the base facts. Cheap,
+//!   local, and emphatically not a resync.
 //! - [`HyDbLayoutGrade::Managed`] — not operator-owned. `schema_version`
-//! tracks the embedded migration set and is advanced by the migrator; only
-//! a *downgrade* (database newer than the binary) is refused.
+//!   tracks the embedded migration set and is advanced by the migrator; only
+//!   a *downgrade* (database newer than the binary) is refused.
 //!
 //! # `defaultable`
 //!

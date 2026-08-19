@@ -42,7 +42,8 @@ pub(crate) fn calc_eta_by_transactions(
     return Some("synced".to_string());
   }
   let txs_per_sec = bps as f64 * density;
-  if !(txs_per_sec > 0.0) {
+  // `is_finite` first, so a NaN density is rejected rather than compared.
+  if !txs_per_sec.is_finite() || txs_per_sec <= 0.0 {
     return None;
   }
   Some(fmt_eta_secs(

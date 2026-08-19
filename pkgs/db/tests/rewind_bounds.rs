@@ -17,16 +17,16 @@
 //! Each test here fails if any one of the four properties is removed:
 //!
 //! 1. **Bounded** — a target deeper than `max_reorg_depth` is refused, and
-//! refused having changed nothing.
+//!    refused having changed nothing.
 //! 2. **Checked against the data** — the config bound is a promise about
-//! configuration; a hole in `undo_blocks` inside the span is refused
-//! *before* the first disconnect, not discovered during it.
+//!    configuration; a hole in `undo_blocks` inside the span is refused
+//!    *before* the first disconnect, not discovered during it.
 //! 3. **Atomic** — a failure part way down the span (a stage trap the
-//! pre-flight check cannot see) leaves the tip and every projected total
-//! exactly where they were.
+//!    pre-flight check cannot see) leaves the tip and every projected total
+//!    exactly where they were.
 //! 4. **Named** — the error identifies the height it stopped at, because that
-//! is the one fact that separates "this target was never reachable" from
-//! "something transient happened".
+//!    is the one fact that separates "this target was never reachable" from
+//!    "something transient happened".
 
 mod common;
 
@@ -518,7 +518,7 @@ async fn run_mid_span_trap(tmp: &TempDb) -> TestResult {
   );
 
   // 3. Atomicity. Height 5 was disconnected inside the transaction and the
-  // transaction was never sent, so every one of these is untouched.
+  //    transaction was never sent, so every one of these is untouched.
   let tip_after = db.status().tip().await?.ok_or("the tip must survive")?;
   assert_eq!(
     (tip_after.height, tip_after.hash),

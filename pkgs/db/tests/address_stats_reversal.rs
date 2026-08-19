@@ -31,20 +31,20 @@
 //! load-bearing somewhere:
 //!
 //! * `SPLITTER` is paid by two outputs of one transaction (the `tx_count`
-//! delta must be 1 while the `utxo_count` delta is 2).
+//!   delta must be 1 while the `utxo_count` delta is 2).
 //! * `DOUBLE` is touched by two different transactions in one block (2 and 2).
 //! * `ROUNDTRIP` spends and is repaid by the same transaction, netting zero.
 //! * `EPHEMERAL` receives an output that a later transaction *in the same
-//! block* spends, so the outpoint is both created and consumed at one
-//! height.
+//!   block* spends, so the outpoint is both created and consumed at one
+//!   height.
 //! * An addressless output carries value at a height where addressed outputs
-//! also exist, so a recomputation that forgot `address IS NOT NULL` would
-//! fold it into somebody's balance.
+//!   also exist, so a recomputation that forgot `address IS NOT NULL` would
+//!   fold it into somebody's balance.
 //! * `MINER` is touched at two heights with a gap, so `last_seen_height` has
-//! somewhere to go back to that is neither the current height nor
-//! `first_seen_height`.
+//!   somewhere to go back to that is neither the current height nor
+//!   `first_seen_height`.
 //! * `WHALE`, `HEIR`, `DRAINED` and `RICHLING` cross the rich-list floor and
-//! zero in both directions.
+//!   zero in both directions.
 
 mod common;
 

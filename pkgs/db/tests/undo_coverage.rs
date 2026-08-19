@@ -231,8 +231,8 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 
   // ---------------------------------------------------------------------
   // 2. Undo rows above the canonical tip: reported, never fatal. They are
-  // inert (a disconnect walks *down* from the tip) so refusing here would
-  // cost an operator a restart for nothing.
+  //    inert (a disconnect walks *down* from the tip) so refusing here would
+  //    cost an operator a restart for nothing.
   // ---------------------------------------------------------------------
   sqlx::query(
     "INSERT INTO undo_blocks (height, block_hash, prev_hash, summary_tx_total,
@@ -271,8 +271,8 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 
   // ---------------------------------------------------------------------
   // 3. A pruned floor is not a hole. Dropping the lowest partition is exactly
-  // what `prune_undo` does; the retained window simply starts higher, and
-  // the check must stay silent.
+  //    what `prune_undo` does; the retained window simply starts higher, and
+  //    the check must stay silent.
   // ---------------------------------------------------------------------
   stash(&pool, "undo_blocks_p0").await?;
   drop_partition(&pool, "undo_blocks_p0").await?;
@@ -309,8 +309,8 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 
   // ---------------------------------------------------------------------
   // 4. A hole in the middle. This is the case `MIN`/`MAX` cannot see: with
-  // `p1` gone the bounds still read 500..=1299 and look perfectly healthy,
-  // while 500 heights inside them have no pre-image at all.
+  //    `p1` gone the bounds still read 500..=1299 and look perfectly healthy,
+  //    while 500 heights inside them have no pre-image at all.
   // ---------------------------------------------------------------------
   stash(&pool, "undo_blocks_p1").await?;
   drop_partition(&pool, "undo_blocks_p1").await?;
@@ -371,9 +371,9 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 
   // ---------------------------------------------------------------------
   // 5. Rows missing individually, inside a partition that is still there —
-  // what an interrupted write leaves, as opposed to a dropped partition.
-  // Same fatal verdict, different operator response, so the report has to
-  // tell them apart.
+  //    what an interrupted write leaves, as opposed to a dropped partition.
+  //    Same fatal verdict, different operator response, so the report has to
+  //    tell them apart.
   // ---------------------------------------------------------------------
   restore_partition(&pool, 1).await?;
   sqlx::query("DELETE FROM undo_blocks WHERE height IN ($1, $2, $3)")
@@ -408,8 +408,8 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 
   // ---------------------------------------------------------------------
   // 6. The failure this whole check exists for: a canonical tip beyond its
-  // undo coverage, as a crash mid-reindex leaves it. Pruning can never
-  // produce this — it only ever raises the floor.
+  //    undo coverage, as a crash mid-reindex leaves it. Pruning can never
+  //    produce this — it only ever raises the floor.
   // ---------------------------------------------------------------------
   sqlx::query("DELETE FROM undo_blocks WHERE height > $1")
     .bind(tip as i32 - 3)
@@ -430,7 +430,7 @@ async fn scenarios(tmp: &TempDb) -> TestResult {
 
   // ---------------------------------------------------------------------
   // 7. No undo at all under a live projection. Not reachable by pruning
-  // (which cannot touch the tip's own partition), so it is a refusal.
+  //    (which cannot touch the tip's own partition), so it is a refusal.
   // ---------------------------------------------------------------------
   sqlx::query("DELETE FROM undo_blocks")
     .execute(&pool)
@@ -516,8 +516,8 @@ async fn a_pruned_seed_opens_and_a_hole_above_its_floor_does_not() -> TestResult
   );
 
   // 2. One more prune round, done by hand: dropping the oldest retained
-  // partition raises the floor and must stay forgiven, however far the
-  // retained window falls below the reorg bound.
+  //    partition raises the floor and must stay forgiven, however far the
+  //    retained window falls below the reorg bound.
   let oldest: i32 = sqlx::query_scalar(
     "SELECT MIN(substring(c.relname from '[0-9]+$')::int)
        FROM pg_inherits i
@@ -542,7 +542,7 @@ async fn a_pruned_seed_opens_and_a_hole_above_its_floor_does_not() -> TestResult
   );
 
   // 3. A hole above the new floor. Ten heights out of the middle: the bounds
-  // are untouched, so only the count can see it.
+  //    are untouched, so only the count can see it.
   let new_floor = pruned.undo_lo.ok_or("no undo rows left")?;
   let gap_lo = i32::try_from((i64::from(new_floor.get()) + i64::from(tip.get())) / 2)?;
   let gap_hi = gap_lo + 9;

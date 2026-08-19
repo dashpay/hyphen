@@ -32,10 +32,10 @@
 //! decidable at all:
 //!
 //! - **Pruning only ever removes a contiguous prefix from the bottom.** It
-//! drops a partition whose highest possible height is at or below the
-//! cutoff, so it can neither punch an interior hole nor touch the top.
+//!   drops a partition whose highest possible height is at or below the
+//!   cutoff, so it can neither punch an interior hole nor touch the top.
 //! - **Corruption shows up above the floor**: a hole between the oldest
-//! retained height and the tip, or coverage that stops short of the tip.
+//!   retained height and the tip, or coverage that stops short of the tip.
 //!
 //! The check therefore anchors on the *retained* floor (`MIN(height)`) rather
 //! than on the configured keep depth, and asks whether `[floor, tip]` is

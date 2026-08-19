@@ -16,10 +16,6 @@ use crate::live::state::LiveState;
 use crate::sources::ZmqEvent;
 
 /// Track recent mempool transaction changes in RAM from ZMQ until shutdown.
-#[expect(
-  clippy::too_many_arguments,
-  reason = "each argument is a distinct subscription input with no natural grouping"
-)]
 pub async fn sync_recent_loop(
   db: HyphenDb,
   live_state: Arc<LiveState>,

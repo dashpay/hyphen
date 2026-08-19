@@ -108,9 +108,9 @@ pub fn review(diag: &HyDbQrStorageDiag, pool_total: usize) -> Vec<SettingWarning
   let work_mem = parse_pg_bytes(&diag.work_mem);
 
   // 2. `effective_cache_size` is the operator's statement of how much memory
-  // the machine has for caching. Below `shared_buffers` it is a contradiction;
-  // barely above it, the planner will prefer sequential scans over the index
-  // scans this schema is built around.
+  //    the machine has for caching. Below `shared_buffers` it contradicts
+  //    itself; barely above it, the planner prefers sequential scans over the
+  //    index scans this schema is built around.
   if let (Some(buffers), Some(cache)) = (shared_buffers, cache_size) {
     if cache < buffers {
       out.push(SettingWarning {
@@ -138,8 +138,8 @@ pub fn review(diag: &HyDbQrStorageDiag, pool_total: usize) -> Vec<SettingWarning
   }
 
   // 3. Worst-case sort memory. Every pooled backend may claim `work_mem` (more
-  // than once, for a query with several sorts), so the product is what the
-  // machine has to survive, not the single value.
+  //    than once, for a query with several sorts), so the product is what the
+  //    machine has to survive, not the single value.
   if let (Some(work_mem), Some(cache)) = (work_mem, cache_size) {
     let worst_case = work_mem.saturating_mul(pool_total.max(1) as u64);
     if worst_case > cache / 2 {
@@ -158,11 +158,11 @@ pub fn review(diag: &HyDbQrStorageDiag, pool_total: usize) -> Vec<SettingWarning
   }
 
   // 4. `shared_buffers` against the database it has to cache. This is the
-  // first-class one: the measured constraint on the projection write path is
-  // server-side random page reads, with `IO:DataFileWrite` appearing inside
-  // client backends — buffer pressure, not client starvation. A 63 GB database
-  // against 8 GB of buffers is that shape, and it is invisible from any
-  // client-side wait metric.
+  //    first-class one: the measured constraint on the projection write path is
+  //    server-side random page reads, with `IO:DataFileWrite` appearing inside
+  //    client backends — buffer pressure, not client starvation. A 63 GB
+  //    database against 8 GB of buffers is that shape, and it is invisible from
+  //    any client-side wait metric.
   if let Some(buffers) = shared_buffers {
     let database = u64::try_from(diag.database_bytes).unwrap_or(0);
     if database > 0 && buffers > 0 {
@@ -181,7 +181,7 @@ pub fn review(diag: &HyDbQrStorageDiag, pool_total: usize) -> Vec<SettingWarning
   }
 
   // 5. Settings the daemon could not read at all. Named explicitly: a check
-  // that silently does not run is how the disk-space check went missing.
+  //    that silently does not run is how the disk-space check went missing.
   if shared_buffers.is_none() {
     out.push(SettingWarning {
       setting: "shared_buffers",

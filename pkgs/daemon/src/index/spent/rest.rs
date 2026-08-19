@@ -65,7 +65,7 @@ async fn block_time_rfc3339(
     .await
     .map_err(|e| hydb_err(e, "address block time"))?
     .map(|block| block.time);
-  time.map(|time| rfc3339_time(i64::from(time))).transpose()
+  time.map(rfc3339_time).transpose()
 }
 
 /// Get address balance summary.

@@ -130,7 +130,7 @@ pub async fn search(
     }
   }
   if !arms.has_prefix_arm() {
-    return Err(ApiError::bad_request(&format!(
+    return Err(ApiError::bad_request(format!(
       "search query must be at least {MIN_AUTOCOMPLETE_QUERY_LEN} characters"
     )));
   }

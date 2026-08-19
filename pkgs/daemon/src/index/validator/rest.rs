@@ -78,7 +78,7 @@ async fn payout_block_epoch(state: &AppState, height: i32) -> Result<Option<i64>
       .by_height(hydb_height(height))
       .await
       .map_err(|e| hydb_err(e, "validator payout block time"))?
-      .map(|block| i64::from(block.time)),
+      .map(|block| block.time),
   )
 }
 
