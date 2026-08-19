@@ -100,9 +100,7 @@ fn into_stepped(sync: &SteppedSync) {
 /// first group to the second.
 #[tokio::test]
 async fn a_partition_gains_the_deferred_set_when_it_closes() -> Res {
-  let Some(tmp) = common::TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = common::TempDb::create().await?;
   let db = tmp.open().await?;
   let pool = tmp.seed_pool().await?;
 
@@ -138,9 +136,7 @@ async fn a_partition_gains_the_deferred_set_when_it_closes() -> Res {
 /// existence check here and quietly change which plans are available.
 #[tokio::test]
 async fn a_rebuilt_index_matches_the_definition_the_schema_declared() -> Res {
-  let Some(tmp) = common::TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = common::TempDb::create().await?;
   let db = tmp.open().await?;
   let pool = tmp.seed_pool().await?;
 
@@ -196,9 +192,7 @@ async fn a_rebuilt_index_matches_the_definition_the_schema_declared() -> Res {
 /// leave one of them missing.
 #[tokio::test]
 async fn no_index_the_ingest_path_reads_is_ever_dropped() -> Res {
-  let Some(tmp) = common::TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = common::TempDb::create().await?;
   let db = tmp.open().await?;
   let pool = tmp.seed_pool().await?;
 
@@ -318,9 +312,7 @@ async fn seed(pool: &PgPool, height: i32, seed: u8, address: &str) -> Res {
 /// identical.
 #[tokio::test]
 async fn a_query_answers_the_same_in_stepped_mode_as_in_realtime() -> Res {
-  let Some(tmp) = common::TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = common::TempDb::create().await?;
   let db = tmp.open().await?;
   let pool = tmp.seed_pool().await?;
 

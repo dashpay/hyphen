@@ -6,7 +6,8 @@
 
 //! End-to-end ingest tests: absorb a synthetic chain, canonicalize/connect via
 //! `on_tip`, and read it back through the query API — including a reorg that
-//! disconnects and re-derives. Skips without `HYPHEN_TEST_DATABASE_URL`.
+//! disconnects and re-derives. Targets `HYPHEN_TEST_DATABASE_URL`, or the
+//! default local server when it is unset; an unreachable server fails the test.
 //!
 //! The synthetic block encoding is `hash(32) || prev_hash(32) || value(8 BE)`;
 //! each block is one coinbase transaction crediting a fixed address, so a chain
@@ -108,10 +109,7 @@ fn raw(hash: u8, prev: u8, value: i64) -> Bytes {
 
 #[tokio::test]
 async fn ingest_connects_a_chain_and_reorgs() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    eprintln!("HYPHEN_TEST_DATABASE_URL unset; skipping ingest test");
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result

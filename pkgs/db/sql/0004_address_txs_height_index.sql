@@ -1,0 +1,72 @@
+--
+-- Copyright (c) 2026-present, The Dash Core developers
+-- SPDX-License-Identifier: MIT
+-- See the accompanying file LICENSE or https://opensource.org/license/MIT
+--
+
+-- ===========================================================================
+-- 0004 — support the reversal delete on address_txs (task C2)
+-- ===========================================================================
+--
+-- Every disconnect runs one
+--
+--   DELETE FROM address_txs WHERE block_height = $1
+--
+-- per reversed block. `address_txs` is the only base table whose reversal has
+-- no index to stand on: its primary key is `(address, block_height, txid)` and
+-- its query index is `(address, block_height DESC, block_pos DESC, txid DESC)`,
+-- so both lead with `address` and neither can be probed by height alone. Range
+-- partitioning narrowed the delete to one partition and nothing narrowed it
+-- further, leaving a sequential scan of that whole partition.
+--
+-- Measured on an 860,000-block seed (46.5M address_txs rows, partition p8
+-- holding 8.47M of them, 883 MB of heap), parallelism off, in a rolled-back
+-- transaction. Warm first, then again on a freshly cloned database so the
+-- buffer pool had never seen the data:
+--
+--                          latency      buffers (hit/read)   rows found
+--   before, warm            337-421 ms   112,980 / 0          62-131
+--   before, COLD          14,263 ms        2,110 / 110,932        62
+--   after, warm heap           81 ms          134 / 3            131
+--   after, COLD partition      18 ms           13 / 3             11
+--
+-- The cold row is the one that matters, and it is why the warm reading was not
+-- worth trusting: 110,932 physical block reads, 867 MB pulled through an 8 GB
+-- shared_buffers on a 61 GB database, and 14.3 SECONDS for a single block's
+-- reversal. Warm understated it by 42x. A reorg arrives while a sync is using
+-- that cache for something else, so cold is the normal case, not the bad one —
+-- and a multi-block reorg pays it per block.
+--
+-- The index path does not care either way: 3 physical reads on a partition the
+-- buffer pool had never touched, because it reads an index page and the handful
+-- of heap pages the matching rows actually live on.
+--
+-- Cost: 325 MB across the nine existing partitions, against 6.5 GB for the
+-- primary keys of the same table, and ~10 s to build them all. Insert-side
+-- maintenance is the cheap case for a btree — heights arrive monotonically, so
+-- every insert lands on the rightmost leaf.
+--
+-- Why btree and not BRIN
+-- ---------------------
+-- BRIN is the tempting answer for a column this correlated, and it works: the
+-- same delete measured 0.386 ms against a BRIN index on the same data. It is
+-- rejected anyway. At 280 kB for all nine partitions it is a thousand times
+-- smaller and builds in 2.4 s, but it is lossy: that run rechecked 6,229 heap
+-- rows to find 33, and the recheck set grows as heap correlation decays —
+-- precisely what a re-derived partition and reused free space do. The delete is
+-- on the reorg path, where predictable is worth more than small, and 325 MB
+-- against a 61 GB database (0.5%) is not the constraint. A future BRIN swap is
+-- a one-statement change if the size ever matters.
+--
+-- Why the parent, and not the deferred set
+-- ---------------------------------------
+-- 0003 takes the query-only indexes off the partitioned parents so stepped sync
+-- can defer them on the open partition. This index is deliberately NOT in that
+-- set, for the same reason `utxo_set`'s and every primary key are not: the
+-- ingest path itself reads it. It is read on disconnect, and while stepped mode
+-- drops back to realtime before servicing a reorg, "realtime" is where the
+-- index has to already exist.
+--
+-- Reversibility: DROP INDEX idx_address_txs_block_height;
+
+CREATE INDEX idx_address_txs_block_height ON address_txs (block_height);

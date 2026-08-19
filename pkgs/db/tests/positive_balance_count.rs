@@ -224,9 +224,7 @@ async fn positive(pool: &PgPool) -> Result<Vec<String>, Box<dyn std::error::Erro
 
 #[tokio::test]
 async fn positive_balance_count_is_exact_in_both_directions() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result

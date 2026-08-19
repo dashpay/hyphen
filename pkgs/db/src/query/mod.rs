@@ -33,7 +33,9 @@ pub use status::{
   HyDbQrChainTip, HyDbQrHealth, HyDbQrPoolSession, HyDbQrPoolStat, HyDbQrSizeDiag,
   HyDbQrStorageDiag, HyDbStatus,
 };
-pub use txs::{HyDbQrTxDetail, HyDbQrTxIn, HyDbQrTxOut, HyDbQrTxSummary, HyDbTxIdx};
+pub use txs::{
+  HyDbQrTxDetail, HyDbQrTxIn, HyDbQrTxOut, HyDbQrTxSummary, HyDbTxIdx, HYDB_TX_IO_CAP,
+};
 pub use validators::{HyDbQrValidator, HyDbQrVlCounts, HyDbQrVlHistory, HyDbVlIdx};
 
 use core::fmt;

@@ -10,11 +10,12 @@
 //! pagination arms (a small `limit` forces a `next_cursor`, which is fed back)
 //! and the malformed-cursor rejection paths.
 //!
-//! Skips (returns `Ok`) when `HYPHEN_TEST_DATABASE_URL` is unset.
+//! Targets `HYPHEN_TEST_DATABASE_URL`, or the default local server when it is
+//! unset; an unreachable server fails the test rather than skipping it.
 
 mod common;
 
-use common::{TempDb, ENV};
+use common::TempDb;
 use hyphen_db::query::HyDbSearchKind;
 use hyphen_db::{HyDbAddress, HyDbCursor, HyDbError, HyDbHash, HyDbHeight, HyDbVlType, HyphenDb};
 use rstest::rstest;
@@ -256,10 +257,7 @@ async fn seed(pool: &PgPool) -> TestResult {
 
 #[tokio::test]
 async fn read_path_exhaustive() -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    eprintln!("{ENV} unset; skipping exhaustive read test");
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let result = run(&tmp).await;
   tmp.drop_now().await;
   result
@@ -499,9 +497,7 @@ async fn search_and_status(db: &HyphenDb) -> TestResult {
 #[case::wrong_shape("1:2:zz")]
 #[tokio::test]
 async fn rejects_malformed_cursor(#[case] bad: &str) -> TestResult {
-  let Some(tmp) = TempDb::create().await? else {
-    return Ok(());
-  };
+  let tmp = TempDb::create().await?;
   let outcome = async {
     let db = tmp.open().await?;
     let blk = db.blocks().list(10, Some(HyDbCursor(bad.to_owned()))).await;

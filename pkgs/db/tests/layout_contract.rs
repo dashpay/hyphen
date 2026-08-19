@@ -74,7 +74,12 @@ async fn delete_key(pool: &PgPool, key: &str) {
 
 #[tokio::test]
 async fn case1_first_run_records_the_whole_layout() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   // `open()` migrates and runs the contract for the first time.
@@ -127,7 +132,12 @@ async fn case1_first_run_records_the_whole_layout() {
 
 #[tokio::test]
 async fn case2_unchanged_layout_is_accepted_and_rewrites_nothing() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(_db) = temp.open().await else {
@@ -170,7 +180,12 @@ async fn case2_unchanged_layout_is_accepted_and_rewrites_nothing() {
 
 #[tokio::test]
 async fn case3_mismatch_names_every_key_with_its_own_remedy() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(_db) = temp.open().await else {
@@ -242,7 +257,12 @@ async fn case3_mismatch_names_every_key_with_its_own_remedy() {
 
 #[tokio::test]
 async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(_db) = temp.open().await else {
@@ -291,7 +311,12 @@ async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
 
 #[tokio::test]
 async fn case5_key_dropped_from_config_uses_the_stored_value() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(_db) = temp.open().await else {
@@ -325,7 +350,12 @@ async fn case5_key_dropped_from_config_uses_the_stored_value() {
 
 #[tokio::test]
 async fn show_layout_renders_stored_beside_configured() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(_db) = temp.open().await else {

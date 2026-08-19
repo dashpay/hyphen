@@ -73,7 +73,12 @@ fn contrasting(current: &str, a: &str, b: &str) -> String {
 
 #[tokio::test]
 async fn each_pool_runs_with_its_own_server_side_settings() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
 
@@ -196,7 +201,12 @@ async fn each_pool_runs_with_its_own_server_side_settings() {
 
 #[tokio::test]
 async fn a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(base) = temp.client_cfg() else {
@@ -240,7 +250,12 @@ async fn a_query_pool_timeout_cancels_a_slow_read_instead_of_holding_the_pool() 
 
 #[tokio::test]
 async fn app_name_attributes_backends_to_a_pool_in_pg_stat_activity() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let app_name = format!("hyphend-attrib-{}", std::process::id());
@@ -309,7 +324,12 @@ async fn app_name_attributes_backends_to_a_pool_in_pg_stat_activity() {
 
 #[tokio::test]
 async fn a_configured_unix_socket_carries_a_real_connection() {
-  let Ok(Some(temp)) = TempDb::create().await else {
+  // NOTE: still a silent skip on error, unlike the rest of the suite — this
+  // test returns `()`, and the crate denies `expect`/`panic`, so failing loudly
+  // means giving every test in this file a `Result` return and an explicit
+  // cleanup path. What `TempDb::create` can no longer do is succeed with
+  // "no database": the vacuous `Ok(None)` arm is gone.
+  let Ok(temp) = TempDb::create().await else {
     return;
   };
   let Ok(observer) = temp.seed_pool().await else {

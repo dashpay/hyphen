@@ -43,9 +43,13 @@ pub struct TempDb {
 
 impl TempDb {
   /// Provision a fresh database on the configured (or default local) server.
-  /// Returns `Some` on success and errors — loudly failing the test — when no
-  /// server is reachable. The `Option` shape is kept for call-site stability.
-  pub async fn create() -> Result<Option<Self>, Box<dyn std::error::Error>> {
+  ///
+  /// Errors — loudly failing the test — when no server is reachable. There is
+  /// deliberately no "absent" success value: an `Option` return once let every
+  /// call site carry an `else { return Ok(()) }` skip arm, and a completely
+  /// broken search shipped green behind those arms. A test that cannot reach a
+  /// database must fail, not pass quietly.
+  pub async fn create() -> Result<Self, Box<dyn std::error::Error>> {
     let base = std::env::var(ENV).unwrap_or_else(|_| DEFAULT_TEST_URL.to_owned());
     let Some((prefix, _)) = split_url(&base) else {
       return Err(format!("cannot parse {ENV}: {base}").into());
@@ -59,11 +63,11 @@ impl TempDb {
     sqlx::query(&format!("CREATE DATABASE {name}"))
       .execute(&admin)
       .await?;
-    Ok(Some(Self {
+    Ok(Self {
       admin,
       url: format!("{prefix}{name}"),
       name,
-    }))
+    })
   }
 
   /// Connect a `HyphenDb` (applies migrations) to the ephemeral database.
