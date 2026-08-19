@@ -525,6 +525,74 @@ pub fn undo_keep_depth() -> i32 {
   resolved().undo_keep_depth
 }
 
+// ---------------------------------------------------------------------------
+// Data-side enforcement of the retention promise
+// ---------------------------------------------------------------------------
+
+/// Verify that the undo rows **on disk** cover every height in `lo..=hi`,
+/// before a rollback disconnects any of them.
+///
+/// [`HyDbIngestCfg::validate`] refuses `max_reorg_depth > undo_keep_depth` at
+/// load, but that is a statement about the configuration, not about the
+/// database the configuration was pointed at. The two diverge easily and
+/// silently: lower `undo_span` and restart against an existing database, race
+/// a prune against a config change, or simply raise `max_reorg_depth` on a
+/// database that was synced under a shallower one. In every case the config
+/// check passes and the promise is still unkeepable.
+///
+/// Without this, the first thing to notice is the disconnect trap in the
+/// `stats` stage ("no `undo_blocks` row captured for height N") or the
+/// `balances` stage ("moved address balances but has no undo rows") — and both
+/// of those fire *mid-rollback*, with every height above the exhaustion point
+/// already disconnected. This check moves the same refusal to before the first
+/// disconnect, where it costs one query and nothing else.
+///
+/// `undo_blocks` is the right table to ask: its primary key is `height`, every
+/// connect writes exactly one row, and the sibling undo tables are written in
+/// the same transaction and pruned by the same partition drop — so a height
+/// present here is a height whose undo survived, and a height missing here is
+/// exactly the height a tip-first rollback would trap on. It is also what
+/// makes this stronger than `status().undo_span()`, which reads MIN/MAX and so
+/// can bound the retained range but cannot see a hole inside it.
+///
+/// The reported height is the **highest** missing one, because a rollback runs
+/// tip-first and that is the height it would reach first.
+///
+/// # Errors
+///
+/// [`HyDbError::Derive`] naming the highest uncovered height, or
+/// [`HyDbError::Pg`] if the query fails. `lo > hi` is an empty span and always
+/// succeeds.
+pub(crate) async fn verify_undo_coverage(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
+  if lo > hi {
+    return Ok(());
+  }
+  let row = sqlx::query!(
+    r#"SELECT COUNT(*)::bigint AS "missing!", MAX(g.h) AS highest_missing
+         FROM generate_series($1::int, $2::int) AS g(h)
+        WHERE NOT EXISTS (SELECT 1 FROM undo_blocks u WHERE u.height = g.h)"#,
+    lo,
+    hi
+  )
+  .fetch_one(pool)
+  .await
+  .map_err(|e| HyDbError::pg("verify undo coverage", e))?;
+
+  if row.missing == 0 {
+    return Ok(());
+  }
+  let at = row.highest_missing.unwrap_or(hi);
+  Err(HyDbError::Derive(format!(
+    "undo coverage is incomplete for heights {lo}..={hi}: {} of {} heights have no \
+     undo_blocks row, the highest at {at} — the rollback would have trapped there, \
+     part-committed. Either the undo below it was pruned (raise [db.ingest] \
+     undo_keep_depth, or target height {at} or above) or the projection was built \
+     by a daemon that retained less than this one promises.",
+    row.missing,
+    i64::from(hi - lo) + 1
+  )))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
