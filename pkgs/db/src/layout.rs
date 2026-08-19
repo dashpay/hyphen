@@ -413,6 +413,13 @@ pub fn undo_span() -> i32 {
   resolved().undo_span
 }
 
+/// The height-partitioned undo tables, pruned by dropping a whole partition.
+///
+/// Kept beside [`undo_span`] because the two are read together wherever undo
+/// retention is decided or checked, and a caller that has one without the other
+/// can only reason about part of the family.
+pub(crate) const UNDO_TABLES: [&str; 3] = ["undo_address_stats", "undo_blocks", "undo_validators"];
+
 /// Minimum balance (duffs) for `address_rich` membership.
 pub fn rich_list_floor() -> i64 {
   resolved().rich_list_floor

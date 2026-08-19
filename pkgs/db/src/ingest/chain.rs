@@ -10,11 +10,13 @@
 //! reads. These are the shared plumbing the connect/disconnect spine and the
 //! deriver build on.
 
+use std::collections::BTreeMap;
+
 use sqlx::PgPool;
 
 use super::HyDbBlockSeen;
 use crate::error::{HyDbError, HyDbResult};
-use crate::layout::{partition_span, undo_span};
+use crate::layout::{partition_span, undo_span, UNDO_TABLES};
 use crate::records::HyDbDataSrc;
 use crate::types::HyDbHash;
 
@@ -28,15 +30,6 @@ const PARTITIONED_TABLES: [&str; 5] = [
   "address_txs",
   "spends",
 ];
-
-/// The height-partitioned undo tables, created ahead of the tip and pruned by
-/// `DROP TABLE` on a whole partition. All three have the same shape — one row
-/// per (height, key) written by connect and dead the moment the height falls
-/// out of the reorg horizon — so all three are converted; `undo_blocks` and
-/// `undo_validators` are lower-volume than `undo_address_stats` but their
-/// prune is the same delete-everything-below-the-cutoff sweep, and leaving
-/// them on it would mean two prune mechanisms for one horizon.
-const UNDO_TABLES: [&str; 3] = ["undo_address_stats", "undo_blocks", "undo_validators"];
 
 /// Store a block's raw bytes and parent link in `ser_blocks`, assigning its
 /// height as `parent.height + 1` (genesis is 0). A block whose parent is not
@@ -362,22 +355,35 @@ pub(super) async fn prune_undo(pool: &PgPool, cutoff: i32) -> HyDbResult<()> {
     return Ok(());
   }
   let parents: Vec<String> = UNDO_TABLES.iter().map(|t| (*t).to_owned()).collect();
-  let children = sqlx::query!(
-    r#"SELECT p.relname AS "parent!", c.relname AS "child!"
-         FROM pg_inherits i
-         JOIN pg_class c ON c.oid = i.inhrelid
-         JOIN pg_class p ON p.oid = i.inhparent
-        WHERE p.relname = ANY($1)"#,
-    &parents
+  // `child_ref` is the child resolved back from its own oid, so the DROP names
+  // the relation this query found. Interpolating the bare `relname` let a
+  // non-default `search_path`, or a same-named table in another schema,
+  // resolve the statement to something else. The parents are matched by
+  // `to_regclass` for the same reason.
+  //
+  // Runtime API rather than `query!` so this needs no offline-cache entry.
+  let children: Vec<(String, String, String)> = sqlx::query_as(
+    "SELECT p.relname::text, c.relname::text, c.oid::regclass::text \
+       FROM pg_inherits i \
+       JOIN pg_class c ON c.oid = i.inhrelid \
+       JOIN pg_class p ON p.oid = i.inhparent \
+      WHERE p.oid IN (SELECT to_regclass(n) FROM UNNEST($1::text[]) AS n)",
   )
+  .bind(&parents)
   .fetch_all(pool)
   .await
   .map_err(|e| HyDbError::pg("list undo partitions", e))?;
 
-  for row in children {
-    let Some(idx) = row
-      .child
-      .strip_prefix(&format!("{}_p", row.parent))
+  // Grouped by partition index, because the three undo families share one
+  // horizon and must cross it together. Dropped one relation per transaction,
+  // a contended sibling was simply deferred while the others went — leaving a
+  // height covered in `undo_blocks` and uncovered in `undo_address_stats`,
+  // which the coverage pre-flight reads as admissible and the balance stage
+  // then refuses part-way down the span.
+  let mut by_index: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+  for (parent, child, child_ref) in children {
+    let Some(idx) = child
+      .strip_prefix(&format!("{parent}_p"))
       .and_then(|suffix| suffix.parse::<i64>().ok())
     else {
       // Not one of ours: leave it alone rather than guess its range.
@@ -387,14 +393,26 @@ pub(super) async fn prune_undo(pool: &PgPool, cutoff: i32) -> HyDbResult<()> {
     if highest > i64::from(cutoff) {
       continue;
     }
-    drop_partition(pool, &row.child).await?;
+    by_index.entry(idx).or_default().push(child_ref);
+  }
+
+  for (idx, siblings) in by_index {
+    drop_partition_set(pool, idx, &siblings).await?;
   }
   Ok(())
 }
 
-/// Drop one undo partition under a short lock timeout, treating a lock
-/// timeout or deadlock as "try again next advance" rather than an error.
-async fn drop_partition(pool: &PgPool, name: &str) -> HyDbResult<()> {
+/// Drop one partition index across all three undo families in a single
+/// transaction, under a short lock timeout, treating a lock timeout or deadlock
+/// as "try again next advance" rather than an error.
+///
+/// One transaction is what keeps the families in step. A contended sibling
+/// rolls the whole set back, so the horizon either moves for all three or for
+/// none, and no span can be covered in one family and pruned in another.
+async fn drop_partition_set(pool: &PgPool, idx: i64, names: &[String]) -> HyDbResult<()> {
+  if names.is_empty() {
+    return Ok(());
+  }
   let mut tx = pool
     .begin()
     .await
@@ -403,7 +421,9 @@ async fn drop_partition(pool: &PgPool, name: &str) -> HyDbResult<()> {
     sqlx::query("SET LOCAL lock_timeout = '3s'")
       .execute(&mut *tx)
       .await?;
-    sqlx::query(&format!("DROP TABLE IF EXISTS {name}"))
+    // One statement, so the `ACCESS EXCLUSIVE` locks on all three parents are
+    // taken together and the timeout applies to acquiring the whole set.
+    sqlx::query(&format!("DROP TABLE IF EXISTS {}", names.join(", ")))
       .execute(&mut *tx)
       .await?;
     Ok::<(), sqlx::Error>(())
@@ -415,13 +435,17 @@ async fn drop_partition(pool: &PgPool, name: &str) -> HyDbResult<()> {
       tx.commit()
         .await
         .map_err(|e| HyDbError::pg("prune undo: commit", e))?;
-      tracing::debug!(partition = name, "dropped undo partition below the horizon");
+      tracing::debug!(
+        partition = idx,
+        dropped = names.len(),
+        "dropped the undo partition set below the horizon"
+      );
       Ok(())
     }
     Err(e) if contended(&e) => {
       tracing::debug!(
-        partition = name,
-        "undo partition drop deferred: parent is locked by a reader"
+        partition = idx,
+        "undo partition drop deferred: a parent is locked by a reader"
       );
       Ok(())
     }

@@ -386,6 +386,63 @@ async fn run_undo_hole(tmp: &TempDb) -> TestResult {
   Ok(())
 }
 
+/// The three undo families share one horizon, so the pre-flight has to ask
+/// about all three.
+///
+/// It probed `undo_blocks` only. That table carries a row per block, so the
+/// per-height check works there and nowhere else — the other two legitimately
+/// hold no row for a height that touched no address or validator. A span
+/// covered in `undo_blocks` but pruned in `undo_address_stats` therefore read as
+/// admissible, and the balance stage refused it part-way down the disconnect,
+/// which is the stage trap this pre-flight exists to prevent.
+#[tokio::test]
+async fn a_pruned_sibling_undo_family_is_refused_before_the_first_disconnect() -> TestResult {
+  let tmp = TempDb::create().await?;
+  let result = run_sibling_prune(&tmp).await;
+  tmp.drop_now().await;
+  result
+}
+
+async fn run_sibling_prune(tmp: &TempDb) -> TestResult {
+  let db = tmp.open().await?;
+  let ingest = db.ingest(Arc::new(TestSrc)).await?;
+
+  build_chain(&ingest, 0xF100, 6).await?;
+  let supply_before = db.addrs().supply().await?.total;
+  let pool = tmp.seed_pool().await?;
+
+  // Exactly the divergence a per-relation prune could leave behind: one
+  // family's partition gone, the one the pre-flight reads still present.
+  sqlx::query("DROP TABLE IF EXISTS undo_address_stats_p0")
+    .execute(&pool)
+    .await?;
+  let (blocks_rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM undo_blocks")
+    .fetch_one(&pool)
+    .await?;
+  assert!(
+    blocks_rows > 0,
+    "undo_blocks must still cover the span, or this proves nothing"
+  );
+
+  let Err(err) = ingest.rewind_to(HyDbHeight::new(1)).await else {
+    return Err("a rewind whose address-stats undo was pruned must be refused".into());
+  };
+  let msg = err.to_string();
+  assert!(
+    msg.contains("undo_address_stats_p0"),
+    "the refusal must name the family and partition that is missing; got {msg}"
+  );
+
+  assert_eq!(
+    db.status().tip().await?.map(|t| t.height),
+    Some(HyDbHeight::new(5)),
+    "a refused rewind must not have disconnected anything"
+  );
+  assert_eq!(db.addrs().supply().await?.total, supply_before);
+
+  Ok(())
+}
+
 /// Every `address_stats` accumulation, as a comparable snapshot.
 async fn address_stats(
   pool: &sqlx::PgPool,

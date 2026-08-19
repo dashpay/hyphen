@@ -553,18 +553,67 @@ pub(crate) async fn verify_undo_coverage(pool: &PgPool, lo: i32, hi: i32) -> HyD
   .await
   .map_err(|e| HyDbError::pg("verify undo coverage", e))?;
 
-  if row.missing == 0 {
+  if row.missing != 0 {
+    let at = row.highest_missing.unwrap_or(hi);
+    return Err(HyDbError::Derive(format!(
+      "undo coverage is incomplete for heights {lo}..={hi}: {} of {} heights have no \
+       undo_blocks row, the highest at {at} — the rollback would have trapped there, \
+       part-committed. Either the undo below it was pruned (raise [db.ingest] \
+       undo_keep_depth, or target height {at} or above) or the projection was built \
+       by a daemon that retained less than this one promises.",
+      row.missing,
+      i64::from(hi - lo) + 1
+    )));
+  }
+
+  verify_undo_partitions(pool, lo, hi).await
+}
+
+/// Check that the whole undo family retains the span, not just `undo_blocks`.
+///
+/// The per-height probe above only works for `undo_blocks`, which carries a row
+/// per block. `undo_address_stats` and `undo_validators` legitimately hold no
+/// row for a height whose block touched no address or validator, so their
+/// retention is a question about partitions rather than rows.
+///
+/// It has to be asked. The three families share one horizon, and a span covered
+/// in `undo_blocks` but pruned in `undo_address_stats` reads as admissible here
+/// and is then refused by the balance stage part-way down the disconnect —
+/// exactly the stage trap this pre-flight exists to turn into a refusal.
+///
+/// # Errors
+///
+/// [`HyDbError::Derive`] naming the families and partitions that are missing, or
+/// [`HyDbError::Pg`] if the probe fails.
+async fn verify_undo_partitions(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
+  let span = crate::layout::undo_span();
+  let wanted: Vec<String> = (lo.max(0) / span..=hi.max(0) / span)
+    .flat_map(|idx| crate::layout::UNDO_TABLES.map(move |parent| format!("{parent}_p{idx}")))
+    .collect();
+
+  let present: Vec<String> = sqlx::query_scalar!(
+    r#"SELECT n AS "n!" FROM UNNEST($1::text[]) AS n WHERE to_regclass(n) IS NOT NULL"#,
+    &wanted
+  )
+  .fetch_all(pool)
+  .await
+  .map_err(|e| HyDbError::pg("verify undo partitions", e))?;
+
+  let missing: Vec<&String> = wanted.iter().filter(|n| !present.contains(n)).collect();
+  if missing.is_empty() {
     return Ok(());
   }
-  let at = row.highest_missing.unwrap_or(hi);
   Err(HyDbError::Derive(format!(
-    "undo coverage is incomplete for heights {lo}..={hi}: {} of {} heights have no \
-     undo_blocks row, the highest at {at} — the rollback would have trapped there, \
-     part-committed. Either the undo below it was pruned (raise [db.ingest] \
-     undo_keep_depth, or target height {at} or above) or the projection was built \
-     by a daemon that retained less than this one promises.",
-    row.missing,
-    i64::from(hi - lo) + 1
+    "undo coverage for heights {lo}..={hi} is complete in undo_blocks but {} undo \
+     partition(s) are missing: {} — the rollback would have trapped where the \
+     pre-images it needs were already dropped. Either re-sync, or target a height \
+     above the range those partitions covered",
+    missing.len(),
+    missing
+      .iter()
+      .map(|n| n.as_str())
+      .collect::<Vec<_>>()
+      .join(", ")
   )))
 }
 
