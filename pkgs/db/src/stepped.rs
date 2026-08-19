@@ -32,11 +32,16 @@
 //! | `idx_transactions_list`            |   174 MB |
 //! | `idx_transactions_txid`            |   111 MB |
 //!
+//! The first of those is the only unique member, and the only one whose
+//! absence relaxes a constraint rather than only a plan — see the section
+//! below on why it is built `UNIQUE` at close rather than declared so.
+//!
 //! An index the ingest path *reads* is never in that set. Dropping one turns
 //! the write path into sequential scans, which converts a slow sync into a
-//! stopped one, so `address_stats_pkey`, the `utxo_set` keys, every
-//! partitioned table's own primary key, and `idx_validator_collateral` all
-//! stay. The unpartitioned tables cannot participate at all: any rebuild
+//! stopped one, so `address_stats_pkey`, the `utxo_set` keys, the primary keys
+//! the partitioned tables still have, and `idx_validator_collateral` all stay.
+//! (`address_txs` no longer has one; 0006 dropped it as a redundant key prefix
+//! of the index above.) The unpartitioned tables cannot participate at all: any rebuild
 //! there is full-size by construction.
 //!
 //! `idx_tx_outputs_outpoint` is the one member of the deferred set that ingest
@@ -46,6 +51,48 @@
 //! cannot reach the open partition while the mode holds. Should a reorg be
 //! planned anyway, [`SteppedSync::force_realtime`] leaves stepped mode and
 //! rebuilds before the disconnect runs, rather than letting it full-scan.
+//!
+//! # `address_txs` has one btree, and the build is what makes it unique
+//!
+//! `address_txs` used to carry two btrees whose keys are a prefix
+//! relationship: `address_txs_pkey (address, block_height, txid)` and this
+//! set's `idx_address_txs_addr_height_desc (address, block_height DESC,
+//! block_pos DESC, txid DESC)`. The first is a strict key-prefix subset of the
+//! second, and 8.8 GB of mainnet's 17.6 GB of `address_txs` index. Nothing read
+//! it: the paginator needs all four columns in that order, and A5's narrowing
+//! of the writer's dedup key to exactly the constraint's columns removed the
+//! `ON CONFLICT` arbiter it existed to back.
+//!
+//! `0006_address_txs_one_index.sql` drops it. That leaves the constraint with
+//! nowhere to live, and the obvious repair — declaring the survivor `UNIQUE` —
+//! is the wrong one for IBD: a unique index cannot be deferred, because
+//! deferring it *is* not enforcing it, so the wide index would have to be
+//! maintained on every insert and stepped mode would lose the whole
+//! narrow-pkey-plus-bulk-build scheme.
+//!
+//! So the survivor stays deferred and is built with `CREATE UNIQUE INDEX` when
+//! the partition closes. The build is then two things at once: the index, and a
+//! retroactive proof that no duplicate key entered that partition. Enforcement
+//! is per-partition during IBD and per-row near the tip, and verified either
+//! way — if the writer's dedup breaks, or a new path bypasses it, the close
+//! fails with the partition named rather than corrupting silently. What is
+//! accepted in exchange: reads against the still-open partition can see a
+//! duplicate before it closes, and a failed close needs an operator. Both are
+//! the right failure mode, because a duplicate here is a bug worth stopping on.
+//!
+//! During stepped sync `address_txs` is consequently left maintaining exactly
+//! one index — `idx_address_txs_block_height`, 325 MB over nine partitions and
+//! append-only, which 0004 keeps for the reversal delete. It was two, one of
+//! them the 6.5 GB random-write primary key.
+//!
+//! The unique key is one column wider than the constraint it replaces, and that
+//! is exact rather than approximate: `block_pos` is functionally determined by
+//! `(block_height, txid)`, which is `transactions`' own primary key, so a
+//! genuine duplicate `(address, block_height, txid)` carries the same
+//! `block_pos` and collides. The one shape that escapes is a duplicate whose
+//! rows disagree about `block_pos` — a writer that has already corrupted the
+//! position it copies — and no single index over the paginator's ordering can
+//! catch that, because that ordering needs all four columns in that order.
 //!
 //! # Why no partitioned parent index
 //!
@@ -65,13 +112,30 @@
 //! produces an `Append` that index-scans every partition that has one and
 //! falls back only on the one that does not.
 //!
-//! The fallback is graceful rather than catastrophic, which was checked on
-//! real data rather than assumed. The address-history query against a 3.4 GB
-//! `address_txs_p8` plans as an `Index Only Scan using
-//! idx_address_txs_addr_height_desc_p8` when the index is there, and as an
-//! `Index Scan Backward using address_txs_p8_pkey` under an `Incremental Sort`
-//! when it is not — the partition's primary key leads with `address`, so even
-//! the deferred case is an index scan, not a sequential one.
+//! How graceful the fallback is depends on the table, and for `address_txs` it
+//! stopped being graceful when 0006 dropped the primary key. Measured, not
+//! assumed, on an 8.46M-row `p0`/`p1` pair with `p0` closed and `p1` open:
+//!
+//! | `p1`'s state | plan for the address-history page |
+//! |---|---|
+//! | built (realtime, or after close) | `Index Only Scan using idx_address_txs_addr_height_desc_p1`, no sort |
+//! | deferred, pkey still present (before 0006) | `Index Scan Backward using …_pkey` under an `Incremental Sort` |
+//! | deferred, pkey gone (now) | `Parallel Seq Scan on address_txs_p1` under a `Sort` |
+//!
+//! The parent-level query is a `Parallel Append`, so only the open partition
+//! degrades: the closed one still contributes a `Parallel Index Only Scan`. But
+//! it degrades further than it used to. On that open partition alone the scan
+//! took 112,544 physical buffer reads and discarded 2,819,996 rows to return
+//! 11, where the old pkey fallback was an index scan.
+//!
+//! That is a real cost and it is accepted, because of *when* it applies:
+//! stepped mode only engages when the tip is `stepped_sync_gap` (25,000 blocks
+//! by default) behind the node, i.e. during a sync whose API is serving a
+//! partial chain anyway, and the degradation ends the moment the partition
+//! closes. It is also bounded by one partition rather than by the table. If
+//! serving address history during IBD ever matters more than the write cost it
+//! buys, the lever is to leave `address_txs` out of the deferred set — not to
+//! bring back a second btree that no query plans on.
 //!
 //! # What it is worth
 //!
@@ -100,6 +164,13 @@
 //! | `idx_transactions_txid`            |  1.89 s |  66 MB |
 //! | `idx_transactions_list`            |  1.37 s |  75 MB |
 //! | **total**                          | **96.44 s** | **2,098 MB** |
+//!
+//! Building `idx_address_txs_addr_height_desc` `UNIQUE` rather than plain costs
+//! nothing measurable: on an 8.46M-row partition, 32.46 s unique against
+//! 35.92 s non-unique at the same `maintenance_work_mem`, which is noise in the
+//! non-unique direction. The uniqueness check rides along on the sort the build
+//! already does — adjacent equal keys are adjacent in it — so the duplicate
+//! proof described above is genuinely free.
 //!
 //! So the saving runs at ~6.6 s per 1,000 blocks against a one-off build of
 //! ~96 s per partition — the trade only works because it is charged once per
@@ -192,6 +263,14 @@ pub struct DeferredIndex {
   pub table: &'static str,
   /// Everything after the table name in `CREATE INDEX … ON …`.
   pub definition: &'static str,
+  /// Build it `UNIQUE`. Set only where the key is a real uniqueness
+  /// constraint that has nowhere else to live: `address_txs` traded its
+  /// redundant primary key for this index (`0006_address_txs_one_index.sql`),
+  /// so the build at partition close is also the proof that the partition
+  /// holds no duplicate. Deferring a unique index means not enforcing it
+  /// until the build, which is the trade that section of the module doc
+  /// describes.
+  pub unique: bool,
 }
 
 /// The deferrable set: query-only indexes on height-partitioned tables, and
@@ -202,36 +281,45 @@ pub const DEFERRED_INDEXES: [DeferredIndex; 7] = [
     stem: "idx_transactions_txid",
     table: "transactions",
     definition: "(txid)",
+    unique: false,
   },
   DeferredIndex {
     stem: "idx_transactions_list",
     table: "transactions",
     definition: "(block_height DESC, block_pos DESC, txid DESC)",
+    unique: false,
   },
   DeferredIndex {
     stem: "idx_transactions_display_txid",
     table: "transactions",
     definition: "(display_hex(txid) text_pattern_ops)",
+    unique: false,
   },
   DeferredIndex {
     stem: "idx_tx_outputs_txid_vout",
     table: "tx_outputs",
     definition: "(txid, vout_index)",
+    unique: false,
   },
   DeferredIndex {
     stem: "idx_tx_outputs_address",
     table: "tx_outputs",
     definition: "(address) WHERE address IS NOT NULL",
+    unique: false,
   },
   DeferredIndex {
     stem: "idx_tx_outputs_outpoint",
     table: "tx_outputs",
     definition: "(outpoint)",
+    unique: false,
   },
   DeferredIndex {
     stem: "idx_address_txs_addr_height_desc",
     table: "address_txs",
     definition: "(address, block_height DESC, block_pos DESC, txid DESC)",
+    // The one unique member: this index *is* `address_txs`'s uniqueness
+    // constraint now that the redundant prefix primary key is gone.
+    unique: true,
   },
 ];
 
@@ -243,10 +331,25 @@ pub const DEFERRED_INDEXES: [DeferredIndex; 7] = [
 /// Every one of these was traced to a statement on the connect path:
 /// prevout resolution reads `utxo_set` by primary key (`ingest/derive.rs`),
 /// the balance stage reads and upserts `address_stats` by primary key
-/// (`ingest/balances.rs`), each partitioned table's own primary key backs its
-/// `ON CONFLICT` arbiter, and the validator stage joins on
-/// `idx_validator_collateral` (`ingest/validators.rs`).
-pub const INGEST_PATH_INDEXES: [&str; 9] = [
+/// (`ingest/balances.rs`), the validator stage joins on
+/// `idx_validator_collateral` (`ingest/validators.rs`), and the remaining
+/// primary keys back the `ON CONFLICT` arbiters and prevout joins their own
+/// tables' statements name — `transactions` by `(block_height, txid)`,
+/// `tx_inputs` and `tx_outputs` by that pair plus an index.
+///
+/// `address_txs_pkey` used to be on this list and no longer exists. It was
+/// here as the arbiter of `INSERT INTO address_txs … ON CONFLICT DO NOTHING`;
+/// A5 narrowed the writer's in-memory dedup key to exactly the constraint's
+/// columns, which made the key set unique by construction and let the clause
+/// go, and `0006_address_txs_one_index.sql` then dropped the constraint
+/// itself as a redundant key prefix of
+/// `idx_address_txs_addr_height_desc`. `address_txs` is consequently the one
+/// base table with *no* entry here: the ingest path reads none of its indexes
+/// on connect, and the reversal delete reads `idx_address_txs_block_height`,
+/// which keeps its partitioned parent (0004) and is not in the deferred set.
+/// Nothing named here is an `address_txs` index, so this list no longer needs
+/// one — but the property the list encodes is unchanged.
+pub const INGEST_PATH_INDEXES: [&str; 8] = [
   "address_stats_pkey",
   "utxo_set_pkey",
   "idx_utxo_set_address_key",
@@ -254,7 +357,6 @@ pub const INGEST_PATH_INDEXES: [&str; 9] = [
   "transactions_pkey",
   "tx_inputs_pkey",
   "tx_outputs_pkey",
-  "address_txs_pkey",
   "idx_validator_collateral",
 ];
 
@@ -676,20 +778,53 @@ impl SteppedSync {
   ) -> HyDbResult<()> {
     // Plain, not CONCURRENTLY: 6.47 s against 32.76 s on 3M rows, and the
     // writer this would avoid blocking is the one waiting for the build.
+    //
+    // `UNIQUE` where the spec says so, which for `address_txs` makes this
+    // build the partition's duplicate check as well as its index: the key it
+    // enforces is the constraint the dropped primary key used to hold, so a
+    // failure here is a real duplicate and must stop the advance rather than
+    // be retried into a silently non-unique index.
+    let unique = if spec.unique { "UNIQUE " } else { "" };
     let sql = format!(
-      "CREATE INDEX IF NOT EXISTS {name} ON {table} {}",
+      "CREATE {unique}INDEX IF NOT EXISTS {name} ON {table} {}",
       spec.definition
     );
     let started = Instant::now();
-    sqlx::query(&sql)
-      .execute(&self.admin)
-      .await
-      .map_err(|e| HyDbError::pg("stepped sync: build deferred index", e))?;
+    sqlx::query(&sql).execute(&self.admin).await.map_err(|e| {
+      // Name the partition in the context rather than leaving it to Postgres'
+      // own message, and carry the DETAIL through: on a unique build the
+      // DETAIL is the duplicated key itself, which is the whole diagnosis, and
+      // `sqlx`'s `Display` drops it.
+      let detail = e
+        .as_database_error()
+        .and_then(|db| db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>())
+        .and_then(sqlx::postgres::PgDatabaseError::detail)
+        .map(|d| format!(" ({d})"))
+        .unwrap_or_default();
+      let ctx = if spec.unique {
+        format!(
+          "stepped sync: build UNIQUE {name} on partition p{partition} of \
+           {table} — a failure here is a duplicate key in that partition, not \
+           a build problem{detail}"
+        )
+      } else {
+        format!("stepped sync: build deferred index {name} on p{partition}{detail}")
+      };
+      tracing::error!(
+        index = name,
+        table,
+        partition,
+        unique = spec.unique,
+        "stepped sync could not build {name} on {table} (partition p{partition}): {e}{detail}"
+      );
+      HyDbError::pg(&ctx, e)
+    })?;
     let elapsed = started.elapsed();
     tracing::info!(
       index = name,
       table,
       partition,
+      unique = spec.unique,
       closed = partition < open,
       elapsed_ms = elapsed.as_millis() as u64,
       "stepped sync built deferred index {name} on {table} in {:.2}s",
@@ -801,6 +936,61 @@ mod tests {
     assert!(
       rows >= DEFERRED_INDEXES.len(),
       "the migration lists fewer indexes than the deferred set"
+    );
+  }
+
+  /// The unique members are a second contract with the schema, and a sharper
+  /// one: a `unique` flag that drifts away from the migration means a database
+  /// where `address_txs` has neither a primary key nor a unique index — no
+  /// constraint at all on the widest table in the schema, and nothing to
+  /// notice it. So the flag is pinned to `0006`, in both directions.
+  #[test]
+  fn the_unique_members_match_the_migration_that_made_them_unique() {
+    let sql = std::fs::read_to_string(
+      std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sql/0006_address_txs_one_index.sql"),
+    )
+    .unwrap_or_default();
+    assert!(
+      !sql.is_empty(),
+      "0006_address_txs_one_index.sql should be readable"
+    );
+    // The migration converts the existing partitions; the daemon builds the
+    // rest. Both spell the same DDL, so the migration must ask for UNIQUE.
+    assert!(
+      sql.contains("CREATE UNIQUE INDEX"),
+      "0006 should build the surviving address_txs index UNIQUE"
+    );
+    assert!(
+      sql.contains("ALTER TABLE address_txs DROP CONSTRAINT address_txs_pkey"),
+      "0006 should be what drops the redundant primary key"
+    );
+
+    let unique: Vec<&str> = DEFERRED_INDEXES
+      .iter()
+      .filter(|spec| spec.unique)
+      .map(|spec| spec.stem)
+      .collect();
+    assert_eq!(
+      unique,
+      vec!["idx_address_txs_addr_height_desc"],
+      "the unique deferred set is exactly the index that replaced        address_txs_pkey; adding another means another dropped constraint,        which is a schema decision and not a flag flip"
+    );
+  }
+
+  /// The dropped constraint must be gone from the ingest-path list too, or the
+  /// integration test that checks every one of them still exists starts
+  /// looking for an index no database has.
+  #[test]
+  fn the_dropped_address_txs_primary_key_is_not_claimed_by_the_ingest_path() {
+    assert!(
+      !INGEST_PATH_INDEXES.contains(&"address_txs_pkey"),
+      "address_txs_pkey was dropped by 0006 and cannot be an ingest-path index"
+    );
+    assert!(
+      !INGEST_PATH_INDEXES
+        .iter()
+        .any(|name| name.starts_with("address_txs")),
+      "no address_txs index is read by the connect path: the insert has no        arbiter and the reversal delete uses idx_address_txs_block_height"
     );
   }
 

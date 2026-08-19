@@ -159,6 +159,16 @@ async fn a_rebuilt_index_matches_the_definition_the_schema_declared() -> Res {
       .map(|(_, tail)| tail.to_owned())
       .unwrap_or_default();
     assert!(!tail.is_empty(), "{name} is not a btree index: {def}");
+    // Uniqueness is part of the definition, and for `address_txs` it is the
+    // whole reason the index survived: it carries the constraint the dropped
+    // primary key used to. A rebuild that quietly drops UNIQUE leaves the
+    // table with no key at all.
+    assert_eq!(
+      def.starts_with("CREATE UNIQUE INDEX"),
+      spec.unique,
+      "{name} should{} be unique; Postgres reports {def}",
+      if spec.unique { "" } else { " not" }
+    );
     for column in spec
       .definition
       .trim_start_matches('(')
@@ -206,13 +216,22 @@ async fn no_index_the_ingest_path_reads_is_ever_dropped() -> Res {
     .map(|name| (*name).to_owned())
     .collect();
   // The partitioned tables' own primary keys, per partition — the arbiters
-  // every ON CONFLICT on the write path depends on.
+  // every ON CONFLICT on the write path depends on. `address_txs` is absent
+  // deliberately: 0006 dropped its primary key as a redundant key prefix of
+  // idx_address_txs_addr_height_desc, so there is no such index to check for,
+  // and asserting on one would assert the old schema back into existence.
   let mut partitioned: Vec<String> = Vec::new();
   for partition in 0..=1 {
-    for table in ["transactions", "tx_inputs", "tx_outputs", "address_txs"] {
+    for table in ["transactions", "tx_inputs", "tx_outputs"] {
       partitioned.push(format!("{table}_p{partition}_pkey"));
     }
   }
+  // And it really is gone, on every partition, rather than merely unlisted.
+  let dropped: Vec<String> = (0..=1).map(|p| format!("address_txs_p{p}_pkey")).collect();
+  assert!(
+    present(&pool, &dropped).await?.is_empty(),
+    "0006 should have left no address_txs primary key behind"
+  );
 
   let baseline_unpartitioned = present(&pool, &unpartitioned).await?.len();
   assert_eq!(
@@ -403,4 +422,186 @@ async fn answers(
   out.push(format!("{history:?}"));
 
   Ok(out)
+}
+
+/// The guarantee that makes the consolidation safe rather than merely small.
+///
+/// `0006_address_txs_one_index.sql` dropped `address_txs_pkey` — a redundant
+/// key prefix of `idx_address_txs_addr_height_desc` — and made the surviving
+/// index `UNIQUE`. But that index is *deferred* during stepped sync, so while a
+/// partition is open nothing enforces the key at all; the enforcement is the
+/// `CREATE UNIQUE INDEX` at partition close, which both builds the index and
+/// retroactively proves the partition holds no duplicate.
+///
+/// That is only a guarantee if the build really does fail. So this injects the
+/// duplicate the writer's dedup exists to prevent, straight into the open
+/// partition where nothing can stop it, and closes the partition:
+///
+///   * the duplicate really lands — two rows, which is the exposure the design
+///     accepts and the thing that makes the rest of this test non-vacuous;
+///   * closing the partition fails, and the failure names the partition;
+///   * the index is not left behind in some half-built or non-unique state;
+///   * and once the duplicate is removed the close succeeds, so the failure is
+///     a stop-and-fix, not a wedge.
+#[tokio::test]
+async fn closing_a_partition_that_holds_a_duplicate_fails_and_names_it() -> Res {
+  let tmp = common::TempDb::create().await?;
+  let db = tmp.open().await?;
+  let pool = tmp.seed_pool().await?;
+
+  create_partitions(&pool, 0).await?;
+  create_partitions(&pool, 1).await?;
+
+  let sync = SteppedSync::with_params(pool.clone(), true, 25_000);
+  into_stepped(&sync);
+  sync.ensure_settled(150_000).await?;
+  // p1 is open, so it carries no unique index and nothing guards the key.
+  assert_deferred_present(&pool, 1, false).await?;
+
+  const ADDRESS: &str = "XjUQQHuVvrXqRHqmWarqmGsd79HbeUAqN7";
+  const HEIGHT: i32 = 150_000;
+  let txid = vec![0x5au8; 32];
+  // A real duplicate is two rows agreeing on all four columns: `block_pos` is
+  // a copy of the value `transactions` holds under its own (block_height,
+  // txid) primary key, so a duplicated (address, block_height, txid) carries
+  // the same position with it.
+  for _ in 0..2 {
+    sqlx::query(
+      "INSERT INTO address_txs (address, block_height, txid, block_pos) VALUES ($1,$2,$3,7)",
+    )
+    .bind(ADDRESS)
+    .bind(HEIGHT)
+    .bind(&txid)
+    .execute(&pool)
+    .await?;
+  }
+  let (rows,): (i64,) = sqlx::query_as(
+    "SELECT COUNT(*) FROM address_txs WHERE address = $1 AND block_height = $2 AND txid = $3",
+  )
+  .bind(ADDRESS)
+  .bind(HEIGHT)
+  .bind(&txid)
+  .fetch_one(&pool)
+  .await?;
+  assert_eq!(
+    rows, 2,
+    "the open partition has to actually accept the duplicate, or this test \
+     proves nothing about the build that is supposed to catch it"
+  );
+
+  // The tip crosses into p2, which is p1's close and therefore the build.
+  create_partitions(&pool, 2).await?;
+  let closed = sync.ensure_settled(250_000).await;
+  assert!(
+    closed.is_err(),
+    "closing a partition holding a duplicate key must fail, got {closed:?}"
+  );
+  let text = closed.err().map_or_else(String::new, |e| e.to_string());
+  assert!(
+    text.contains("p1"),
+    "the failure has to say which partition is bad; got {text}"
+  );
+  assert!(
+    text.contains("idx_address_txs_addr_height_desc_p1"),
+    "the failure should name the index being built on that partition; got {text}"
+  );
+  assert!(
+    text.contains("unique") || text.contains("UNIQUE") || text.contains("duplicate"),
+    "the failure should say the key is not unique rather than look like a \
+     build problem; got {text}"
+  );
+  // And Postgres' DETAIL, which names the key that is duplicated. `sqlx`'s own
+  // Display drops it, so this is the assertion that keeps it plumbed through:
+  // without it an operator is told a partition is bad and not which row.
+  assert!(
+    text.contains(ADDRESS),
+    "the failure should carry the duplicated key itself; got {text}"
+  );
+
+  // Nothing half-built: a failed CREATE INDEX leaves no index behind, which is
+  // exactly why these builds are plain rather than CONCURRENTLY.
+  let live = present(
+    &pool,
+    &[child_index_name("idx_address_txs_addr_height_desc", 1)],
+  )
+  .await?;
+  assert!(
+    live.is_empty(),
+    "a failed unique build must leave no index at all, got {live:?}"
+  );
+
+  // And the failure is recoverable: remove the duplicate and the same close
+  // completes, index and all. A duplicate is a bug to fix, not a dead end.
+  sqlx::query(
+    "DELETE FROM address_txs WHERE ctid IN (
+       SELECT ctid FROM address_txs
+        WHERE address = $1 AND block_height = $2 AND txid = $3 OFFSET 1)",
+  )
+  .bind(ADDRESS)
+  .bind(HEIGHT)
+  .bind(&txid)
+  .execute(&pool)
+  .await?;
+  sync.ensure_settled(250_000).await?;
+  assert_deferred_present(&pool, 1, true).await?;
+  let unique: bool = sqlx::query_scalar(
+    "SELECT indexdef LIKE 'CREATE UNIQUE INDEX%' FROM pg_indexes WHERE indexname = $1",
+  )
+  .bind(child_index_name("idx_address_txs_addr_height_desc", 1))
+  .fetch_one(&pool)
+  .await?;
+  assert!(
+    unique,
+    "the index the close builds is what enforces the key; it must be unique"
+  );
+
+  drop(db);
+  tmp.drop_now().await;
+  Ok(())
+}
+
+/// The other half of the same guarantee: near the tip the index exists, so the
+/// duplicate is refused per row at insert time rather than at a partition
+/// boundary. Enforcement granularity changes with the mode; enforcement does
+/// not disappear.
+#[tokio::test]
+async fn a_duplicate_is_refused_per_row_once_the_index_is_back() -> Res {
+  let tmp = common::TempDb::create().await?;
+  let db = tmp.open().await?;
+  let pool = tmp.seed_pool().await?;
+
+  create_partitions(&pool, 0).await?;
+  let sync = SteppedSync::with_params(pool.clone(), true, 25_000);
+  // Realtime from the start: p0 is the open partition and still gets the set.
+  sync.ensure_settled(10).await?;
+  assert_deferred_present(&pool, 0, true).await?;
+
+  const ADDRESS: &str = "XjUQQHuVvrXqRHqmWarqmGsd79HbeUAqN7";
+  let txid = vec![0x5au8; 32];
+  let insert = |pool: PgPool, txid: Vec<u8>| async move {
+    sqlx::query(
+      "INSERT INTO address_txs (address, block_height, txid, block_pos) VALUES ($1,10,$2,7)",
+    )
+    .bind(ADDRESS)
+    .bind(txid)
+    .execute(&pool)
+    .await
+  };
+  insert(pool.clone(), txid.clone()).await?;
+  let second = insert(pool.clone(), txid.clone()).await;
+  let code = second
+    .as_ref()
+    .err()
+    .and_then(sqlx::Error::as_database_error)
+    .and_then(|e| e.code())
+    .map(|c| c.to_string());
+  assert_eq!(
+    code.as_deref(),
+    Some("23505"),
+    "a duplicate key should be refused as a unique violation, got {second:?}"
+  );
+
+  drop(db);
+  tmp.drop_now().await;
+  Ok(())
 }

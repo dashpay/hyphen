@@ -46,11 +46,30 @@
 //! be complete at every block, so the write cannot be deferred or coalesced
 //! across blocks. What went away is the reading and re-reading around it.
 //!
+//! It then lost a third of what remained to
+//! `0006_address_txs_one_index.sql`, which collapsed its two btrees into one — `address_txs_pkey (address, block_height, txid)` was a
+//! strict key prefix of `idx_address_txs_addr_height_desc`, so the second
+//! descent it cost per row bought nothing. Same machine, same 400 blocks, the
+//! pkey the only difference:
+//!
+//! | counter                         | two btrees | one btree |
+//! |---------------------------------|------------|-----------|
+//! | address_txs pages/block         |    1232.00 |    830.37 |
+//!
+//! Wall clock is flat across that pair (24.4 against
+//! 26.6 ms/block) and that is the expected result, not a disappointment: 400
+//! blocks fit in `shared_buffers`, `read` is 0, and there is no physical IO for
+//! a smaller index to save. The same comparison at one partition's scale — an
+//! 8.46M-row `address_txs_p8` stand-in, 881 MB of heap, cold buffers — is where
+//! the pages turn into time: 1423.0 pages and 287.2 physical reads per block
+//! against 859.0 and 141.7, and 67.9 ms/block against 29.3.
+//!
 //! The `read` column is zero here and that is expected: 400 blocks fit entirely
 //! in `shared_buffers`, so every page touched is a hit. The count of pages
 //! touched is what carries over to a database that does not fit — at mainnet
-//! scale `address_txs` holds 60.0M rows under 17.6 GB of index, and a page
-//! touched on a btree that large is a page read.
+//! scale `address_txs` holds 60.0M rows under what was 17.6 GB of index and is
+//! 8.8 GB of it since 0006, and a page touched on a btree that large is a page
+//! read.
 
 mod common;
 
