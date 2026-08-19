@@ -40,22 +40,22 @@
 //! function, it needs from it:
 //!
 //! - **Result payloads.** REST answers with per-hit detail this trait cannot
-//!   express: validator `status`, block `canonical`/`orphan` labels, tx
-//!   `mined`/`coinbase` tags. [`HyDbQrSearchHit`] carries `kind` + `id` only,
-//!   which is exactly why the REST validator arm re-fetches each hit
-//!   (`validators().get()`) after its prefix probe.
+//! express: validator `status`, block `canonical`/`orphan` labels, tx
+//! `mined`/`coinbase` tags. [`HyDbQrSearchHit`] carries `kind` + `id` only,
+//! which is exactly why the REST validator arm re-fetches each hit
+//! (`validators().get()`) after its prefix probe.
 //! - **Arms with no Postgres pool behind them.** The numeric block-height
-//!   lookup (a primary-key hit that short-circuits the fan-out), the exact
-//!   64-hex both-endian probes, the mempool overlay for txs, the orphan-block
-//!   fallback, and governance (served from in-memory live state, and matching
-//!   free text rather than a prefix) all live above this seam.
+//! lookup (a primary-key hit that short-circuits the fan-out), the exact
+//! 64-hex both-endian probes, the mempool overlay for txs, the orphan-block
+//! fallback, and governance (served from in-memory live state, and matching
+//! free text rather than a prefix) all live above this seam.
 //! - **A decision about trim direction, which is a real behavioral choice.**
-//!   This function merges most-specific-first and sheds BLOCKS when the total
-//!   overshoots; REST appends blocks FIRST and stops at ten, so it sheds
-//!   transactions, addresses and governance instead. And REST asks every kind
-//!   for the full ten rather than a quota, so a flooding prefix can take all
-//!   ten slots. Consolidating changes which results a user sees; it is not a
-//!   refactor, and it is not this crate's call to make silently.
+//! This function merges most-specific-first and sheds BLOCKS when the total
+//! overshoots; REST appends blocks FIRST and stops at ten, so it sheds
+//! transactions, addresses and governance instead. And REST asks every kind
+//! for the full ten rather than a quota, so a flooding prefix can take all
+//! ten slots. Consolidating changes which results a user sees; it is not a
+//! refactor, and it is not this crate's call to make silently.
 
 use async_trait::async_trait;
 

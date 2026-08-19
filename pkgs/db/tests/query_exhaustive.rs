@@ -352,7 +352,8 @@ async fn transactions(db: &HyphenDb) -> TestResult {
     .ok_or("coinbase tx exists")?;
   assert!(cb.outputs[0].spent_by.is_some(), "a1:0 was spent by b2");
 
-  // search_prefix: exact prefix (one hit) and truncation (three 'a' txids, limit 2).
+  // search_prefix: exact prefix (one hit) and truncation (three 'a' txids,
+  // limit 2).
   assert_eq!(db.txs().search_prefix("a1".to_owned(), 10).await?.len(), 1);
   assert_eq!(
     db.txs().search_prefix("a".to_owned(), 2).await?.len(),

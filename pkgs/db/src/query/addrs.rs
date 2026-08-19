@@ -122,9 +122,9 @@ pub trait HyDbAddrIdx: Send + Sync {
   ///
   /// Distinct from [`Self::bal_count`], and the distinction is the whole reason
   /// this exists: `rich_list` reads `address_rich`, which holds only the
-  /// addresses above `[db.layout] rich_list_floor`. A caller paginating the rich
-  /// list against the positive-balance count runs out of rows long before it
-  /// runs out of count.
+  /// addresses above `[db.layout] rich_list_floor`. A caller paginating the
+  /// rich list against the positive-balance count runs out of rows long before
+  /// it runs out of count.
   async fn rich_count(&self) -> HyDbResult<u64>;
 
   /// Chain-wide total and included supply.
@@ -451,12 +451,12 @@ impl HyDbAddrIdx for PgAddrIdx {
     };
 
     // Served from `address_rich`, the maintained side table of addresses at or
-    // above `layout::rich_list_floor()`; `address_stats` deliberately carries no
-    // balance-ordered index (it would make every ingest update non-HOT). The
+    // above `layout::rich_list_floor()`; `address_stats` deliberately carries
+    // no balance-ordered index (it would make every ingest update non-HOT). The
     // ranked scan is over `address_rich`, then a PK join back to
-    // `address_stats` for the page's other columns — the two agree on
-    // `balance` by construction, and ordering by the side table's copy is what
-    // keeps the scan index-ordered.
+    // `address_stats` for the page's other columns — the two agree on `balance`
+    // by construction, and ordering by the side table's copy is what keeps the
+    // scan index-ordered.
     //
     // Keyset on (balance DESC, address ASC). The equal-balance boundary needs
     // address > cursor; the strictly-lower boundary is any address.

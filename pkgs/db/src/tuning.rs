@@ -582,8 +582,8 @@ pub(crate) async fn verify_undo_coverage(pool: &PgPool, lo: i32, hi: i32) -> HyD
 ///
 /// # Errors
 ///
-/// [`HyDbError::Derive`] naming the families and partitions that are missing, or
-/// [`HyDbError::Pg`] if the probe fails.
+/// [`HyDbError::Derive`] naming the families and partitions that are missing,
+/// or [`HyDbError::Pg`] if the probe fails.
 async fn verify_undo_partitions(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<()> {
   let span = crate::layout::undo_span();
   let wanted: Vec<String> = (lo.max(0) / span..=hi.max(0) / span)

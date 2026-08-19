@@ -254,7 +254,8 @@ fn build_src() -> Src {
       events: vec![],
     },
   );
-  // B2 h1: coinbase -> A. Register V (collateral (h1,0)) and W (collateral (h2,0)).
+  // B2 h1: coinbase -> A. Register V (collateral (h1,0)) and W (collateral
+  // (h2,0)).
   src.add(
     2,
     Spec {
@@ -354,7 +355,8 @@ async fn run(tmp: &TempDb) -> TestResult {
   assert!(report.reorg.is_none(), "linear connect is not a reorg");
 
   // --- Spend resolution + balances -----------------------------------------
-  // A: created (h1,0),(h2,0),(h5,0),B4-spend-out,B5-spend-out = 5; spent (h1,0) = 1.
+  // A: created (h1,0),(h2,0),(h5,0),B4-spend-out,B5-spend-out = 5;
+  // spent (h1,0) = 1.
   let a = db
     .addrs()
     .summary(HyDbAddress(A.to_owned()))
@@ -377,7 +379,8 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   assert_eq!(db.txs().total().await?, 7, "5 coinbases + 2 spends");
 
-  // The B4 spend tx records inlined provenance for the output it consumed (B's).
+  // The B4 spend tx records inlined provenance for the output it consumed
+  // (B's).
   let spend = db
     .txs()
     .get(spend_txid(h(4)))
@@ -412,7 +415,7 @@ async fn run(tmp: &TempDb) -> TestResult {
   );
 
   // --- Reorg: switch to the alt branch off B3, dropping B4 (revoke+spend) and
-  //     B5 (reap+spend). Drives ValidatorsStage::restore and spend undo. -----
+  // B5 (reap+spend). Drives ValidatorsStage::restore and spend undo. -----
   for (hash, prev) in [(6u8, 3u8), (7, 6)] {
     ingest.on_block(raw(hash, prev)).await?;
   }

@@ -4,7 +4,7 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//!  Block read API + live overlay + decode helpers.
+//! Block read API + live overlay + decode helpers.
 
 pub mod overlay;
 pub mod rest;

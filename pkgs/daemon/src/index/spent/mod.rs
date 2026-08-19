@@ -4,6 +4,6 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//!  Address (spent) read API.
+//! Address (spent) read API.
 
 pub mod rest;

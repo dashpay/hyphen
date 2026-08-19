@@ -22,16 +22,16 @@
 -- Where an object is deliberately absent it simply does not appear below, and a
 -- comment says why. Two of those absences are load-bearing
 -- and must not be "fixed" by adding the obvious index back:
---   * the seven deferred indexes have no partitioned parent (see the deferred
---     index set below);
---   * `address_txs` has no primary key (see that table).
+-- * the seven deferred indexes have no partitioned parent (see the deferred
+-- index set below);
+-- * `address_txs` has no primary key (see that table).
 --
 -- Layout follows the five-layer model, narrowed to layers 1-3 plus an
 -- internal undo family:
---   L1 base facts   — append-only, written once in block order
---   L2 accumulations — precomputed answers, no query-time aggregation
---   L3 indexes      — base facts reorganized for relationship queries
---   internal        — bounded shallow-fork undo, never exposed through a trait
+-- L1 base facts   — append-only, written once in block order
+-- L2 accumulations — precomputed answers, no query-time aggregation
+-- L3 indexes      — base facts reorganized for relationship queries
+-- internal        — bounded shallow-fork undo, never exposed through a trait
 
 -- ---------------------------------------------------------------------------
 -- Enum types
@@ -144,8 +144,8 @@ COMMENT ON TABLE init_params IS
 -- --------------------------------
 -- Postgres will not let a partition of a partitioned index be dropped:
 --
---   ERROR:  cannot drop index tx_outputs_p9_outpoint_idx
---           because index idx_tx_outputs_outpoint requires it
+-- ERROR:  cannot drop index tx_outputs_p9_outpoint_idx
+-- because index idx_tx_outputs_outpoint requires it
 --
 -- and it re-creates the child unconditionally whenever a partition is added,
 -- whether by CREATE TABLE ... PARTITION OF or by ALTER TABLE ... ATTACH
@@ -185,38 +185,38 @@ COMMENT ON TABLE init_params IS
 -- different indexes under the same names. Definitions are quoted exactly as
 -- the Rust constant spells them.
 --
---   'idx_transactions_txid'            on 'transactions'
---     '(txid)'
---     Lookup a transaction by txid alone (the PK leads with block_height).
+-- 'idx_transactions_txid'            on 'transactions'
+-- '(txid)'
+-- Lookup a transaction by txid alone (the PK leads with block_height).
 --
---   'idx_transactions_list'            on 'transactions'
---     '(block_height DESC, block_pos DESC, txid DESC)'
---     Newest-first keyset pagination of the global transaction list.
+-- 'idx_transactions_list'            on 'transactions'
+-- '(block_height DESC, block_pos DESC, txid DESC)'
+-- Newest-first keyset pagination of the global transaction list.
 --
---   'idx_transactions_display_txid'    on 'transactions'
---     '(display_hex(txid) text_pattern_ops)'
---     Prefix search on the display-order hex txid (see the search contract
---     above).
+-- 'idx_transactions_display_txid'    on 'transactions'
+-- '(display_hex(txid) text_pattern_ops)'
+-- Prefix search on the display-order hex txid (see the search contract
+-- above).
 --
---   'idx_tx_outputs_txid_vout'         on 'tx_outputs'
---     '(txid, vout_index)'
---     A transaction's outputs, and input resolution by consumed (txid, vout).
+-- 'idx_tx_outputs_txid_vout'         on 'tx_outputs'
+-- '(txid, vout_index)'
+-- A transaction's outputs, and input resolution by consumed (txid, vout).
 --
---   'idx_tx_outputs_address'           on 'tx_outputs'
---     '(address) WHERE address IS NOT NULL'
---     An address's outputs.
+-- 'idx_tx_outputs_address'           on 'tx_outputs'
+-- '(address) WHERE address IS NOT NULL'
+-- An address's outputs.
 --
---   'idx_tx_outputs_outpoint'          on 'tx_outputs'
---     '(outpoint)'
---     The generated packed key exists to be joined on (spent-status lookups
---     and the UTXO-restore step of every disconnect); without this index
---     those joins full-scan every partition.
+-- 'idx_tx_outputs_outpoint'          on 'tx_outputs'
+-- '(outpoint)'
+-- The generated packed key exists to be joined on (spent-status lookups
+-- and the UTXO-restore step of every disconnect); without this index
+-- those joins full-scan every partition.
 --
---   'idx_address_txs_addr_height_desc' on 'address_txs'   [UNIQUE]
---     '(address, block_height DESC, block_pos DESC, txid DESC)'
---     The address paginator's ordering, and the only uniqueness constraint
---     `address_txs` has. Built with CREATE UNIQUE INDEX at partition close —
---     see the `address_txs` commentary for what that does and does not prove.
+-- 'idx_address_txs_addr_height_desc' on 'address_txs'   [UNIQUE]
+-- '(address, block_height DESC, block_pos DESC, txid DESC)'
+-- The address paginator's ordering, and the only uniqueness constraint
+-- `address_txs` has. Built with CREATE UNIQUE INDEX at partition close —
+-- see the `address_txs` commentary for what that does and does not prove.
 --
 -- END DEFERRED INDEX SET
 
@@ -365,11 +365,11 @@ CREATE TABLE address_stats (
 -- 18.9M-row table, measuring the cold pass over a freshly packed table and
 -- the steady-state pass after it:
 --
---   ff   heap    cold HOT / WAL     steady HOT / WAL
---   100  1826MB   0.41% / 2296MB    45.47% / 338MB
---    90  2026MB  29.24% / 1875MB    55.59% / 305MB
---    80  2276MB  48.82% /  330MB    61.48% / 275MB
---    70  2595MB  63.53% /  272MB    66.67% / 256MB
+-- ff   heap    cold HOT / WAL     steady HOT / WAL
+-- 100  1826MB   0.41% / 2296MB    45.47% / 338MB
+-- 90  2026MB  29.24% / 1875MB    55.59% / 305MB
+-- 80  2276MB  48.82% /  330MB    61.48% / 275MB
+-- 70  2595MB  63.53% /  272MB    66.67% / 256MB
 --
 -- 80 is the knee. It takes the cold pass from 0.41% to 48.82% HOT and its WAL
 -- from 2296 MB to 330 MB, which is what an initial sync sees since nothing has
@@ -395,10 +395,10 @@ CREATE INDEX idx_address_stats_prefix
 -- stay free of a balance-ordered index.
 --
 -- Membership needs no history scan: an address is only ever written here by a
--- block that already computed its new balance, and the reverse path re-reads
--- it from `address_stats` once that table has been rewound. See `layout::RICH_LIST_FLOOR`; changing
--- the floor requires an offline rebuild of this table (one scan of
--- `address_stats`), not a resync.
+-- block that already computed its new balance, and the reverse path re-reads it
+-- from `address_stats` once that table has been rewound. See
+-- `layout::RICH_LIST_FLOOR`; changing the floor requires an offline rebuild of
+-- this table (one scan of `address_stats`), not a resync.
 CREATE TABLE address_rich (
   address  TEXT   PRIMARY KEY,
   balance  BIGINT NOT NULL
@@ -446,13 +446,13 @@ INSERT INTO transactions_summary (singleton) VALUES (TRUE);
 
 -- Circulating / included supply — the accumulation with no per-address home.
 -- The invariant is `total = included_supply + unspendable_value`:
---   total            — true issued supply (Σ subsidy = Σ coinbase − Σ fees)
---   included_supply  — value currently attributable to addressed outputs
---                      (Σ received − sent over address deltas)
---   unspendable_value — value parked in addressless outputs (OP_RETURN,
---                       non-standard scripts), tracked separately so the two
---                       supply views stay consistent instead of silently
---                       diverging on the first addressless output.
+-- total            — true issued supply (Σ subsidy = Σ coinbase − Σ fees)
+-- included_supply  — value currently attributable to addressed outputs
+-- (Σ received − sent over address deltas)
+-- unspendable_value — value parked in addressless outputs (OP_RETURN,
+-- non-standard scripts), tracked separately so the two
+-- supply views stay consistent instead of silently
+-- diverging on the first addressless output.
 CREATE TABLE supply_summary (
   singleton         BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
   total             BIGINT  NOT NULL DEFAULT 0 CHECK (total >= 0),
@@ -523,13 +523,13 @@ CREATE TABLE utxo_set (
   -- of 859,999 (3,324,916 rows; 826,410 inserts and 702,375 deletes, one
   -- transaction per block, paced at ~33 blocks/s, autovacuum live):
   --
-  --   setting                          worker present   passes  heap   catch-up
-  --   default cost                     20.5% / 22.9%    10      693MB  1.77s
-  --   cost_limit 2000, delay 2ms        11.1% /  9.2%   11      689MB  0.36s
-  --   cost_limit 2000, delay 0          16.9%           11      693MB  0.52s
-  --   scale_factor 0.2, default cost    15.6%            7      707MB  3.15s
-  --   scale_factor 0.1 + limit 2000/0   14.4%            7      705MB  3.27s
-  --   autovacuum off                     0.0%            0      811MB  5.04s
+  -- setting                          worker present   passes  heap   catch-up
+  -- default cost                     20.5% / 22.9%    10      693MB  1.77s
+  -- cost_limit 2000, delay 2ms        11.1% /  9.2%   11      689MB  0.36s
+  -- cost_limit 2000, delay 0          16.9%           11      693MB  0.52s
+  -- scale_factor 0.2, default cost    15.6%            7      707MB  3.15s
+  -- scale_factor 0.1 + limit 2000/0   14.4%            7      705MB  3.27s
+  -- autovacuum off                     0.0%            0      811MB  5.04s
   --
   -- Halving the worker's presence costs nothing: ingest wall time was flat
   -- across every variant (the run is paced), and the table came out smaller,
@@ -558,36 +558,36 @@ CREATE INDEX idx_utxo_set_block_height ON utxo_set (block_height);
 -- NO PRIMARY KEY, deliberately. This table carried two btrees whose keys are
 -- a prefix relationship:
 --
---   address_txs_pkey                  (address, block_height, txid)
---   idx_address_txs_addr_height_desc  (address, block_height DESC,
---                                      block_pos DESC, txid DESC)
+-- address_txs_pkey                  (address, block_height, txid)
+-- idx_address_txs_addr_height_desc  (address, block_height DESC,
+-- block_pos DESC, txid DESC)
 --
 -- The first is a strict key-prefix subset of the second. On the retained
 -- mainnet database that redundancy was 8.8 GB of the table's 17.6 GB of
 -- index; on the 860,000-block seed, 6,527 MB of 13 GB. Nothing needs it:
 --
---   * The read path never used it. The address paginator orders by
---     (block_height DESC, block_pos DESC, txid DESC) within one address, which
---     the pkey cannot serve, and it plans as an Index Only Scan using
---     address_txs_pN_address_block_height_block_pos_txid_idx on every partition
---     of `hyphen_mainnet`.
---   * The write path stopped needing it in A5. The `address_txs` insert used to
---     carry `ON CONFLICT DO NOTHING` with the pkey as its arbiter; the writer's
---     in-memory dedup key was then narrowed to exactly (address, txid) at a
---     fixed height — the constraint's own columns — so the key set handed to
---     Postgres is unique by construction and the clause was removed. With no
---     arbiter there is no arbiter index to back.
---   * The reversal `DELETE ... WHERE block_height = $1` stands on
---     idx_address_txs_block_height below, not on the pkey — neither btree
---     leading with `address` could ever serve it.
+-- * The read path never used it. The address paginator orders by
+-- (block_height DESC, block_pos DESC, txid DESC) within one address, which
+-- the pkey cannot serve, and it plans as an Index Only Scan using
+-- address_txs_pN_address_block_height_block_pos_txid_idx on every partition
+-- of `hyphen_mainnet`.
+-- * The write path stopped needing it in A5. The `address_txs` insert used to
+-- carry `ON CONFLICT DO NOTHING` with the pkey as its arbiter; the writer's
+-- in-memory dedup key was then narrowed to exactly (address, txid) at a
+-- fixed height — the constraint's own columns — so the key set handed to
+-- Postgres is unique by construction and the clause was removed. With no
+-- arbiter there is no arbiter index to back.
+-- * The reversal `DELETE ... WHERE block_height = $1` stands on
+-- idx_address_txs_block_height below, not on the pkey — neither btree
+-- leading with `address` could ever serve it.
 --
 -- Measured on a clone of the seed (`address_txs_p8`, 8.47M rows, 883 MB heap /
 -- 2,321 MB index), 100 blocks of 141 rows each, `pg_statio` deltas:
 --
---   layout                     pages/block   physical reads/block cold   ms/block
---   two btrees (before)            1281.5                       285.8      100.1
---   one btree                       713.2                        73.4       56.1
---   one UNIQUE btree                708.8                           —        47.1
+-- layout                     pages/block   physical reads/block cold   ms/block
+-- two btrees (before)            1281.5                       285.8      100.1
+-- one btree                       713.2                        73.4       56.1
+-- one UNIQUE btree                708.8                           —        47.1
 --
 -- `heap_blks_read` was zero in every phase: this is all index leaf traffic,
 -- which is the `IO:DataFileRead` that stood at 73% of active samples.
@@ -633,7 +633,7 @@ CREATE TABLE address_txs (
 
 -- Support the reversal delete. Every disconnect runs one
 --
---   DELETE FROM address_txs WHERE block_height = $1
+-- DELETE FROM address_txs WHERE block_height = $1
 --
 -- per reversed block. `address_txs` is the only base table whose reversal has
 -- no other index to stand on: both btrees above lead with `address` and
@@ -646,11 +646,11 @@ CREATE TABLE address_txs (
 -- transaction. Warm first, then again on a freshly cloned database so the
 -- buffer pool had never seen the data:
 --
---                          latency      buffers (hit/read)   rows found
---   before, warm            337-421 ms   112,980 / 0          62-131
---   before, COLD          14,263 ms        2,110 / 110,932        62
---   after, warm heap           81 ms          134 / 3            131
---   after, COLD partition      18 ms           13 / 3             11
+-- latency      buffers (hit/read)   rows found
+-- before, warm            337-421 ms   112,980 / 0          62-131
+-- before, COLD          14,263 ms        2,110 / 110,932        62
+-- after, warm heap           81 ms          134 / 3            131
+-- after, COLD partition      18 ms           13 / 3             11
 --
 -- The cold row is the one that matters, and it is why the warm reading was not
 -- worth trusting: 110,932 physical block reads, 867 MB pulled through an 8 GB
@@ -722,9 +722,9 @@ CREATE INDEX idx_validator_registered_height ON validators (registered_height);
 
 -- Bounded shallow-fork undo: the pre-image a connected block overwrote, so a
 -- disconnect is a structured replay rather than a full re-derive. Spent UTXOs
--- are NOT stored here — disconnect rebuilds them by joining `spends` back to the
--- still-present `tx_outputs`. Only the accumulations, which a block mutates in
--- place and cannot otherwise be inverted, keep a pre-image.
+-- are NOT stored here — disconnect rebuilds them by joining `spends` back to
+-- the still-present `tx_outputs`. Only the accumulations, which a block mutates
+-- in place and cannot otherwise be inverted, keep a pre-image.
 CREATE TABLE undo_blocks (
   height                      INTEGER PRIMARY KEY,
   block_hash                  bytea   NOT NULL,
@@ -758,10 +758,10 @@ CREATE TABLE undo_blocks (
 -- whole row goes away. It needs no pre-image either.
 --
 -- That leaves the two genuinely non-invertible facts:
---   existed          -- whether the row predates this block, which decides
---                       delete-versus-restore. Not derivable from the block.
---   last_seen_height -- overwritten with this block's height unconditionally,
---                       so arithmetic cannot recover what it was.
+-- existed          -- whether the row predates this block, which decides
+-- delete-versus-restore. Not derivable from the block.
+-- last_seen_height -- overwritten with this block's height unconditionally,
+-- so arithmetic cannot recover what it was.
 CREATE TABLE undo_address_stats (
   height             INTEGER NOT NULL,
   address            TEXT    NOT NULL,
@@ -821,22 +821,22 @@ CREATE TABLE undo_validators (
 -- WHAT
 -- ----
 --
---   vacuumdb --freeze --analyze --jobs=N -d <database>
+-- vacuumdb --freeze --analyze --jobs=N -d <database>
 --
 -- or per table, `VACUUM (FREEZE, ANALYZE) <table>;`. Two things are wanted and
 -- neither is compaction:
 --
---   FREEZE   IBD writes ~3.16 XIDs per block and every base table is
---            append-only afterwards, so the whole history is permanently
---            visible tuples that autovacuum will nonetheless have to revisit
---            for wraparound one day — as an anti-wraparound vacuum, at some
---            unchosen moment, on a running server. Freezing it while the
---            daemon is down converts that future forced scan into a chosen
---            one, and lets index-only scans use the visibility map.
---   ANALYZE  Statistics from a table that grew by four orders of magnitude
---            during sync describe a database that no longer exists. This is
---            the cheap half and the one whose absence shows up as a plan
---            cliff on the first query after sync.
+-- FREEZE   IBD writes ~3.16 XIDs per block and every base table is
+-- append-only afterwards, so the whole history is permanently
+-- visible tuples that autovacuum will nonetheless have to revisit
+-- for wraparound one day — as an anti-wraparound vacuum, at some
+-- unchosen moment, on a running server. Freezing it while the
+-- daemon is down converts that future forced scan into a chosen
+-- one, and lets index-only scans use the visibility map.
+-- ANALYZE  Statistics from a table that grew by four orders of magnitude
+-- during sync describe a database that no longer exists. This is
+-- the cheap half and the one whose absence shows up as a plan
+-- cliff on the first query after sync.
 --
 -- Measured on a clone of an 860,000-block database (61 GB, 46.5M address_txs
 -- rows): `VACUUM (FREEZE, ANALYZE) address_txs_p8` — one 100,000-block
@@ -857,23 +857,24 @@ CREATE TABLE undo_validators (
 -- rewritten size, and it holds an ACCESS EXCLUSIVE lock throughout. Sizes from
 -- the retained mainnet database at height 967,013 (84 GB total):
 --
---   address_txs   24 GB      tx_inputs    13 GB      utxo_set        3.0 GB
---   tx_outputs    18 GB      spends      9.2 GB      address_stats   5.5 GB
---   transactions  4.3 GB
+-- address_txs   24 GB      tx_inputs    13 GB      utxo_set        3.0 GB
+-- tx_outputs    18 GB      spends      9.2 GB      address_stats   5.5 GB
+-- transactions  4.3 GB
 --
 -- so a full-database `VACUUM FULL` needs ~84 GB of headroom, and the largest
 -- single table alone needs ~24 GB — at a few hundred GB (the full chain, or a
 -- larger network) that is a spare volume, not a maintenance window. It also
 -- buys nothing this schema needs: the base tables are append-only, so they
--- carry no dead tuples to compact. `utxo_set` is the one table that churns,
--- and it is deliberately kept at a low fillfactor with aggressive autovacuum
--- (see `utxo_set` above) precisely so its free space is *reused* rather than reclaimed.
+-- carry no dead tuples to compact. `utxo_set` is the one table that churns, and
+-- it is deliberately kept at a low fillfactor with aggressive autovacuum (see
+-- `utxo_set` above) precisely so its free space is *reused* rather than
+-- reclaimed.
 --
 -- If physical compaction is ever genuinely wanted — after a mass deletion, or
 -- a retention change — do it table by table, largest last, and size the
 -- headroom against that one table rather than the database:
 --
---   VACUUM FULL <one table>;   -- or one partition at a time
+-- VACUUM FULL <one table>;   -- or one partition at a time
 --
 -- Partitioning is the lever that makes this survivable: every large table here
 -- is range-partitioned by height, so the unit of rewrite is a ~2-5 GB

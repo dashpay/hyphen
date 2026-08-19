@@ -441,8 +441,8 @@ pub struct BalanceResponse {
   ///
   /// The rich list is served from a side table holding only the addresses above
   /// the configured floor, so this is that table's size. It used to be the
-  /// chain-wide positive-balance count, which is far larger and left most of the
-  /// advertised total unreachable: the cursor went terminal at the floor.
+  /// chain-wide positive-balance count, which is far larger and left most of
+  /// the advertised total unreachable: the cursor went terminal at the floor.
   pub total_count: i64,
   /// Addresses holding any positive balance, chain-wide.
   ///

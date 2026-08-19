@@ -74,8 +74,8 @@ pub(crate) async fn apply(pool: &PgPool) -> Result<(), HyDbError> {
 /// # Errors
 ///
 /// [`HyDbError::Migrate`] when `_sqlx_migrations` records a version this build
-/// does not embed, or records one whose checksum differs from the embedded file,
-/// or [`HyDbError::Pg`] if the history cannot be read.
+/// does not embed, or records one whose checksum differs from the embedded
+/// file, or [`HyDbError::Pg`] if the history cannot be read.
 async fn verify_history(pool: &PgPool) -> Result<(), HyDbError> {
   let tracked: bool =
     sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")

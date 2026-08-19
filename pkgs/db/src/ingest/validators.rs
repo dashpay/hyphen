@@ -5,8 +5,9 @@
 //
 
 //! Validator registry accumulation, as an [`IngestStage`]: applying a block's
-//! delta-shaped lifecycle events, reaping validators whose collateral was spent,
-//! recomputing counts, and the reorg inverse (restore from `undo_validators`).
+//! delta-shaped lifecycle events, reaping validators whose collateral was
+//! spent, recomputing counts, and the reorg inverse (restore from
+//! `undo_validators`).
 
 use async_trait::async_trait;
 
@@ -68,8 +69,8 @@ impl IngestStage for ValidatorsStage {
 impl ValidatorsStage {
   /// Apply each transaction's validator lifecycle events onto the `validators`
   /// registry. Register creates a row; the update variants patch only their
-  /// changed columns; revoke marks the operator revoked. Every touched validator's
-  /// pre-image is captured into `undo_validators` first.
+  /// changed columns; revoke marks the operator revoked. Every touched
+  /// validator's pre-image is captured into `undo_validators` first.
   async fn apply_events(tx: &mut PgTx<'_>, height: i32, block: &HyDbBlock) -> HyDbResult<usize> {
     let mut applied = 0usize;
     for btx in &block.txs {

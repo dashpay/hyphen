@@ -41,8 +41,8 @@
 //! stopped one, so `address_stats_pkey`, the `utxo_set` keys, the primary keys
 //! the partitioned tables still have, and `idx_validator_collateral` all stay.
 //! (`address_txs` has none; the schema withholds it as a redundant key prefix
-//! of the index above.) The unpartitioned tables cannot participate at all: any rebuild
-//! there is full-size by construction.
+//! of the index above.) The unpartitioned tables cannot participate at all: any
+//! rebuild there is full-size by construction.
 //!
 //! `idx_tx_outputs_outpoint` is the one member of the deferred set that ingest
 //! reads at all, and only on *disconnect* — it serves the UTXO-restore join.
@@ -82,8 +82,8 @@
 //!
 //! During stepped sync `address_txs` is consequently left maintaining exactly
 //! one index — `idx_address_txs_block_height`, 325 MB over nine partitions and
-//! append-only, which the schema keeps for the reversal delete. It was two, one of
-//! them the 6.5 GB random-write primary key.
+//! append-only, which the schema keeps for the reversal delete. It was two, one
+//! of them the 6.5 GB random-write primary key.
 //!
 //! The unique key is one column wider than the constraint it replaces, and that
 //! is exact rather than approximate: `block_pos` is functionally determined by
@@ -116,11 +116,13 @@
 //! stopped being graceful once the primary key went. Measured, not
 //! assumed, on an 8.46M-row `p0`/`p1` pair with `p0` closed and `p1` open:
 //!
-//! | `p1`'s state | plan for the address-history page |
-//! |---|---|
-//! | built (realtime, or after close) | `Index Only Scan using idx_address_txs_addr_height_desc_p1`, no sort |
-//! | deferred, with a pkey present | `Index Scan Backward using …_pkey` under an `Incremental Sort` |
-//! | deferred, pkey gone (now) | `Parallel Seq Scan on address_txs_p1` under a `Sort` |
+//! With the index built — realtime, or after the partition closes — the plan is
+//! an `Index Only Scan` over it, unsorted. Deferred, with a primary key still
+//! present, it degrades to an `Index Scan Backward` on that key under an
+//! `Incremental Sort`.
+//!
+//! Deferred with no primary key, which is the shape now, it degrades all the
+//! way to a `Parallel Seq Scan` under a `Sort`.
 //!
 //! The parent-level query is a `Parallel Append`, so only the open partition
 //! degrades: the closed one still contributes a `Parallel Index Only Scan`. But

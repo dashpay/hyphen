@@ -95,8 +95,8 @@ pub enum RpcAuth {
 
 /// A credential that does not print itself.
 ///
-/// The redaction lives on the type rather than on each struct that holds one, so
-/// a new field carrying a secret is redacted by construction and a derived
+/// The redaction lives on the type rather than on each struct that holds one,
+/// so a new field carrying a secret is redacted by construction and a derived
 /// `Debug` or `Serialize` on its container stays safe. Reading the value is
 /// deliberately a named call, which makes the few places that legitimately need
 /// it greppable.

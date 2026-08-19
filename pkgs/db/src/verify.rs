@@ -7,11 +7,12 @@
 //! Consistency checks over *chain data*, as opposed to the schema and layout
 //! checks in [`crate::migrate`] and [`crate::layout`].
 //!
-//! One implementation, two callers: [`HyphenDb::connect`](crate::HyphenDb::connect)
-//! runs [`undo_coverage`] as a startup gate before handing out a facade, and
-//! the same function backs the operator-facing read-only diagnostic
-//! (`HyDbStatus::undo_coverage`). The gate refuses only on the defects that
-//! make a rollback impossible; everything else is reported and survivable.
+//! One implementation, two callers:
+//! [`HyphenDb::connect`](crate::HyphenDb::connect) runs [`undo_coverage`] as a
+//! startup gate before handing out a facade, and the same function backs the
+//! operator-facing read-only diagnostic (`HyDbStatus::undo_coverage`). The gate
+//! refuses only on the defects that make a rollback impossible; everything else
+//! is reported and survivable.
 //!
 //! # Why counting is the whole point
 //!
@@ -31,10 +32,10 @@
 //! decidable at all:
 //!
 //! - **Pruning only ever removes a contiguous prefix from the bottom.** It
-//!   drops a partition whose highest possible height is at or below the
-//!   cutoff, so it can neither punch an interior hole nor touch the top.
+//! drops a partition whose highest possible height is at or below the
+//! cutoff, so it can neither punch an interior hole nor touch the top.
 //! - **Corruption shows up above the floor**: a hole between the oldest
-//!   retained height and the tip, or coverage that stops short of the tip.
+//! retained height and the tip, or coverage that stops short of the tip.
 //!
 //! The check therefore anchors on the *retained* floor (`MIN(height)`) rather
 //! than on the configured keep depth, and asks whether `[floor, tip]` is
@@ -414,8 +415,8 @@ async fn interior_gaps(pool: &PgPool, tip: i32) -> HyDbResult<(Vec<HyDbUndoGap>,
 /// [`MAX_NAMED_PARTITIONS`] of them.
 ///
 /// Split out from the query so the cap is testable. The cap breaks out of both
-/// loops: breaking only the inner one let every remaining gap add another run of
-/// names on top of a list already at the limit, so a report meant to name at
+/// loops: breaking only the inner one let every remaining gap add another run
+/// of names on top of a list already at the limit, so a report meant to name at
 /// most 64 partitions could name half again as many.
 fn partitions_for_gaps(gaps: &[HyDbUndoGap], span: u32) -> Vec<String> {
   let mut names: Vec<String> = Vec::new();

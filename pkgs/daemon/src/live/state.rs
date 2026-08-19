@@ -164,8 +164,8 @@ impl LiveState {
     }
   }
 
-  /// Governance objects (proposals), newest-first by `(updated_at, object_hash)`,
-  /// after an optional keyset cursor, capped at `limit`.
+  /// Governance objects (proposals), newest-first by `(updated_at,
+  /// object_hash)`, after an optional keyset cursor, capped at `limit`.
   pub fn governance_objects(
     &self,
     limit: usize,
@@ -747,7 +747,8 @@ impl Governance {
   }
 }
 
-/// Sort governance objects newest-first by `(updated_at DESC, object_hash ASC)`.
+/// Sort governance objects newest-first by `(updated_at DESC, object_hash
+/// ASC)`.
 fn sort_governance_objects(objects: &mut [Arc<GovObject>]) {
   objects.sort_by(|a, b| {
     b.updated_at

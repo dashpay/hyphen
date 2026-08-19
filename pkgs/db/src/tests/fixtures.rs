@@ -10,7 +10,8 @@
 use crate::records::{HyDbBlock, HyDbHeader, HyDbTx, HyDbTxIn, HyDbTxOut};
 use crate::types::{HyDbAddrType, HyDbAddress, HyDbAmount, HyDbHash, HyDbOutpoint};
 
-/// A distinct 32-byte hash seeded from a `u64` (little-endian in the low bytes).
+/// A distinct 32-byte hash seeded from a `u64` (little-endian in the low
+/// bytes).
 pub fn hash_from_u64(seed: u64) -> HyDbHash {
   let mut bytes = [0u8; 32];
   bytes[..8].copy_from_slice(&seed.to_le_bytes());

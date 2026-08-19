@@ -4,11 +4,11 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! The chain-statistics stage: the cumulative `block_metrics` row, the singleton
-//! `transactions_summary`/`supply_summary` totals, and the `undo_blocks`
-//! pre-image that lets a disconnect restore those summaries verbatim. This stage
-//! also owns the `undo_blocks` ledger, since the summary pre-image is the only
-//! payload it carries.
+//! The chain-statistics stage: the cumulative `block_metrics` row, the
+//! singleton `transactions_summary`/`supply_summary` totals, and the
+//! `undo_blocks` pre-image that lets a disconnect restore those summaries
+//! verbatim. This stage also owns the `undo_blocks` ledger, since the summary
+//! pre-image is the only payload it carries.
 //!
 //! `block_metrics` stores `difficulty` only; the daemon derives `hashrate` at
 //! read time from the chain's target block time (`difficulty * 2^32 /

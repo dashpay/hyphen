@@ -13,14 +13,16 @@ use super::PgTx;
 use crate::error::{HyDbError, HyDbResult};
 use crate::types::{HyDbAddress, HyDbHash, HyDbVlType};
 
-/// A validator lifecycle transition derived from a provider special transaction.
+/// A validator lifecycle transition derived from a provider special
+/// transaction.
 ///
 /// Each variant wraps a named payload struct (one per DIP3 provider tx) that
-/// owns both its fields and the write it performs. The enum is a dumb dispatcher
-/// — no variant is subordinate to another: `HyDbVlRegister` happens to be a full
-/// row and the rest are field deltas, but all four are first-class transitions
-/// that apply themselves. Collateral reap is handled crate-side during spend
-/// resolution (a spent collateral outpoint deregisters its validator), not here.
+/// owns both its fields and the write it performs. The enum is a dumb
+/// dispatcher — no variant is subordinate to another: `HyDbVlRegister` happens
+/// to be a full row and the rest are field deltas, but all four are first-class
+/// transitions that apply themselves. Collateral reap is handled crate-side
+/// during spend resolution (a spent collateral outpoint deregisters its
+/// validator), not here.
 #[derive(Debug, Clone)]
 pub enum HyDbVlEvent {
   /// ProRegTx — a full new registry row.

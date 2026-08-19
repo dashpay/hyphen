@@ -22,26 +22,26 @@
 //! once, as one of two things:
 //!
 //! - [`Consumed`](Decl::Consumed) — the guard requires at least one non-test
-//!   read that is not the struct merely describing or checking itself.
+//! read that is not the struct merely describing or checking itself.
 //! - [`Pending`](Decl::Pending) — the key exists ahead of its consumer. The
-//!   guard requires the *opposite*: **zero** read sites, plus a written
-//!   justification for shipping the key early.
+//! guard requires the *opposite*: **zero** read sites, plus a written
+//! justification for shipping the key early.
 //!
 //! Those two requirements are what stops the pending list rotting into a
 //! permanent exemption list, and it is worth being precise about how, because
 //! "we will clean it up later" is exactly what `[performance]` was:
 //!
 //! 1. **Pending is a falsifiable claim, not a waiver.** It asserts the key is
-//!    unread. The moment its consumer lands and reads it, the guard fails — a
-//!    pending entry cannot survive its own consumer arriving. An exemption
-//!    list works the other way round: it silences the check permanently, so
-//!    the entry survives everything, including the thing it was waiting for.
+//! unread. The moment its consumer lands and reads it, the guard fails — a
+//! pending entry cannot survive its own consumer arriving. An exemption
+//! list works the other way round: it silences the check permanently, so
+//! the entry survives everything, including the thing it was waiting for.
 //! 2. **Every pending entry carries an argument, not a placeholder.** The
-//!    justification must say why the key ships before its consumer, and is
-//!    length-checked so a bare `TODO` cannot stand in for one.
+//! justification must say why the key ships before its consumer, and is
+//! length-checked so a bare `TODO` cannot stand in for one.
 //! 3. **The list cannot grow silently.** Adding a field to any configuration
-//!    struct with no declaration fails the completeness check. There is no
-//!    spelling of "add a key and move on".
+//! struct with no declaration fails the completeness check. There is no
+//! spelling of "add a key and move on".
 //!
 //! The `task` an entry names is a note for a human reader. It is deliberately
 //! not cross-referenced against a task file: that file is not part of the

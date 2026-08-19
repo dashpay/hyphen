@@ -453,7 +453,8 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-  /// The hyphen-db storage facade, once the chain-data cutover has connected it.
+  /// The hyphen-db storage facade, once the chain-data cutover has connected
+  /// it.
   ///
   /// # Errors
   ///

@@ -114,8 +114,8 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
     Ok(Ok(())),
   );
   // Recent progress, not "ever ingested". A lifetime block count is permanent
-  // once the first block lands, so it stood in for a live source for the rest of
-  // the process, masking every later disconnection behind it.
+  // once the first block lands, so it stood in for a live source for the rest
+  // of the process, masking every later disconnection behind it.
   let ingesting = ctx
     .ingest_status
     .last_progress_epoch()

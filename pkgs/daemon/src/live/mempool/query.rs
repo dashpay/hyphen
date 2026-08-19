@@ -19,8 +19,8 @@ use crate::rest::openapi::{
 };
 use crate::utils::{self, HashEndian};
 
-/// Decode and enrich one mempool transaction into an in-RAM [`MempoolTx`]. Input
-/// provenance (prev address/value) is resolved from the storage engine's
+/// Decode and enrich one mempool transaction into an in-RAM [`MempoolTx`].
+/// Input provenance (prev address/value) is resolved from the storage engine's
 /// committed outputs.
 ///
 /// # Errors
@@ -318,8 +318,8 @@ fn decode_tx(raw_tx: &[u8]) -> Result<DecodedTransaction, DaemonError> {
 ///
 /// # Errors
 ///
-/// `RestSource` when the value cannot be represented, which is the same class as
-/// the decode failure it sits beside — the node sent something unusable.
+/// `RestSource` when the value cannot be represented, which is the same class
+/// as the decode failure it sits beside — the node sent something unusable.
 fn duffs(sats: u64) -> Result<i64, DaemonError> {
   i64::try_from(sats).map_err(|_| DaemonError::RestSource {
     message: format!("transaction claims {sats} duffs, beyond the representable range"),
@@ -379,10 +379,10 @@ const MAX_RESOLVED_PREVOUT_INPUTS: usize = 1_000;
 /// Two costs are bounded here:
 ///
 /// * **Repeats.** Inputs are grouped by their previous transaction, so a
-///   transaction spending twenty outputs of one parent costs one lookup, not
-///   twenty. `HyDbTxIdx::get` already returns every output of that parent.
+/// transaction spending twenty outputs of one parent costs one lookup, not
+/// twenty. `HyDbTxIdx::get` already returns every output of that parent.
 /// * **Volume.** Beyond [`MAX_RESOLVED_PREVOUT_INPUTS`] inputs nothing is
-///   resolved at all.
+/// resolved at all.
 ///
 /// What is *not* fixed here: each distinct parent still costs its own
 /// round trip, because `hyphen-db` exposes no batched outpoint read on its

@@ -4,7 +4,7 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//!  Validator read API + live overlay.
+//! Validator read API + live overlay.
 
 pub mod overlay;
 pub mod rest;

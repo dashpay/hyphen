@@ -6,10 +6,10 @@
 
 //! The daemon's chain-decode seam for `hyphen-db`.
 //!
-//! [`HyDbBlockSource`] implements [`hyphen_db::HyDbDataSrc`]: it turns raw block
-//! bytes into the storage crate's structured fact family. Decoding is **pure**
-//! with respect to the bytes — no I/O, no node calls — so the crate can replay
-//! it during reorg re-derivation and get identical facts.
+//! [`HyDbBlockSource`] implements [`hyphen_db::HyDbDataSrc`]: it turns raw
+//! block bytes into the storage crate's structured fact family. Decoding is
+//! **pure** with respect to the bytes — no I/O, no node calls — so the crate
+//! can replay it during reorg re-derivation and get identical facts.
 
 use dash_primitives::payload::SpecialPayload;
 use dash_primitives::{Block, Transaction, TxType};

@@ -8,13 +8,13 @@
 //! broken or unbounded:
 //!
 //! 1. **Search byte order** — a prefix copied from the UI (display-order hex,
-//!    the byte-reverse of the stored bytes) must find its row. The original
-//!    matched internal-order hex, so UI prefixes could never match.
+//! the byte-reverse of the stored bytes) must find its row. The original
+//! matched internal-order hex, so UI prefixes could never match.
 //! 2. **Multi-block reorgs** — including the same-height reorg the original
-//!    height-only comparison could not see.
+//! height-only comparison could not see.
 //! 3. **Undo-table pruning** — the undo tables must stay depth-bounded
-//!    instead of growing with the chain, and must never shed a height the
-//!    reorg bound can still reach.
+//! instead of growing with the chain, and must never shed a height the
+//! reorg bound can still reach.
 
 mod common;
 

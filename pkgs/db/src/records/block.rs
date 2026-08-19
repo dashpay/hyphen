@@ -48,8 +48,9 @@ pub struct HyDbHeader {
   pub time: u32,
   pub bits: u32,
   /// Floating-point difficulty (`genesis_target / target`), computed by the
-  /// data source from `bits`. Supplied as a fact rather than derived here so the
-  /// storage crate does no consensus math — the daemon owns `bits`→difficulty.
+  /// data source from `bits`. Supplied as a fact rather than derived here so
+  /// the storage crate does no consensus math — the daemon owns
+  /// `bits`→difficulty.
   pub difficulty: f64,
   pub nonce: u32,
   pub version: i32,

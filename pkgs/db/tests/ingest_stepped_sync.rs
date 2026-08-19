@@ -516,12 +516,12 @@ async fn answers(
 /// duplicate the writer's dedup exists to prevent, straight into the open
 /// partition where nothing can stop it, and closes the partition:
 ///
-///   * the duplicate really lands — two rows, which is the exposure the design
-///     accepts and the thing that makes the rest of this test non-vacuous;
-///   * closing the partition fails, and the failure names the partition;
-///   * the index is not left behind in some half-built or non-unique state;
-///   * and once the duplicate is removed the close succeeds, so the failure is
-///     a stop-and-fix, not a wedge.
+/// * the duplicate really lands — two rows, which is the exposure the design
+/// accepts and the thing that makes the rest of this test non-vacuous;
+/// * closing the partition fails, and the failure names the partition;
+/// * the index is not left behind in some half-built or non-unique state;
+/// * and once the duplicate is removed the close succeeds, so the failure is
+/// a stop-and-fix, not a wedge.
 #[tokio::test]
 async fn closing_a_partition_that_holds_a_duplicate_fails_and_names_it() -> Res {
   let tmp = common::TempDb::create().await?;

@@ -354,8 +354,8 @@ async fn counters(pool: &PgPool, table: &str) -> Result<Counters, Box<dyn std::e
 /// Buffer accesses per table, as `pg_statio_user_tables` reports them: `read`
 /// is a physical page read (a miss that went to the operating system), `hit` is
 /// a page found in `shared_buffers`. Partitions are folded back onto their
-/// parent's name, because `address_txs_p0` and `address_txs_p1` are one table as
-/// far as the write path is concerned.
+/// parent's name, because `address_txs_p0` and `address_txs_p1` are one table
+/// as far as the write path is concerned.
 ///
 /// This is the currency the write path is actually spending. A per-block count
 /// of pages touched is what decides whether a 63 GB database with 8 GB of
@@ -467,7 +467,8 @@ async fn run(tmp: &TempDb) -> TestResult {
 
   // Pages touched per block, per table, biggest first. The write path's cost is
   // this list: `address_txs` leads it, and it leads it because it is the widest
-  // fan-out in the database and carries two btrees over the same leading column.
+  // fan-out in the database and carries two btrees over the same leading
+  // column.
   let after_io = io(&pool).await?;
   let mut ranked: Vec<(String, Io)> = after_io
     .iter()

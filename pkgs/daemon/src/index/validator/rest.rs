@@ -45,7 +45,8 @@ fn vl_type_str(validator_type: hyphen_db::HyDbVlType) -> &'static str {
   }
 }
 
-/// Sum the precomputed validator counts matching the active status/type filters.
+/// Sum the precomputed validator counts matching the active status/type
+/// filters.
 async fn validator_total(
   validators: &dyn hyphen_db::query::HyDbVlIdx,
   status: Option<&str>,

@@ -31,20 +31,20 @@
 //! load-bearing somewhere:
 //!
 //! * `SPLITTER` is paid by two outputs of one transaction (the `tx_count`
-//!   delta must be 1 while the `utxo_count` delta is 2).
+//! delta must be 1 while the `utxo_count` delta is 2).
 //! * `DOUBLE` is touched by two different transactions in one block (2 and 2).
 //! * `ROUNDTRIP` spends and is repaid by the same transaction, netting zero.
 //! * `EPHEMERAL` receives an output that a later transaction *in the same
-//!   block* spends, so the outpoint is both created and consumed at one
-//!   height.
+//! block* spends, so the outpoint is both created and consumed at one
+//! height.
 //! * An addressless output carries value at a height where addressed outputs
-//!   also exist, so a recomputation that forgot `address IS NOT NULL` would
-//!   fold it into somebody's balance.
+//! also exist, so a recomputation that forgot `address IS NOT NULL` would
+//! fold it into somebody's balance.
 //! * `MINER` is touched at two heights with a gap, so `last_seen_height` has
-//!   somewhere to go back to that is neither the current height nor
-//!   `first_seen_height`.
+//! somewhere to go back to that is neither the current height nor
+//! `first_seen_height`.
 //! * `WHALE`, `HEIR`, `DRAINED` and `RICHLING` cross the rich-list floor and
-//!   zero in both directions.
+//! zero in both directions.
 
 mod common;
 
@@ -485,12 +485,12 @@ fn chain() -> Src {
   src.block(3, vec![cb(vec![(Some(RICHLING), 100)])]);
 
   // h3: the block every recomputation leg has to survive.
-  //   tx1  DOUBLE is paid (first of two transactions touching it here)
-  //   tx2  DOUBLE is paid again by a different transaction (tx_count +2)
-  //   tx3  ROUNDTRIP spends its own output and is repaid by the same tx
-  //   tx4  the whale's coinbase output is split: part stays, part goes to the
-  //        heir (a new row above the floor), and part goes nowhere at all —
-  //        an addressless output carrying value.
+  // tx1  DOUBLE is paid (first of two transactions touching it here)
+  // tx2  DOUBLE is paid again by a different transaction (tx_count +2)
+  // tx3  ROUNDTRIP spends its own output and is repaid by the same tx
+  // tx4  the whale's coinbase output is split: part stays, part goes to the
+  // heir (a new row above the floor), and part goes nowhere at all —
+  // an addressless output carrying value.
   src.block(
     4,
     vec![

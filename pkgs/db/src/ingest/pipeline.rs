@@ -79,8 +79,8 @@ fn undo_keep_depth() -> i32 {
   tuning::undo_keep_depth()
 }
 
-/// Store a block's raw bytes and parent link in `ser_blocks` (the absorb stage).
-/// Thin spine entry point over [`chain::absorb`].
+/// Store a block's raw bytes and parent link in `ser_blocks` (the absorb
+/// stage). Thin spine entry point over [`chain::absorb`].
 pub(super) async fn absorb(
   pool: &PgPool,
   data_src: &dyn HyDbDataSrc,
@@ -107,9 +107,9 @@ pub(super) trait IngestDerive: Send + Sync {
   ) -> Result<(), HyDbDeriveError>;
 }
 
-/// A slice of the projection with both directions of its mutation. Stages run in
-/// order for a connect and in reverse for a disconnect; each is self-contained
-/// (its `disconnect` reverses exactly what its `connect` wrote).
+/// A slice of the projection with both directions of its mutation. Stages run
+/// in order for a connect and in reverse for a disconnect; each is
+/// self-contained (its `disconnect` reverses exactly what its `connect` wrote).
 ///
 /// The reverse order is not cosmetic. A stage may reverse itself by
 /// recomputing from base facts instead of from a stored pre-image — the
@@ -133,11 +133,11 @@ pub(super) trait IngestStage: Send + Sync {
 }
 
 // The stage set is a fixed, ordered quartet dispatched statically (the required
-// `IngestStage::NAME` associated const makes the trait not dyn-compatible, and a
-// fixed set needs no `dyn`): base facts first (the balance stage reads them back
-// on the way out, and every other accumulation reads from them conceptually),
-// then balances, summaries/metrics, and the validator registry. Connects run
-// them in this order; disconnects run them in reverse.
+// `IngestStage::NAME` associated const makes the trait not dyn-compatible, and
+// a fixed set needs no `dyn`): base facts first (the balance stage reads them
+// back on the way out, and every other accumulation reads from them
+// conceptually), then balances, summaries/metrics, and the validator registry.
+// Connects run them in this order; disconnects run them in reverse.
 
 // ===========================================================================
 // Canonicalize, then connect/disconnect toward the node tip

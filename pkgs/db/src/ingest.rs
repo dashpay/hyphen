@@ -67,10 +67,10 @@ pub struct HyDbIngest {
 }
 
 impl HyDbIngest {
-  /// A block announcement arrived (ZMQ `rawblock`, or fetched by hash).
-  /// Absorbs it into `ser_blocks`; the caller drives canonicalization via
-  /// [`on_tip`](Self::on_tip). Assigns the block's height as `parent.height + 1`
-  /// (genesis is 0); a block whose parent is unknown yields
+  /// A block announcement arrived (ZMQ `rawblock`, or fetched by hash). Absorbs
+  /// it into `ser_blocks`; the caller drives canonicalization via
+  /// [`on_tip`](Self::on_tip). Assigns the block's height as `parent.height +
+  /// 1` (genesis is 0); a block whose parent is unknown yields
   /// [`HyDbBlockSeen::MissingParent`] and is not stored — height is mandatory.
   pub async fn on_block(&self, raw: Bytes) -> HyDbResult<HyDbBlockSeen> {
     let _op = self.op_lock.lock().await;

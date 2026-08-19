@@ -9,11 +9,12 @@
 //! transactions in `sptx_payloads`; bucket counts come precomputed from
 //! `validator_counts`.
 //!
-//! `list`/`get` decode straight into [`HyDbQrValidator`] with a runtime `query_as`
-//! and [`sqlx::FromRow`]: columns are matched to fields by name, and the domain
-//! newtypes carry their own `Decode`, so there is no intermediate row type. That
-//! trades the `query!` macro's compile-time check for a name-keyed mapping with
-//! no positional fragility; the round-trip is covered by an integration test.
+//! `list`/`get` decode straight into [`HyDbQrValidator`] with a runtime
+//! `query_as` and [`sqlx::FromRow`]: columns are matched to fields by name, and
+//! the domain newtypes carry their own `Decode`, so there is no intermediate
+//! row type. That trades the `query!` macro's compile-time check for a
+//! name-keyed mapping with no positional fragility; the round-trip is covered
+//! by an integration test.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -26,7 +27,8 @@ use crate::types::{
 use crate::util::hex_prefix_pattern;
 
 /// A validator's current registry state. Decodes directly from a validator row
-/// via [`sqlx::FromRow`]; field names match the aliased columns in [`Self::COLS`].
+/// via [`sqlx::FromRow`]; field names match the aliased columns in
+/// [`Self::COLS`].
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct HyDbQrValidator {
   pub protx_hash: HyDbHash,
@@ -49,8 +51,9 @@ pub struct HyDbQrValidator {
 }
 
 impl HyDbQrValidator {
-  /// The column projection that decodes into this struct: each column is aliased
-  /// to the matching field so `FromRow` maps them by name. Shared by `list`/`get`.
+  /// The column projection that decodes into this struct: each column is
+  /// aliased to the matching field so `FromRow` maps them by name. Shared by
+  /// `list`/`get`.
   const COLS: &str = "\
     protx_hash, collateral_hash, collateral_index, collateral_address, \
     owner_address, voting_address, operator_pubkey, \

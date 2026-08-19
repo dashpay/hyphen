@@ -4,11 +4,12 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! The per-block carrier the [`IngestDerive`](super::pipeline::IngestDerive) fills and the
-//! [`IngestStage`s](super::pipeline::IngestStage) read, plus the two typed error domains that the
-//! explicit data flow makes possible. A stage that needs a field the deriver
-//! never produced gets a `MissingScratch` naming exactly which field and stage —
-//! an ordering/wiring bug surfaced structurally rather than as a stray string.
+//! The per-block carrier that [`IngestDerive`](super::pipeline::IngestDerive)
+//! fills and the [`IngestStage`s](super::pipeline::IngestStage) read, plus the
+//! two typed error domains that the explicit data flow makes possible. A stage
+//! that needs a field the deriver never produced gets a `MissingScratch` naming
+//! exactly which field and stage — an ordering/wiring bug surfaced structurally
+//! rather than as a stray string.
 
 use std::collections::{HashMap, HashSet};
 
@@ -184,8 +185,8 @@ pub(super) enum HyDbDeriveError {
   MissingPrevout { outpoint: HyDbOutpoint, height: i32 },
   /// A base fact violated an invariant the derivation assumes.
   Malformed { what: String },
-  /// A read against Postgres failed. Wraps the `HyDbError` so the SQLSTATE — and
-  /// thus the transient/permanent classification — is preserved.
+  /// A read against Postgres failed. Wraps the `HyDbError` so the SQLSTATE —
+  /// and thus the transient/permanent classification — is preserved.
   Pg(HyDbError),
 }
 
@@ -219,9 +220,10 @@ impl From<HyDbDeriveError> for HyDbError {
   }
 }
 
-/// Everything an accumulation stage can fail on. `MissingScratch`/`Inconsistent`
-/// are wiring/invariant bugs (unreachable in a correctly-ordered pipeline, but
-/// typed so they name the culprit); `Pg` is a datastore fault.
+/// Everything an accumulation stage can fail on.
+/// `MissingScratch`/`Inconsistent` are wiring/invariant bugs (unreachable in a
+/// correctly-ordered pipeline, but typed so they name the culprit); `Pg` is a
+/// datastore fault.
 #[derive(Debug)]
 pub(super) enum HyDbStageError {
   /// A prior producer did not populate scratch this stage requires.
@@ -275,8 +277,8 @@ impl From<HyDbStageError> for HyDbError {
 }
 
 /// A failure anywhere in one block's connect, tagged with its layer so
-/// [`advance`](super::pipeline::advance) can branch on the recovery strategy before
-/// flattening to a public [`HyDbError`].
+/// [`advance`](super::pipeline::advance) can branch on the recovery strategy
+/// before flattening to a public [`HyDbError`].
 #[derive(Debug)]
 pub(super) enum PipelineError {
   Derive(HyDbDeriveError),

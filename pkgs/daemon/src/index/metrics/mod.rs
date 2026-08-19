@@ -4,6 +4,6 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//!  Metrics read API.
+//! Metrics read API.
 
 pub mod rest;

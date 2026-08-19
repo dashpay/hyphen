@@ -229,7 +229,8 @@ impl Fenceable for IpcWorker {
   fn fence(&self, _run_id: Option<Self::RunId>) {}
 }
 
-/// Build one IPC server worker task without exposing transport internals to the visor.
+/// Build one IPC server worker task without exposing transport internals to the
+/// visor.
 fn server_worker_task(cfg: IpcServerWorkerTaskConfig) -> WorkerTask<IpcWorker> {
   let worker = IpcWorker::new(Arc::clone(&cfg.lifecycle), "ipc_server", true);
   let runtime = Arc::clone(&worker.runtime);
@@ -259,7 +260,8 @@ pub(crate) fn server_supervised_task(
   })
 }
 
-/// Build one IPC heartbeat worker task without exposing snapshot internals to the visor.
+/// Build one IPC heartbeat worker task without exposing snapshot internals to
+/// the visor.
 fn heartbeat_worker_task(cfg: HeartbeatWorkerTaskConfig) -> WorkerTask<IpcWorker> {
   let worker = IpcWorker::new(Arc::clone(&cfg.lifecycle), "heartbeat", true);
   let runtime = Arc::clone(&worker.runtime);

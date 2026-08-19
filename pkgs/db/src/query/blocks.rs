@@ -9,8 +9,9 @@
 //!
 //! The crate never decodes a block. Canonical detail is served straight from
 //! the decoded `blocks` columns; an orphan's decoded header is the daemon's job
-//! — it fetches [`HyDbBlockIdx::raw_bytes`] and decodes with its own data source,
-//! using [`HyDbBlockIdx::topology`] to confirm the block is off the main chain.
+//! — it fetches [`HyDbBlockIdx::raw_bytes`] and decodes with its own data
+//! source, using [`HyDbBlockIdx::topology`] to confirm the block is off the
+//! main chain.
 
 use async_trait::async_trait;
 

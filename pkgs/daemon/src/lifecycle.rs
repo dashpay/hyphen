@@ -15,8 +15,8 @@ use std::time::Duration;
 /// Loop pattern:
 /// ```ignore
 /// while lifecycle.running() {
-///   // work
-///   lifecycle.sleep(Duration::from_secs(5)).await;
+/// // work
+/// lifecycle.sleep(Duration::from_secs(5)).await;
 /// }
 /// ```
 pub struct Lifecycle {

@@ -4,7 +4,7 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//!  Transaction read API + live overlay.
+//! Transaction read API + live overlay.
 
 pub mod overlay;
 pub mod rest;

@@ -15,14 +15,15 @@
 //!
 //! # Shape
 //!
-//! - [`HyphenDb`] is the cheap-to-clone facade. Its accessors ([`HyphenDb::blocks`],
-//!   [`HyphenDb::txs`], ...) return read-only domain handles (trait objects).
+//! - [`HyphenDb`] is the cheap-to-clone facade. Its accessors
+//! ([`HyphenDb::blocks`], [`HyphenDb::txs`], ...) return read-only domain
+//! handles (trait objects).
 //! - [`HyphenDb::ingest`] returns the single-writer [`HyDbIngest`], an
-//!   event-shaped sink (`on_block`/`on_tip`) the daemon wires into node
-//!   announcements.
+//! event-shaped sink (`on_block`/`on_tip`) the daemon wires into node
+//! announcements.
 //! - The naming convention: plural types are *handles* ([`HyDbBlockIdx`]);
-//!   singular types are *facts/records* ([`crate::HyDbBlock`],
-//!   [`query::HyDbQrBlockDetail`]).
+//! singular types are *facts/records* ([`crate::HyDbBlock`],
+//! [`query::HyDbQrBlockDetail`]).
 
 mod config;
 mod error;

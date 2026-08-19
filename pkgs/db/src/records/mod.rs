@@ -9,13 +9,13 @@
 //! block — it hands raw bytes to a caller-supplied [`HyDbDataSrc`] and receives
 //! structured *records* back.
 //!
-//! Records are grouped by the thing they describe: [`block`] (the header and the
-//! block wrapping it), [`tx`] (a transaction, its inputs/outputs, and its
+//! Records are grouped by the thing they describe: [`block`] (the header and
+//! the block wrapping it), [`tx`] (a transaction, its inputs/outputs, and its
 //! special-tx payload blob), and [`sptx`] (the validator-registry transitions a
 //! provider special transaction emits). Each record owns the `INSERT`/`UPDATE`
-//! that writes the row(s) it possesses (its `insert`/`apply` method), so the SQL
-//! sits beside the fields it mirrors and cannot drift from them. Cross-entity
-//! ingest work stays in `ingest::pipeline`.
+//! that writes the row(s) it possesses (its `insert`/`apply` method), so the
+//! SQL sits beside the fields it mirrors and cannot drift from them.
+//! Cross-entity ingest work stays in `ingest::pipeline`.
 
 use sqlx::{Postgres, Transaction};
 

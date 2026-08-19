@@ -28,7 +28,8 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
   draw_live_sources(frame, status, state);
 }
 
-/// Compute the current per-panel health scroll limits for the given render area.
+/// Compute the current per-panel health scroll limits for the given render
+/// area.
 pub fn scroll_limits(area: Rect, state: &AppState) -> [u16; 4] {
   let [storage, postgres, services, status] = health_panel_areas(area);
   [

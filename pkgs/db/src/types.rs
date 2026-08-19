@@ -202,7 +202,8 @@ impl<'r> Decode<'r, Postgres> for HyDbHeight {
 }
 
 /// A transaction outpoint: which output of which transaction. Packs to the
-/// 36-byte `outpoint` key (`txid || int4send(vout)`) used by `spends`/`utxo_set`.
+/// 36-byte `outpoint` key (`txid || int4send(vout)`) used by `spends` and
+/// `utxo_set`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HyDbOutpoint {
   pub txid: HyDbHash,

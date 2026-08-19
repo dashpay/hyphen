@@ -41,7 +41,8 @@ pub async fn sync_current_loop(
 fn handle_event(live_state: &LiveState, event: ZmqEvent) {
   match event {
     // Dash `rawtxlock` publishes the locked transaction bytes, so hashing the
-    // payload yields the same txid used by `sequence` removals and `getislocks`.
+    // payload yields the same txid used by `sequence` removals and
+    // `getislocks`.
     ZmqEvent::RawTxLock { tx, .. } => {
       let txid = utils::ser_endian(&hash::tx_hash(&tx).to_bytes(), HashEndian::Ser);
       live_state.upsert_islock(IsLock {

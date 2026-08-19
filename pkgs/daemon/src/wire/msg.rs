@@ -332,7 +332,8 @@ pub struct ForwardLaneDiag {
   /// Total chunks inside the active substep, when applicable.
   #[serde(default)]
   pub chunk_total: Option<u32>,
-  /// Unix timestamp of the most recent durable progress observed for the active run.
+  /// Unix timestamp of the most recent durable progress observed for the active
+  /// run.
   #[serde(default)]
   pub last_progress_epoch: Option<u64>,
   /// Supervisor-owned liveness state for the active forward run.

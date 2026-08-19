@@ -221,7 +221,8 @@ pub struct AppState {
   pub flash_message: Option<(String, Instant, bool)>,
 }
 
-/// Persistent status for the currently running or most recently finished command.
+/// Persistent status for the currently running or most recently finished
+/// command.
 #[derive(Debug, Clone)]
 pub struct CommandStatus {
   pub id: u64,

@@ -7,14 +7,14 @@
 //! `HyDbSearch::prefix` and the four per-kind `search_prefix` probes are one
 //! implementation, not two that happen to agree today.
 //!
-//! REST drives the per-kind probes directly; `prefix` is the consolidated
-//! entry point that has no production caller yet. While both existed as
-//! separate SQL they drifted: `prefix` ordered validators by
-//! `(last_updated_height DESC, protx_hash ASC)` while `validators::search_prefix`
-//! tie-breaks on `registered_height DESC` in between, so a prefix matching two
-//! validators updated at the same height resolved them in different orders on
-//! the two paths. The seed below is built to expose exactly that, so the test
-//! fails if the copies are ever reintroduced.
+//! REST drives the per-kind probes directly; `prefix` is the consolidated entry
+//! point that has no production caller yet. While both existed as separate SQL
+//! they drifted: `prefix` ordered validators by `(last_updated_height DESC,
+//! protx_hash ASC)` while `validators::search_prefix` tie-breaks on
+//! `registered_height DESC` in between, so a prefix matching two validators
+//! updated at the same height resolved them in different orders on the two
+//! paths. The seed below is built to expose exactly that, so the test fails if
+//! the copies are ever reintroduced.
 
 mod common;
 

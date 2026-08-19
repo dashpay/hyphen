@@ -6,16 +6,17 @@
 
 //! Reading a transaction whose txid occurs more than once.
 //!
-//! Pre-BIP30 enforcement a txid can recur across blocks, which `PgTxIdx` already
-//! accounts for: it pins the most recent occurrence and serves that one. The
-//! outputs were pinned to it and the spent-status was not — the spend was joined
-//! on the packed outpoint alone, and an outpoint is unique only *within* an
-//! occurrence. So the older occurrence's spend annotated the newer occurrence's
-//! output, and where both were spent the join returned the output twice.
+//! Pre-BIP30 enforcement a txid can recur across blocks, which `PgTxIdx`
+//! already accounts for: it pins the most recent occurrence and serves that
+//! one. The outputs were pinned to it and the spent-status was not — the spend
+//! was joined on the packed outpoint alone, and an outpoint is unique only
+//! *within* an occurrence. So the older occurrence's spend annotated the newer
+//! occurrence's output, and where both were spent the join returned the output
+//! twice.
 //!
 //! The state is constructed by direct insert. It cannot be reached through
-//! ingest, which is the point: nothing in the write path produces it, so nothing
-//! in the write path would have caught the read being wrong.
+//! ingest, which is the point: nothing in the write path produces it, so
+//! nothing in the write path would have caught the read being wrong.
 
 mod common;
 

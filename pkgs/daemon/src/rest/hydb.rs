@@ -15,7 +15,8 @@ pub(crate) fn hydb_hash(bytes: &[u8]) -> Result<hyphen_db::HyDbHash, ApiError> {
   hyphen_db::HyDbHash::from_slice(bytes).map_err(|_| ApiError::bad_request("invalid hash length"))
 }
 
-/// Convert a height into the storage-layer height newtype (negatives clamp to 0).
+/// Convert a height into the storage-layer height newtype (negatives clamp to
+/// 0).
 pub(crate) fn hydb_height(height: i32) -> hyphen_db::HyDbHeight {
   hyphen_db::HyDbHeight::new(height.max(0) as u32)
 }

@@ -17,16 +17,16 @@
 //! Each test here fails if any one of the four properties is removed:
 //!
 //! 1. **Bounded** — a target deeper than `max_reorg_depth` is refused, and
-//!    refused having changed nothing.
+//! refused having changed nothing.
 //! 2. **Checked against the data** — the config bound is a promise about
-//!    configuration; a hole in `undo_blocks` inside the span is refused
-//!    *before* the first disconnect, not discovered during it.
+//! configuration; a hole in `undo_blocks` inside the span is refused
+//! *before* the first disconnect, not discovered during it.
 //! 3. **Atomic** — a failure part way down the span (a stage trap the
-//!    pre-flight check cannot see) leaves the tip and every projected total
-//!    exactly where they were.
+//! pre-flight check cannot see) leaves the tip and every projected total
+//! exactly where they were.
 //! 4. **Named** — the error identifies the height it stopped at, because that
-//!    is the one fact that separates "this target was never reachable" from
-//!    "something transient happened".
+//! is the one fact that separates "this target was never reachable" from
+//! "something transient happened".
 
 mod common;
 
@@ -392,9 +392,9 @@ async fn run_undo_hole(tmp: &TempDb) -> TestResult {
 /// It probed `undo_blocks` only. That table carries a row per block, so the
 /// per-height check works there and nowhere else — the other two legitimately
 /// hold no row for a height that touched no address or validator. A span
-/// covered in `undo_blocks` but pruned in `undo_address_stats` therefore read as
-/// admissible, and the balance stage refused it part-way down the disconnect,
-/// which is the stage trap this pre-flight exists to prevent.
+/// covered in `undo_blocks` but pruned in `undo_address_stats` therefore read
+/// as admissible, and the balance stage refused it part-way down the
+/// disconnect, which is the stage trap this pre-flight exists to prevent.
 #[tokio::test]
 async fn a_pruned_sibling_undo_family_is_refused_before_the_first_disconnect() -> TestResult {
   let tmp = TempDb::create().await?;

@@ -308,11 +308,12 @@ impl IngestStage for BaseStage {
       // `address_txs` is the widest write in the database — one row per address
       // per transaction, 60.0M rows and 17.6 GB of index over a 967k-block
       // mainnet — and the only table here whose row count is unbounded by
-      // anything but the block's own address fan-out. A pathological block would
-      // otherwise build one statement out of every touch it has; `batch_rows`
-      // caps that. At the measured mainnet-tail fan-out (13,970,758 rows over
-      // the 100,000 blocks of `address_txs_p8`, so ~140 rows a block) the cap
-      // never divides, and the write stays the single statement it was.
+      // anything but the block's own address fan-out. A pathological block
+      // would otherwise build one statement out of every touch it has;
+      // `batch_rows` caps that. At the measured mainnet-tail fan-out
+      // (13,970,758 rows over the 100,000 blocks of `address_txs_p8`, so ~140
+      // rows a block) the cap never divides, and the write stays the single
+      // statement it was.
       let batch = crate::tuning::resolved().batch_rows.max(1);
       for start in (0..a_addr.len()).step_by(batch) {
         let end = (start + batch).min(a_addr.len());
