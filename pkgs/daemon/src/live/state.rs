@@ -15,8 +15,15 @@
 //! Concurrency: singleton domains hold a [`SingletonCell`] (an `Arc`-swapping
 //! `RwLock`); keyed domains (added as each is ported) hold a `RwLock<HashMap>`.
 //! Reads clone an `Arc` under a short read lock and never hold it across an
-//! `.await`. A poisoned lock degrades to stale/empty rather than panicking —
-//! the daemon denies `unwrap`/`expect`, and a crash here is never worth it.
+//! `.await`.
+//!
+//! Poisoning is handled by [`Shared`], not by each call site (task E2.6).
+//! Release builds set `panic = "abort"`, so a lock cannot poison in production
+//! at all; under test it can, and the previous handling — `if let Ok(guard)`,
+//! `.ok()`, `.unwrap_or_default()` — turned that into silently empty reads and
+//! silently dropped writes. `Shared` recovers the guard instead: the data
+//! behind a poisoned lock is intact, poisoning only records that some thread
+//! panicked while holding it.
 //
 // Wiring note: the loops/handlers repoint domain-by-domain; until a domain is
 // switched over, its cell is written but not yet read (or vice versa).
@@ -25,7 +32,7 @@
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde_json::Value;
 
@@ -38,8 +45,8 @@ pub struct LiveState {
   islock: KeyedCell<Vec<u8>, IsLock>,
   protx: SingletonCell<ProtxSnapshot>,
   mempool_summary: SingletonCell<MempoolSummary>,
-  mempool: RwLock<MempoolTxs>,
-  governance: RwLock<Governance>,
+  mempool: Shared<MempoolTxs>,
+  governance: Shared<Governance>,
 }
 
 impl LiveState {
@@ -99,19 +106,13 @@ impl LiveState {
 
   /// One mempool transaction by txid (serialized-endian), if currently held.
   pub fn mempool_tx(&self, txid: &[u8]) -> Option<Arc<MempoolTx>> {
-    self
-      .mempool
-      .read()
-      .ok()
-      .and_then(|m| m.txs.get(txid).cloned())
+    self.mempool.read().txs.get(txid).cloned()
   }
 
   /// Recent mempool txs, newest-first by `(last_seen_at, txid)`, after an
   /// optional keyset cursor, capped at `limit`.
   pub fn mempool_recent(&self, limit: usize, after: Option<(i64, &[u8])>) -> Vec<Arc<MempoolTx>> {
-    let Ok(guard) = self.mempool.read() else {
-      return Vec::new();
-    };
+    let guard = self.mempool.read();
     let mut txs: Vec<Arc<MempoolTx>> = guard.txs.values().cloned().collect();
     // Newest-first, txid-tiebroken descending — matches the SQL keyset order.
     txs.sort_by(|a, b| {
@@ -134,38 +135,32 @@ impl LiveState {
     self
       .mempool
       .read()
-      .ok()
-      .and_then(|m| {
-        m.by_address
-          .get(address)
-          .map(|set| set.iter().cloned().collect())
-      })
+      .by_address
+      .get(address)
+      .map(|set| set.iter().cloned().collect())
       .unwrap_or_default()
   }
 
   pub fn mempool_len(&self) -> usize {
-    self.mempool.read().map(|m| m.txs.len()).unwrap_or(0)
+    self.mempool.read().txs.len()
   }
 
   pub fn insert_mempool_tx(&self, tx: MempoolTx) {
-    if let Ok(mut guard) = self.mempool.write() {
-      guard.insert(tx);
-    }
+    let mut guard = self.mempool.write();
+    guard.insert(tx);
   }
 
   pub fn remove_mempool_tx(&self, txid: &[u8]) {
-    if let Ok(mut guard) = self.mempool.write() {
-      guard.remove(txid);
-    }
+    let mut guard = self.mempool.write();
+    guard.remove(txid);
   }
 
   /// Replace the whole recent set (the RPC snapshot rebuild).
   pub fn replace_mempool(&self, txs: Vec<MempoolTx>) {
-    if let Ok(mut guard) = self.mempool.write() {
-      *guard = MempoolTxs::default();
-      for tx in txs {
-        guard.insert(tx);
-      }
+    let mut guard = self.mempool.write();
+    *guard = MempoolTxs::default();
+    for tx in txs {
+      guard.insert(tx);
     }
   }
 
@@ -176,9 +171,7 @@ impl LiveState {
     limit: usize,
     after: Option<(i64, &[u8])>,
   ) -> Vec<Arc<GovObject>> {
-    let Ok(guard) = self.governance.read() else {
-      return Vec::new();
-    };
+    let guard = self.governance.read();
     let mut objects: Vec<Arc<GovObject>> = guard.objects.values().cloned().collect();
     sort_governance_objects(&mut objects);
     objects
@@ -190,18 +183,12 @@ impl LiveState {
 
   /// One governance object by hash, if currently held.
   pub fn governance_object(&self, object_hash: &[u8]) -> Option<Arc<GovObject>> {
-    self
-      .governance
-      .read()
-      .ok()
-      .and_then(|guard| guard.objects.get(object_hash).cloned())
+    self.governance.read().objects.get(object_hash).cloned()
   }
 
   /// All governance objects, newest-first by `(updated_at, object_hash)`.
   pub fn governance_all_objects(&self) -> Vec<Arc<GovObject>> {
-    let Ok(guard) = self.governance.read() else {
-      return Vec::new();
-    };
+    let guard = self.governance.read();
     let mut objects: Vec<Arc<GovObject>> = guard.objects.values().cloned().collect();
     sort_governance_objects(&mut objects);
     objects
@@ -209,11 +196,7 @@ impl LiveState {
 
   /// The current governance object count.
   pub fn governance_object_total(&self) -> i64 {
-    self
-      .governance
-      .read()
-      .map(|guard| guard.objects.len() as i64)
-      .unwrap_or(0)
+    self.governance.read().objects.len() as i64
   }
 
   /// Current votes for one object, newest-first by `(updated_at, vote_hash)`,
@@ -224,9 +207,7 @@ impl LiveState {
     limit: usize,
     after: Option<(i64, &[u8])>,
   ) -> Vec<Arc<GovVote>> {
-    let Ok(guard) = self.governance.read() else {
-      return Vec::new();
-    };
+    let guard = self.governance.read();
     let Some(votes) = guard.votes.get(object_hash) else {
       return Vec::new();
     };
@@ -242,9 +223,7 @@ impl LiveState {
   /// Governance objects matching a hash-prefix or free-text `query`,
   /// newest-first, capped at `limit`.
   pub fn governance_search(&self, query: &str, limit: usize) -> Vec<Arc<GovObject>> {
-    let Ok(guard) = self.governance.read() else {
-      return Vec::new();
-    };
+    let guard = self.governance.read();
     let hash_prefix = query.to_ascii_lowercase();
     let text_needle = query.to_ascii_lowercase();
     let mut matches: Vec<Arc<GovObject>> = guard
@@ -268,9 +247,7 @@ impl LiveState {
       return HashMap::new();
     }
     let protx = self.protx();
-    let Ok(guard) = self.governance.read() else {
-      return HashMap::new();
-    };
+    let guard = self.governance.read();
     let mut counts = HashMap::new();
     for object_hash in object_hashes {
       let Some(votes) = guard.votes.get(object_hash) else {
@@ -309,71 +286,119 @@ impl LiveState {
   /// Replace the whole governance set (the RPC snapshot rebuild): objects and
   /// their votes together.
   pub fn replace_governance(&self, objects: Vec<GovObject>, votes: Vec<GovVote>) {
-    if let Ok(mut guard) = self.governance.write() {
-      *guard = Governance::default();
-      for object in objects {
-        guard.insert_object(object);
-      }
-      guard.replace_all_votes(votes);
+    let mut guard = self.governance.write();
+    *guard = Governance::default();
+    for object in objects {
+      guard.insert_object(object);
     }
+    guard.replace_all_votes(votes);
   }
 
   /// Replace every object's votes wholesale, leaving the objects untouched.
   pub fn replace_governance_votes(&self, votes: Vec<GovVote>) {
-    if let Ok(mut guard) = self.governance.write() {
-      guard.replace_all_votes(votes);
-    }
+    let mut guard = self.governance.write();
+    guard.replace_all_votes(votes);
   }
 
   /// Upsert one governance object without disturbing other objects or votes.
   pub fn upsert_governance_object(&self, object: GovObject) {
-    if let Ok(mut guard) = self.governance.write() {
-      guard.insert_object(object);
-    }
+    let mut guard = self.governance.write();
+    guard.insert_object(object);
   }
 
   /// Replace the votes for one object, leaving other objects' votes untouched.
   pub fn replace_governance_votes_for_object(&self, object_hash: &[u8], votes: Vec<GovVote>) {
-    if let Ok(mut guard) = self.governance.write() {
-      if votes.is_empty() {
-        guard.votes.remove(object_hash);
-      } else {
-        guard.votes.insert(
-          object_hash.to_vec(),
-          votes.into_iter().map(Arc::new).collect(),
-        );
-      }
+    let mut guard = self.governance.write();
+    if votes.is_empty() {
+      guard.votes.remove(object_hash);
+    } else {
+      guard.votes.insert(
+        object_hash.to_vec(),
+        votes.into_iter().map(Arc::new).collect(),
+      );
     }
   }
 }
 
 /// A single-value cell holding the latest snapshot of one live domain. Writes
+/// A `RwLock` whose guards cannot be a `Result`.
+///
+/// Poisoning means a thread panicked while holding the lock, not that the data
+/// is unusable, so the guard is recovered with `into_inner()` and the fact is
+/// logged once per process. Release builds abort on panic and can never reach
+/// this; what it removes is the dev/test failure mode where a poisoned lock
+/// made every live-state read look like "no data" (task E2.6).
+#[derive(Debug)]
+struct Shared<T>(RwLock<T>);
+
+/// Logged at most once: a poisoned lock is one event with many consequences,
+/// and a warning per read would bury it.
+static POISON_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn report_poisoned(access: &'static str, location: &'static std::panic::Location<'static>) {
+  if !POISON_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+    tracing::warn!(
+      access,
+      location = %location,
+      "live-state lock was poisoned by a panicking thread; recovering the data \
+       behind it. Release builds abort on panic and cannot reach this."
+    );
+  }
+}
+
+impl<T> Shared<T> {
+  fn new(value: T) -> Self {
+    Self(RwLock::new(value))
+  }
+
+  #[track_caller]
+  fn read(&self) -> RwLockReadGuard<'_, T> {
+    self.0.read().unwrap_or_else(|poisoned| {
+      report_poisoned("read", std::panic::Location::caller());
+      poisoned.into_inner()
+    })
+  }
+
+  #[track_caller]
+  fn write(&self) -> RwLockWriteGuard<'_, T> {
+    self.0.write().unwrap_or_else(|poisoned| {
+      report_poisoned("write", std::panic::Location::caller());
+      poisoned.into_inner()
+    })
+  }
+}
+
+impl<T: Default> Default for Shared<T> {
+  fn default() -> Self {
+    Self::new(T::default())
+  }
+}
+
 /// replace the whole value; reads hand back a cheap `Arc` clone.
 #[derive(Debug)]
-struct SingletonCell<T>(RwLock<Option<Arc<T>>>);
+struct SingletonCell<T>(Shared<Option<Arc<T>>>);
 
 impl<T> SingletonCell<T> {
   fn get(&self) -> Option<Arc<T>> {
-    self.0.read().ok().and_then(|guard| guard.clone())
+    self.0.read().clone()
   }
 
   fn set(&self, value: T) {
-    if let Ok(mut guard) = self.0.write() {
-      *guard = Some(Arc::new(value));
-    }
+    let mut guard = self.0.write();
+    *guard = Some(Arc::new(value));
   }
 }
 
 impl<T> Default for SingletonCell<T> {
   fn default() -> Self {
-    Self(RwLock::new(None))
+    Self(Shared::new(None))
   }
 }
 
 /// A keyed set of live values (e.g. mempool txs, InstantSend locks) behind one
 /// `RwLock`. Reads clone an `Arc`; writes insert/remove/replace whole entries.
 #[derive(Debug)]
-struct KeyedCell<K, V>(RwLock<HashMap<K, Arc<V>>>);
+struct KeyedCell<K, V>(Shared<HashMap<K, Arc<V>>>);
 
 impl<K: Eq + Hash, V> KeyedCell<K, V> {
   fn get<Q>(&self, key: &Q) -> Option<Arc<V>>
@@ -381,13 +406,11 @@ impl<K: Eq + Hash, V> KeyedCell<K, V> {
     K: Borrow<Q>,
     Q: Hash + Eq + ?Sized,
   {
-    self.0.read().ok().and_then(|map| map.get(key).cloned())
+    self.0.read().get(key).cloned()
   }
 
   fn insert(&self, key: K, value: V) {
-    if let Ok(mut map) = self.0.write() {
-      map.insert(key, Arc::new(value));
-    }
+    self.0.write().insert(key, Arc::new(value));
   }
 
   fn remove<Q>(&self, key: &Q)
@@ -395,29 +418,22 @@ impl<K: Eq + Hash, V> KeyedCell<K, V> {
     K: Borrow<Q>,
     Q: Hash + Eq + ?Sized,
   {
-    if let Ok(mut map) = self.0.write() {
-      map.remove(key);
-    }
+    self.0.write().remove(key);
   }
 
   /// Snapshot of all current values (a cheap `Arc` clone each).
   fn values(&self) -> Vec<Arc<V>> {
-    self
-      .0
-      .read()
-      .ok()
-      .map(|map| map.values().cloned().collect())
-      .unwrap_or_default()
+    self.0.read().values().cloned().collect()
   }
 
   fn len(&self) -> usize {
-    self.0.read().map(|map| map.len()).unwrap_or(0)
+    self.0.read().len()
   }
 }
 
 impl<K, V> Default for KeyedCell<K, V> {
   fn default() -> Self {
-    Self(RwLock::new(HashMap::new()))
+    Self(Shared::new(HashMap::new()))
   }
 }
 
