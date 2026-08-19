@@ -32,6 +32,11 @@ pub enum HyDbError {
   /// the values are immutable for the life of the database, so retrying can
   /// only produce the same answer.
   Layout(String),
+  /// Chain data on disk violated a consistency invariant the schema cannot
+  /// express — currently, undo coverage that does not reach the canonical tip.
+  /// Always fatal: the data is already written, so retrying reads it back
+  /// unchanged; an operator has to rewind or re-derive.
+  Consistency(String),
   /// A decoded row violated an invariant the type system could not encode
   /// (e.g. a hash column that did not hold 32 bytes).
   Decode(String),
@@ -52,6 +57,7 @@ impl HyDbError {
       Self::Config(_) => Outcome::Fatal,
       Self::Migrate(_) => Outcome::Fatal,
       Self::Layout(_) => Outcome::Fatal,
+      Self::Consistency(_) => Outcome::Fatal,
       Self::Pg { code, message } => classify_pg(code.as_deref(), message),
       Self::Decode(_) | Self::Derive(_) | Self::MockGap(_) | Self::Unimplemented(_) => {
         Outcome::Error
@@ -84,6 +90,7 @@ impl fmt::Display for HyDbError {
       Self::Pg { message, .. } => write!(f, "postgres error: {message}"),
       Self::Migrate(msg) => write!(f, "migration error: {msg}"),
       Self::Layout(msg) => write!(f, "storage layout error: {msg}"),
+      Self::Consistency(msg) => write!(f, "storage consistency error: {msg}"),
       Self::Decode(msg) => write!(f, "row decode error: {msg}"),
       Self::Derive(msg) => write!(f, "derive error: {msg}"),
       Self::MockGap(name) => write!(f, "mock backend has no impl for `{name}`"),

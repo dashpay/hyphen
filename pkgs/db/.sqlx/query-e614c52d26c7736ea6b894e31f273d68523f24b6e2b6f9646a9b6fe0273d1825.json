@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN(height) FILTER (WHERE height <= $1) AS lo,\n              MAX(height) FILTER (WHERE height <= $1) AS hi,\n              COUNT(*) FILTER (WHERE height <= $1) AS \"in_window!\",\n              COUNT(*) FILTER (WHERE height > $1) AS \"above_tip!\"\n         FROM undo_blocks",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "lo",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "hi",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "in_window!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "above_tip!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e614c52d26c7736ea6b894e31f273d68523f24b6e2b6f9646a9b6fe0273d1825"
+}
