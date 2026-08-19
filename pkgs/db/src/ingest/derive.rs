@@ -60,8 +60,13 @@ impl IngestDerive for PgDeriver {
     // This block's own outputs, keyed by packed outpoint, so an input can
     // resolve an output created earlier in the same block. The node has
     // already consensus-validated ordering, so building the full map up front
-    // is safe. Outpoints are globally unique, so there is never a collision
-    // with the persisted set.
+    // is safe.
+    //
+    // An outpoint is *not* globally unique — a txid can recur across blocks
+    // before BIP30 enforcement, which `query::txs` pins a height to cope with —
+    // but it is unique within a block, so this map cannot collide with itself,
+    // and a lookup here shadowing the persisted set is the intended precedence:
+    // an output created in this block is the one this block's inputs spend.
     let mut block_outputs: HashMap<[u8; 36], SpentOutput> = HashMap::new();
     for btx in &block.txs {
       for out in &btx.outputs {
@@ -129,6 +134,9 @@ impl IngestDerive for PgDeriver {
     let mut fees: Vec<Option<i64>> = Vec::with_capacity(block.txs.len());
     let mut deltas: HashMap<String, AddrDelta> = HashMap::new();
     let mut spent_outpoints: Vec<HyDbOutpoint> = Vec::new();
+    // Every outpoint this block spends, so a second spend of one is a refusal
+    // rather than a double count.
+    let mut spent_once: std::collections::HashSet<[u8; 36]> = std::collections::HashSet::new();
 
     // Cumulative metric inputs for this block.
     let mut spendable_created: i64 = 0;
@@ -176,6 +184,21 @@ impl IngestDerive for PgDeriver {
           });
         };
         let packed = prev.packed();
+        // One outpoint may be spent once per block. The resolution above is a
+        // lookup, not a consumption, so a block spending the same outpoint from
+        // two inputs would resolve both and count the value, the UTXO and the
+        // fee contribution twice — leaving the address balance and the supply
+        // wrong with nothing failing.
+        //
+        // Consensus forbids it and the node validates before this sees a block,
+        // so this cannot fire against a healthy source. It is here because the
+        // cost is one hash per input and the alternative is silent corruption
+        // if that assumption ever stops holding.
+        if !spent_once.insert(packed) {
+          return Err(HyDbDeriveError::Malformed {
+            what: format!("outpoint {prev:?} is spent twice in block {height}"),
+          });
+        }
         let spent = match block_outputs.get(&packed) {
           Some(s) => s.clone(),
           None => persisted
