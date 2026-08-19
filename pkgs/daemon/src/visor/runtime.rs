@@ -195,6 +195,21 @@ impl ServeRuntime {
     .await?;
     info!("storage engine ready, schema migrated");
 
+    // Settings the daemon depends on but cannot set. Read back and reported
+    // once (task F4); every finding is a warning, never a refusal.
+    let pool_total = cfg.db.client.write.size
+      + cfg.db.client.query.size
+      + cfg.db.client.heavy.size
+      + cfg.db.client.admin.size;
+    let startup_tip = db
+      .status()
+      .tip()
+      .await
+      .ok()
+      .flatten()
+      .map(|tip| tip.height.0);
+    crate::policy::server_settings::review_at_startup(&db, pool_total, startup_tip).await;
+
     // From here on the layout is whatever the *database* says it is, not
     // whatever the config file said. They can only differ in the one direction
     // `verify` permits — a key the operator dropped from `[db.layout]`, which
