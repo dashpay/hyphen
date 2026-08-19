@@ -331,34 +331,127 @@ fn decode_payload(tx: &DecodedTransaction, txid_bytes: &[u8]) -> Value {
   }
 }
 
+/// Ceiling on how many inputs one mempool transaction may have resolved.
+///
+/// Prevout resolution runs on the **shared query pool**, the same pool serving
+/// the public API, and the resolver has no batched read to work with (see the
+/// module note on `load_prevouts`). A consolidation transaction with thousands
+/// of inputs would therefore spend that pool on enrichment at exactly the
+/// moment the transaction is interesting to everyone else. Past the cap the
+/// transaction is still tracked and served — it simply carries no input
+/// addresses, values, or fee, which is a visible gap rather than a stalled API.
+const MAX_RESOLVED_PREVOUT_INPUTS: usize = 1_000;
+
 /// Resolve the consumed outputs of a mempool transaction from committed chain
 /// data in the storage engine.
+///
+/// Two costs are bounded here (task C3):
+///
+/// * **Repeats.** Inputs are grouped by their previous transaction, so a
+///   transaction spending twenty outputs of one parent costs one lookup, not
+///   twenty. `HyDbTxIdx::get` already returns every output of that parent.
+/// * **Volume.** Beyond [`MAX_RESOLVED_PREVOUT_INPUTS`] inputs nothing is
+///   resolved at all.
+///
+/// What is *not* fixed here: each distinct parent still costs its own
+/// round trip, because `hyphen-db` exposes no batched outpoint read on its
+/// query side. The batched `outpoint = ANY($1)` form the ingest deriver uses
+/// (79 ms for 10k) is `pub(crate)` and write-pool bound; making it available
+/// to this path needs a public `resolve_outpoints` on the storage crate.
+/// The lookups one mempool transaction's inputs require, after grouping.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PrevoutPlan {
+  /// One entry per distinct parent transaction, with the vouts wanted from it
+  /// sorted and deduplicated.
+  parents: Vec<(Vec<u8>, Vec<i32>)>,
+  /// Inputs that actually spend something (coinbase inputs excluded).
+  spending_inputs: usize,
+  /// Whether [`MAX_RESOLVED_PREVOUT_INPUTS`] was exceeded, in which case
+  /// nothing is resolved.
+  over_cap: bool,
+}
+
+/// Group `(prev_txid, vout)` pairs into per-parent lookups and apply the cap.
+///
+/// Separated from the I/O so the two properties that matter — one lookup per
+/// distinct parent, and nothing at all past the cap — are testable without a
+/// database.
+fn plan_prevout_lookups<'a, I>(outpoints: I) -> PrevoutPlan
+where
+  I: IntoIterator<Item = (&'a [u8], u32)>,
+{
+  let mut grouped: HashMap<Vec<u8>, Vec<i32>> = HashMap::new();
+  let mut spending_inputs = 0usize;
+  for (prev_txid, vout) in outpoints {
+    // A coinbase input names no previous output; nothing to resolve.
+    if prev_txid.iter().all(|byte| *byte == 0) {
+      continue;
+    }
+    spending_inputs += 1;
+    grouped
+      .entry(prev_txid.to_vec())
+      .or_default()
+      .push(vout as i32);
+  }
+  let over_cap = spending_inputs > MAX_RESOLVED_PREVOUT_INPUTS;
+  let mut parents: Vec<(Vec<u8>, Vec<i32>)> = if over_cap {
+    Vec::new()
+  } else {
+    grouped
+      .into_iter()
+      .map(|(txid, mut vouts)| {
+        vouts.sort_unstable();
+        vouts.dedup();
+        (txid, vouts)
+      })
+      .collect()
+  };
+  // Stable order so the lookups are reproducible run to run.
+  parents.sort_unstable();
+  PrevoutPlan {
+    parents,
+    spending_inputs,
+    over_cap,
+  }
+}
+
 async fn load_prevouts(
   db: &HyphenDb,
   tx: &DecodedTransaction,
 ) -> Result<HashMap<(Vec<u8>, i32), PrevOutput>, DaemonError> {
   let mut out = HashMap::new();
-  for input in &tx.inputs {
-    if input.prevout.hash.is_null() {
-      continue;
-    }
-    let prev_txid = input.prevout.hash.as_bytes().to_vec();
-    let vout = input.prevout.index as i32;
+  let plan = plan_prevout_lookups(
+    tx.inputs
+      .iter()
+      .map(|input| (&input.prevout.hash.as_bytes()[..], input.prevout.index)),
+  );
+
+  if plan.over_cap {
+    tracing::warn!(
+      inputs = plan.spending_inputs,
+      cap = MAX_RESOLVED_PREVOUT_INPUTS,
+      "mempool transaction exceeds the prevout-resolution cap; serving it without input provenance or fee"
+    );
+    return Ok(out);
+  }
+
+  for (prev_txid, vouts) in plan.parents {
     let hash = hyphen_db::HyDbHash::from_slice(&prev_txid)
       .map_err(|e| DaemonError::storage("mempool prevout hash", e))?;
-    let detail = db
+    let Some(detail) = db
       .txs()
       .get(hash)
       .await
-      .map_err(|e| DaemonError::storage("mempool prevout lookup", e))?;
-    if let Some(output) = detail.as_ref().and_then(|detail| {
-      detail
-        .outputs
-        .iter()
-        .find(|output| output.vout_index == vout)
-    }) {
+      .map_err(|e| DaemonError::storage("mempool prevout lookup", e))?
+    else {
+      continue;
+    };
+    for output in &detail.outputs {
+      if vouts.binary_search(&output.vout_index).is_err() {
+        continue;
+      }
       out.insert(
-        (prev_txid, vout),
+        (prev_txid.clone(), output.vout_index),
         PrevOutput {
           address: output.address.as_ref().map(|address| address.0.clone()),
           value: Some(output.value),
@@ -367,4 +460,76 @@ async fn load_prevouts(
     }
   }
   Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{plan_prevout_lookups, MAX_RESOLVED_PREVOUT_INPUTS};
+
+  fn txid(byte: u8) -> [u8; 32] {
+    [byte; 32]
+  }
+
+  /// C3: inputs sharing a parent must cost one lookup, not one each. The
+  /// resolver ran on the shared query pool, one `txs().get()` per input.
+  #[test]
+  fn inputs_sharing_a_parent_collapse_into_one_lookup() {
+    let a = txid(1);
+    let b = txid(2);
+    let plan = plan_prevout_lookups(vec![
+      (a.as_slice(), 0),
+      (a.as_slice(), 7),
+      (a.as_slice(), 0), // a duplicated outpoint is still one wanted vout
+      (b.as_slice(), 3),
+    ]);
+    assert_eq!(plan.spending_inputs, 4);
+    assert!(!plan.over_cap);
+    assert_eq!(plan.parents.len(), 2, "one lookup per distinct parent");
+    assert_eq!(plan.parents[0], (a.to_vec(), vec![0, 7]));
+    assert_eq!(plan.parents[1], (b.to_vec(), vec![3]));
+    // Sorted, because the resolver binary-searches this.
+    for (_, vouts) in &plan.parents {
+      assert!(vouts.windows(2).all(|w| w[0] < w[1]));
+    }
+  }
+
+  /// A coinbase input names no previous output and must not become a lookup.
+  #[test]
+  fn a_coinbase_input_is_not_a_lookup() {
+    let null = [0u8; 32];
+    let plan = plan_prevout_lookups(vec![(null.as_slice(), u32::MAX)]);
+    assert_eq!(plan.spending_inputs, 0);
+    assert!(plan.parents.is_empty());
+    assert!(!plan.over_cap);
+  }
+
+  /// Past the cap the whale transaction costs the shared query pool nothing.
+  #[test]
+  fn a_whale_transaction_resolves_nothing() {
+    let parents: Vec<[u8; 32]> = (0..=MAX_RESOLVED_PREVOUT_INPUTS)
+      .map(|i| {
+        let mut hash = [0u8; 32];
+        hash[0] = 1;
+        hash[1..5].copy_from_slice(&(i as u32).to_le_bytes());
+        hash
+      })
+      .collect();
+    let plan = plan_prevout_lookups(parents.iter().map(|hash| (hash.as_slice(), 0)));
+    assert_eq!(plan.spending_inputs, MAX_RESOLVED_PREVOUT_INPUTS + 1);
+    assert!(plan.over_cap);
+    assert!(
+      plan.parents.is_empty(),
+      "over the cap nothing may be looked up"
+    );
+
+    // One under the cap still resolves in full.
+    let plan = plan_prevout_lookups(
+      parents
+        .iter()
+        .take(MAX_RESOLVED_PREVOUT_INPUTS)
+        .map(|hash| (hash.as_slice(), 0)),
+    );
+    assert!(!plan.over_cap);
+    assert_eq!(plan.parents.len(), MAX_RESOLVED_PREVOUT_INPUTS);
+  }
 }
