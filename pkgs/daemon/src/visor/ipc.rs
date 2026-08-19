@@ -163,6 +163,7 @@ impl Visor for IpcVisor {
         hydb: self.cfg.hydb.clone(),
         ingest: Arc::clone(&self.cfg.ingest),
         event_tx: self.cfg.event_tx.clone(),
+        ingest_pause: self.cfg.ingest_status.pause_handle(),
       };
       let spec = crate::ipc::command_supervised_task(crate::ipc::CommandWorkerTaskConfig {
         cmd_rx,

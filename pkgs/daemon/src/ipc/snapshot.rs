@@ -173,7 +173,7 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
   let ingestion_diag = IngestionDiag {
     activity: ctx.ingest_status.activity(),
     state: ctx.ingest_status.state_name(),
-    paused: false,
+    paused: ctx.ingest_status.operator_pause_requested(),
     throttled: false,
     sync_mode: ctx.ingest_status.sync_mode().to_owned(),
     last_polled_tip: network_tip,
@@ -185,8 +185,8 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
     current_batch_start: None,
     current_batch_end: None,
     last_state_transition_epoch: None,
-    retry_attempt: None,
-    backoff_until_epoch: None,
+    retry_attempt: ctx.ingest_status.retry_attempt(),
+    backoff_until_epoch: ctx.ingest_status.backoff_until_epoch(),
     stalled: ctx.ingest_status.stalled(),
   };
 
@@ -343,7 +343,9 @@ fn scheduler_diag(
 }
 
 fn pipeline_diag(ingestion: &IngestionDiag, _now_epoch: u64) -> CorePipelineDiag {
-  let health = if ingestion.stalled {
+  let health = if ingestion.stalled || ingestion.paused {
+    // A pause is a stall by intent: nothing will advance until a human acts,
+    // so it must not read as merely degraded.
     CorePipelineHealth::Stalled
   } else if ingestion.state == IngestionStateName::Backoff {
     CorePipelineHealth::Degraded
@@ -354,7 +356,7 @@ fn pipeline_diag(ingestion: &IngestionDiag, _now_epoch: u64) -> CorePipelineDiag
   };
   CorePipelineDiag {
     health,
-    paused: false,
+    paused: ingestion.paused,
     backpressured: false,
     stale_scheduler_state: false,
     last_ingest_success_epoch: ingestion.last_progress_epoch,

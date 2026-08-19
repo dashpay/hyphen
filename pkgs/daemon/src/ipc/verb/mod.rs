@@ -27,6 +27,10 @@ pub struct CommandCtx {
   /// The single-writer ingest handle shared with the ingest loop.
   pub ingest: Arc<HyDbIngest>,
   pub event_tx: tokio::sync::broadcast::Sender<DaemonMessage>,
+  /// The ingest loop's operator-pause flag. Every verb here is an operator
+  /// acting on the database, which is exactly the intervention a paused loop
+  /// is waiting for, so dispatching any of them lifts the pause.
+  pub ingest_pause: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for CommandCtx {
@@ -59,6 +63,16 @@ pub(crate) fn emit_command_result(
   });
 }
 
+/// Lift an operator pause set by a non-transient ingest failure (E2.19).
+///
+/// Returns whether a pause was actually lifted, so the caller can say so
+/// rather than logging on every command.
+fn resume_ingest(ctx: &CommandCtx) -> bool {
+  ctx
+    .ingest_pause
+    .swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Drain the inbound command channel and dispatch each verb handler.
 pub async fn handle_commands(
   mut cmd_rx: tokio::sync::mpsc::Receiver<DaemonCommand>,
@@ -80,6 +94,9 @@ pub async fn handle_commands(
     let Some(cmd) = cmd else {
       break;
     };
+    if resume_ingest(&ctx) {
+      tracing::info!("operator command received; lifting the ingest pause");
+    }
     match cmd {
       DaemonCommand::Rewind { id, target_height } => {
         rewind::rewind(&ctx, id, target_height).await;
