@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use super::rest::rest_err;
 use super::RpcSource;
-use crate::config::{ResolvedRpcAuth, RpcAuth, RpcConfig};
+use crate::config::{ResolvedRpcAuth, RpcAuth, RpcConfig, Secret};
 use crate::error::{DaemonError, RestErrorKind};
 use crate::policy::api::API_TCP_KEEPALIVE_SECS;
 use hyphend::wire::msg::RpcDiag;
@@ -143,7 +143,7 @@ pub struct CoreRpcClient {
 #[derive(Debug)]
 enum RpcTransportAuth {
   CookieFile(PathBuf),
-  UserPass { username: String, password: String },
+  UserPass { username: String, password: Secret },
 }
 
 #[derive(Debug)]
@@ -523,7 +523,7 @@ impl CoreRpcClient {
       }
       RpcTransportAuth::UserPass { username, password } => Ok(format!(
         "Basic {}",
-        encode_basic_token(&format!("{username}:{password}"))
+        encode_basic_token(&format!("{username}:{}", password.expose()))
       )),
     }
   }
@@ -801,7 +801,7 @@ mod tests {
   fn userpass_auth_header_encodes_basic_credentials() {
     let cfg = RpcConfig {
       username: Some("alice".to_owned()),
-      password: Some("secret".to_owned()),
+      password: Some("secret".to_owned().into()),
       ..RpcConfig::default()
     };
     let client = CoreRpcClient::new(&cfg).expect("client should build");
@@ -815,7 +815,7 @@ mod tests {
   fn rpc_diag_tracks_method_and_error_counters() {
     let metrics = RpcMetrics::new(&RpcConfig {
       username: Some("alice".to_owned()),
-      password: Some("secret".to_owned()),
+      password: Some("secret".to_owned().into()),
       ..RpcConfig::default()
     })
     .expect("metrics should build");

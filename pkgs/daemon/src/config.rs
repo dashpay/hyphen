@@ -6,6 +6,7 @@
 
 //! Daemon configuration types.
 
+use std::fmt;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -92,11 +93,47 @@ pub enum RpcAuth {
   UserPass,
 }
 
+/// A credential that does not print itself.
+///
+/// The redaction lives on the type rather than on each struct that holds one, so
+/// a new field carrying a secret is redacted by construction and a derived
+/// `Debug` or `Serialize` on its container stays safe. Reading the value is
+/// deliberately a named call, which makes the few places that legitimately need
+/// it greppable.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+  /// The credential itself, for the call that has to transmit it.
+  pub fn expose(&self) -> &str {
+    &self.0
+  }
+}
+
+impl From<String> for Secret {
+  fn from(value: String) -> Self {
+    Self(value)
+  }
+}
+
+impl fmt::Debug for Secret {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str("Secret(***)")
+  }
+}
+
+impl Serialize for Secret {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str("***")
+  }
+}
+
 /// Resolved JSON-RPC authentication prepared for runtime use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedRpcAuth {
   CookieFile(PathBuf),
-  UserPass { username: String, password: String },
+  UserPass { username: String, password: Secret },
 }
 
 /// Optional node JSON-RPC settings used for governance and live state.
@@ -109,7 +146,7 @@ pub struct RpcConfig {
   pub datadir: Option<PathBuf>,
   pub cookie_file: Option<PathBuf>,
   pub username: Option<String>,
-  pub password: Option<String>,
+  pub password: Option<Secret>,
   pub timeout_secs: u64,
   pub network_refresh_secs: u64,
   pub governance_refresh_secs: u64,
@@ -417,11 +454,42 @@ mod tests {
     Config, CoreConfig, LiveConfig, ResolvedRpcAuth, RpcAuth, RpcConfig, ZmqConfig, ZmqTopic,
   };
 
+  /// The RPC password must not reach a log line, a debug dump or an IPC frame.
+  ///
+  /// It used to do all three: `RpcConfig` derived both `Debug` and `Serialize`
+  /// straight over a `String`, and `ResolvedRpcAuth` derived `Debug`, so any
+  /// `{:?}` of a struct holding one printed the credential.
+  #[test]
+  fn the_rpc_password_is_redacted_everywhere_it_can_be_seen() {
+    let cfg = RpcConfig {
+      username: Some("alice".to_owned()),
+      password: Some("s3cr3t".to_owned().into()),
+      ..RpcConfig::default()
+    };
+
+    let dump = format!("{cfg:?}");
+    assert!(!dump.contains("s3cr3t"), "password leaked: {dump}");
+    let json = serde_json::to_string(&cfg).unwrap_or_default();
+    assert!(!json.contains("s3cr3t"), "password leaked: {json}");
+
+    // ...and again once resolved, which is the form the transport holds.
+    let resolved = format!("{:?}", cfg.resolve_auth());
+    assert!(!resolved.contains("s3cr3t"), "password leaked: {resolved}");
+
+    // The value is still readable by the one caller that must transmit it.
+    match cfg.resolve_auth() {
+      Ok(ResolvedRpcAuth::UserPass { password, .. }) => {
+        assert_eq!(password.expose(), "s3cr3t");
+      }
+      other => assert!(false, "expected userpass auth, got {other:?}"),
+    }
+  }
+
   #[test]
   fn rpc_auth_prefers_userpass_over_cookie_sources() {
     let cfg = RpcConfig {
       username: Some("alice".to_owned()),
-      password: Some("secret".to_owned()),
+      password: Some("secret".to_owned().into()),
       cookie_file: Some(PathBuf::from("/tmp/core.cookie")),
       datadir: Some(PathBuf::from("/tmp/core")),
       ..RpcConfig::default()
@@ -431,7 +499,7 @@ mod tests {
     assert!(matches!(
       auth,
       ResolvedRpcAuth::UserPass { username, password }
-      if username == "alice" && password == "secret"
+      if username == "alice" && password.expose() == "secret"
     ));
     assert!(matches!(cfg.auth_kind(), Ok(RpcAuth::UserPass)));
   }
