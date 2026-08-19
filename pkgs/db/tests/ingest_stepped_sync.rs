@@ -196,6 +196,85 @@ async fn a_rebuilt_index_matches_the_definition_the_schema_declared() -> Res {
   Ok(())
 }
 
+/// A name match is not evidence that an index enforces anything.
+///
+/// `reconcile` decided presence with `to_regclass`, which matches any relation
+/// of that name and says nothing about `indisunique`. An index left plain under
+/// the unique member's name therefore read as satisfied, and the close was
+/// `CREATE UNIQUE INDEX IF NOT EXISTS`, which is a silent no-op against an
+/// existing name. Together those left `address_txs` — whose primary key the
+/// schema deliberately withholds on the strength of this build — with no
+/// uniqueness constraint at all, and nothing to notice it.
+///
+/// Reachable without an operator: a database synced by a build that carried
+/// this index as non-unique keeps the plain twin forever, and reconcile had no
+/// way to see the drift.
+#[tokio::test]
+async fn a_non_unique_index_under_the_unique_members_name_is_rebuilt() -> Res {
+  let tmp = common::TempDb::create().await?;
+  let db = tmp.open().await?;
+  let pool = tmp.seed_pool().await?;
+
+  create_partitions(&pool, 0).await?;
+  create_partitions(&pool, 1).await?;
+
+  let spec = DEFERRED_INDEXES
+    .iter()
+    .find(|d| d.unique)
+    .ok_or("the deferred set must have a unique member")?;
+  let name = child_index_name(spec.stem, 0);
+
+  // Stand in for the impostor: the right name and columns, no uniqueness.
+  sqlx::query(&format!(
+    "CREATE INDEX {name} ON address_txs_p0 {}",
+    spec.definition
+  ))
+  .execute(&pool)
+  .await?;
+
+  let unique_now = |pool: PgPool, name: String| async move {
+    sqlx::query_scalar::<_, bool>(
+      "SELECT i.indisunique FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid \
+       WHERE c.oid = to_regclass($1)",
+    )
+    .bind(name)
+    .fetch_one(&pool)
+    .await
+  };
+  assert!(
+    !unique_now(pool.clone(), name.clone()).await?,
+    "the impostor must start non-unique, or this test proves nothing"
+  );
+
+  // p0 is closed at this tip, so reconcile must repair it rather than accept
+  // the name.
+  let sync = SteppedSync::with_params(pool.clone(), true, 25_000);
+  into_stepped(&sync);
+  sync.ensure_settled(150_000).await?;
+
+  assert!(
+    unique_now(pool.clone(), name.clone()).await?,
+    "a closed partition's unique member must end up UNIQUE, not merely present"
+  );
+
+  // ...and it really enforces, not just reports.
+  seed(&pool, 10, 0xA1, "XyTestAddrDup").await?;
+  let dup = sqlx::query(
+    "INSERT INTO address_txs (address, block_height, block_pos, txid) \
+     SELECT address, block_height, block_pos, txid FROM address_txs_p0 LIMIT 1",
+  )
+  .execute(&pool)
+  .await;
+  assert!(
+    dup.is_err(),
+    "the rebuilt index must refuse a duplicate row"
+  );
+
+  drop(db);
+  tmp.drop_now().await;
+  Ok(())
+}
+
 /// The safety property. Deferring an index the write path probes does not slow
 /// a sync down, it stops it — the probe becomes a sequential scan of a table
 /// that is still growing. So no run of stepped mode, in either direction, may

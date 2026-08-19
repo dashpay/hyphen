@@ -744,7 +744,7 @@ impl SteppedSync {
         }
       }
     }
-    let live_indexes = existing(&self.admin, &wanted_indexes).await?;
+    let live_indexes = existing_indexes(&self.admin, &wanted_indexes).await?;
 
     for partition in 0..=open {
       // Closed partitions carry the full set; the open one carries it only in
@@ -756,10 +756,25 @@ impl SteppedSync {
           continue;
         }
         let name = child_index_name(spec.stem, partition);
-        let present = live_indexes.contains(&name);
-        match (want, present) {
-          (true, false) => self.build(&name, &table, spec, partition, open).await?,
-          (false, true) => self.drop_index(&name, partition).await?,
+        match (want, live_indexes.get(&name)) {
+          (true, None) => self.build(&name, &table, spec, partition, open).await?,
+          // Present under the right name but with the wrong uniqueness. For
+          // the unique member this is the whole constraint on `address_txs`
+          // missing, so it is rebuilt rather than accepted: a name match is
+          // not evidence that the index enforces anything.
+          (true, Some(&is_unique)) if is_unique != spec.unique => {
+            tracing::warn!(
+              index = name,
+              partition,
+              found_unique = is_unique,
+              want_unique = spec.unique,
+              "stepped sync deferred index {name}: uniqueness does not match \
+               the spec; dropping and rebuilding"
+            );
+            self.drop_index(&name, partition).await?;
+            self.build(&name, &table, spec, partition, open).await?;
+          }
+          (false, Some(_)) => self.drop_index(&name, partition).await?,
           _ => {}
         }
       }
@@ -786,11 +801,13 @@ impl SteppedSync {
     // enforces is the constraint the dropped primary key used to hold, so a
     // failure here is a real duplicate and must stop the advance rather than
     // be retried into a silently non-unique index.
+    //
+    // No `IF NOT EXISTS`. `reconcile` has already established that the name is
+    // free, so a collision here is a surprise worth hearing about, and the
+    // clause is what let a same-named non-unique index satisfy this statement
+    // silently — which for the unique member is the constraint quietly absent.
     let unique = if spec.unique { "UNIQUE " } else { "" };
-    let sql = format!(
-      "CREATE {unique}INDEX IF NOT EXISTS {name} ON {table} {}",
-      spec.definition
-    );
+    let sql = format!("CREATE {unique}INDEX {name} ON {table} {}", spec.definition);
     let started = Instant::now();
     sqlx::query(&sql).execute(&self.admin).await.map_err(|e| {
       // Name the partition in the context rather than leaving it to Postgres'
@@ -862,6 +879,35 @@ async fn existing(pool: &PgPool, names: &[String]) -> HyDbResult<Vec<String>> {
   .fetch_all(pool)
   .await
   .map_err(|e| HyDbError::pg("stepped sync: probe index catalog", e))
+}
+
+/// Which of `names` exist as indexes, and whether each enforces uniqueness.
+///
+/// Existence alone was what `reconcile` used to decide on, and `to_regclass`
+/// matches any relation of that name. An index left plain where the spec calls
+/// for `UNIQUE` therefore read as satisfied, which for `address_txs` is its
+/// only constraint silently absent.
+///
+/// Written against the runtime API rather than `query!` so it needs no entry in
+/// the offline query cache.
+async fn existing_indexes(
+  pool: &PgPool,
+  names: &[String],
+) -> HyDbResult<std::collections::HashMap<String, bool>> {
+  if names.is_empty() {
+    return Ok(std::collections::HashMap::new());
+  }
+  let rows: Vec<(String, bool)> = sqlx::query_as(
+    "SELECT c.relname::text, i.indisunique \
+     FROM UNNEST($1::text[]) AS n \
+     JOIN pg_class c ON c.oid = to_regclass(n) \
+     JOIN pg_index i ON i.indexrelid = c.oid",
+  )
+  .bind(names)
+  .fetch_all(pool)
+  .await
+  .map_err(|e| HyDbError::pg("stepped sync: probe index uniqueness", e))?;
+  Ok(rows.into_iter().collect())
 }
 
 #[cfg(test)]
