@@ -20,15 +20,26 @@
 -- further, leaving a sequential scan of that whole partition.
 --
 -- Measured on an 860,000-block seed (46.5M address_txs rows, partition p8
--- holding 8.47M of them), warm, parallelism off, in a rolled-back transaction:
+-- holding 8.47M of them, 883 MB of heap), parallelism off, in a rolled-back
+-- transaction. Warm first, then again on a freshly cloned database so the
+-- buffer pool had never seen the data:
 --
---                        latency        buffers   rows found / scanned
---   before (seq scan)    337-421 ms     112,980   62-131 / 8,473,123
---   after  (btree)       0.03-0.07 ms   155-205   149-202
+--                          latency      buffers (hit/read)   rows found
+--   before, warm            337-421 ms   112,980 / 0          62-131
+--   before, COLD          14,263 ms        2,110 / 110,932        62
+--   after, warm heap           81 ms          134 / 3            131
+--   after, COLD partition      18 ms           13 / 3             11
 --
--- ~5,000x, and the "before" figure is the *favorable* one: those 112,980
--- buffers were all hits. On a server whose cache is being used for the sync
--- that is running when a reorg arrives, the same scan is 883 MB of reads.
+-- The cold row is the one that matters, and it is why the warm reading was not
+-- worth trusting: 110,932 physical block reads, 867 MB pulled through an 8 GB
+-- shared_buffers on a 61 GB database, and 14.3 SECONDS for a single block's
+-- reversal. Warm understated it by 42x. A reorg arrives while a sync is using
+-- that cache for something else, so cold is the normal case, not the bad one —
+-- and a multi-block reorg pays it per block.
+--
+-- The index path does not care either way: 3 physical reads on a partition the
+-- buffer pool had never touched, because it reads an index page and the handful
+-- of heap pages the matching rows actually live on.
 --
 -- Cost: 325 MB across the nine existing partitions, against 6.5 GB for the
 -- primary keys of the same table, and ~10 s to build them all. Insert-side

@@ -27,6 +27,22 @@ use crate::util::hex_prefix_pattern;
 /// endpoint behind "show me this transaction", so it now returns the first
 /// `HYDB_TX_IO_CAP` of each side and nothing more.
 ///
+/// A row per output is not the whole cost, and the measurement is worse than
+/// the row count suggests. `spends` is partitioned by *spend* height while the
+/// join key is the outpoint, which carries no spend height — so the planner
+/// cannot prune, and every single output probes all nine partitions. On the
+/// 860,000-block seed, the widest transaction (2,467 outputs) cost 22,203 index
+/// searches and 81,026 buffer accesses, 8.16 s cold. Capped at 1,000 the same
+/// query is 9,000 searches and 32,854 buffers: ~33 buffer accesses per output,
+/// linear in the cap, which is exactly what a bound is for.
+///
+/// Extrapolated, that is the argument for having one at all: an unbounded
+/// 40,000-output transaction would touch ~1.3M buffers — around 10 GB of buffer
+/// traffic through an 8 GB `shared_buffers`, evicting the working set of every
+/// other query on the server to render one page. The cap holds it to ~33,000.
+/// (The nine-partition fan-out itself is a separate defect and a much larger
+/// win if fixed; it is not addressed here.)
+///
 /// The bound is discoverable without a second query and without new fields on
 /// [`HyDbQrTxDetail`]: a side whose vector came back with exactly
 /// `HYDB_TX_IO_CAP` entries is *possibly* truncated, and the rest of it is read
