@@ -24,28 +24,30 @@
 //! - [`Consumed`](Decl::Consumed) — the guard requires at least one non-test
 //!   read that is not the struct merely describing or checking itself.
 //! - [`Pending`](Decl::Pending) — the key exists ahead of its consumer. The
-//!   guard requires the *opposite*: **zero** read sites, plus a named task
-//!   that is still open in `TASKS.md`.
+//!   guard requires the *opposite*: **zero** read sites, plus a written
+//!   justification for shipping the key early.
 //!
 //! Those two requirements are what stops the pending list rotting into a
 //! permanent exemption list, and it is worth being precise about how, because
 //! "we will clean it up later" is exactly what `[performance]` was:
 //!
 //! 1. **Pending is a falsifiable claim, not a waiver.** It asserts the key is
-//!    unread. The moment A3 lands and reads `stepped_sync`, the guard fails —
-//!    a pending entry cannot survive its own consumer arriving. An exemption
+//!    unread. The moment its consumer lands and reads it, the guard fails — a
+//!    pending entry cannot survive its own consumer arriving. An exemption
 //!    list works the other way round: it silences the check permanently, so
 //!    the entry survives everything, including the thing it was waiting for.
-//! 2. **Every pending entry has an owner with an expiry condition.** The task
-//!    id must appear in `TASKS.md` as an *unchecked* item. Ticking A3 off
-//!    without wiring `stepped_sync` fails the guard, so the key cannot be
-//!    quietly orphaned by the work that was supposed to consume it finishing
-//!    without it. A key whose task is done and which is still unread is
-//!    precisely the `[performance]` state, and it is now a red test.
+//! 2. **Every pending entry carries an argument, not a placeholder.** The
+//!    justification must say why the key ships before its consumer, and is
+//!    length-checked so a bare `TODO` cannot stand in for one.
 //! 3. **The list cannot grow silently.** Adding a field to any configuration
-//!    struct with no declaration fails the completeness check; declaring it
-//!    pending requires writing down which open task will consume it. There is
-//!    no spelling of "add a key and move on".
+//!    struct with no declaration fails the completeness check. There is no
+//!    spelling of "add a key and move on".
+//!
+//! The `task` an entry names is a note for a human reader. It is deliberately
+//! not cross-referenced against a task file: that file is not part of the
+//! repository, so a check against it passes only where a copy happens to sit
+//! beside the checkout and fails everywhere else, which is the opposite of
+//! what a guard is for.
 //!
 //! What the guard deliberately does not do is judge *quality* of use. A read
 //! site that reads a field into a variable nobody uses would pass. That is a
@@ -283,18 +285,26 @@ mod tests {
 
   /// Strip line comments and double-quoted string literals, so a field named
   /// in prose or in an error message is not mistaken for a read of it.
+  ///
+  /// Comments are recognised while walking the line, not by splitting on the
+  /// first `//` beforehand. Splitting first truncated at the `//` inside any
+  /// string holding a URL — of which this codebase has many — discarding
+  /// whatever followed on that line, so a real read site could go unseen and
+  /// the guard would report on its own parser rather than on the code.
   fn strip_noise(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     for line in source.lines() {
-      let code = line.split("//").next().unwrap_or("");
       let mut in_string = false;
       let mut escaped = false;
-      for ch in code.chars() {
+      let mut chars = line.chars().peekable();
+      while let Some(ch) = chars.next() {
         match ch {
           _ if escaped => escaped = false,
           '\\' if in_string => escaped = true,
           '"' => in_string = !in_string,
           _ if in_string => {}
+          // Outside a string, `//` starts a comment and ends the line.
+          '/' if chars.peek() == Some(&'/') => break,
           _ => out.push(ch),
         }
       }
@@ -633,47 +643,60 @@ mod tests {
     );
   }
 
-  /// Every pending key names a task that is still open. When the task is
-  /// ticked off, the key must have been consumed or the guard fails: a
-  /// pending entry cannot outlive the work that was supposed to consume it.
+  /// A pending key's justification is an argument, not a placeholder.
+  ///
+  /// This replaces a cross-reference against a task file that is not tracked
+  /// in the repository. That check read the file with `unwrap_or_default` and
+  /// then asserted the result was non-empty, so it passed only where an
+  /// untracked copy happened to sit beside the checkout and failed on every
+  /// fresh clone — a guard that reports on its environment rather than on the
+  /// code. What is checkable from the repository alone is that the entry
+  /// explains itself, and that is checked here.
   #[test]
-  fn every_pending_key_names_an_open_task() {
-    let tasks = fs::read_to_string(pkgs_root().join("../TASKS.md")).unwrap_or_default();
-    assert!(!tasks.is_empty(), "TASKS.md should be readable");
-    let open: BTreeSet<&str> = tasks
-      .lines()
-      .filter_map(|line| line.trim().strip_prefix("- [ ] **"))
-      .filter_map(|rest| rest.split([' ', '*', '.']).next())
-      .collect();
-
-    let orphaned: Vec<String> = FIELDS
-      .iter()
-      .filter_map(|f| match f.decl {
-        Decl::Pending { task, why } => Some((f.name, task, why)),
-        Decl::Consumed => None,
-      })
-      .filter(|(_, task, _)| !open.contains(task))
-      .map(|(name, task, _)| format!("{name} (waiting on {task})"))
-      .collect();
-    assert!(
-      orphaned.is_empty(),
-      "these config keys wait on a task that is no longer open in TASKS.md — \
-       either the task landed without wiring the key up, or the key should \
-       never have shipped: {}",
-      orphaned.join(", ")
-    );
-
-    // And the justification has to be an argument, not a placeholder.
+  fn every_pending_key_justifies_shipping_early() {
     for field in FIELDS {
-      if let Decl::Pending { why, .. } = field.decl {
+      if let Decl::Pending { why, task } = field.decl {
         assert!(
           why.len() > 40 && !why.contains("TODO"),
           "the pending justification for `{}` has to say why the key ships \
            before its consumer",
           field.name
         );
+        assert!(
+          !task.is_empty(),
+          "the pending entry for `{}` has to name the work that will consume it",
+          field.name
+        );
       }
     }
+  }
+
+  /// The guard is only as good as what it reads, so the stripper gets its own
+  /// test. A URL inside a string used to end the line early, hiding any read
+  /// site that followed it.
+  #[test]
+  fn stripping_keeps_code_that_follows_a_url_literal() {
+    let cleaned = strip_noise(r#"let u = "postgresql://h/db"; take(cfg.batch_rows);"#);
+    assert!(
+      cleaned.contains("cfg.batch_rows"),
+      "a read after a URL literal must survive stripping: {cleaned}"
+    );
+    assert!(
+      !cleaned.contains("postgresql"),
+      "the string's contents must not survive: {cleaned}"
+    );
+  }
+
+  #[test]
+  fn stripping_still_drops_real_comments_and_strings() {
+    let cleaned = strip_noise("keep_me; // cfg.dropped_by_comment\nalso_kept;");
+    assert!(cleaned.contains("keep_me"));
+    assert!(cleaned.contains("also_kept"));
+    assert!(!cleaned.contains("dropped_by_comment"));
+
+    // An escaped quote must not be read as closing the string.
+    let cleaned = strip_noise(r#"let s = "a \" // b"; kept;"#);
+    assert!(cleaned.contains("kept"), "got {cleaned}");
   }
 
   /// The naming rule: no key longer than 24 characters, section prefix
