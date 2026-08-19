@@ -276,7 +276,9 @@ async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
   let base = baseline(&pool).await;
 
   // A defaultable key the store has never seen is adopted and recorded.
-  delete_key(&pool, "rich_list_floor").await;
+  // `schema_version` is defaultable because nothing on disk was written
+  // against it — it records which schema wrote the rest, not how to read it.
+  delete_key(&pool, "schema_version").await;
   let adopted = layout::verify(&pool, &cfg_from(&base), CREATED_BY).await;
   assert!(
     adopted.is_ok(),
@@ -286,9 +288,18 @@ async fn case4_missing_key_is_adopted_when_defaultable_and_refused_when_not() {
     store_keys(&pool)
       .await
       .iter()
-      .any(|k| k == "rich_list_floor"),
+      .any(|k| k == "schema_version"),
     "an adopted key must be written back, or the next startup adopts it again"
   );
+
+  // `rich_list_floor` is rebuildable but NOT defaultable: `address_rich` was
+  // materialised at whatever floor was in force, so adopting a configured one
+  // silently skips the rebuild that would make the table match it.
+  delete_key(&pool, "rich_list_floor").await;
+  let refused = layout::verify(&pool, &cfg_from(&base), CREATED_BY).await;
+  let msg = refused.err().map(|e| e.to_string()).unwrap_or_default();
+  assert!(msg.contains("rich_list_floor"), "{msg}");
+  assert!(msg.contains("stored=<absent>"), "{msg}");
 
   // A hard key the store has never seen is refused: adopting it would decide,
   // silently, how to read data that is already on disk.

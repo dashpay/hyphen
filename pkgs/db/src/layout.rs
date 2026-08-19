@@ -46,6 +46,7 @@
 //! how base facts were written, so they are refused and the operator is asked
 //! to state the value explicitly.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use sqlx::PgPool;
@@ -179,7 +180,13 @@ pub const KEY_P2SH_VERSION: HyDbLayoutKey = HyDbLayoutKey {
 pub const KEY_RICH_LIST_FLOOR: HyDbLayoutKey = HyDbLayoutKey {
   name: "rich_list_floor",
   grade: HyDbLayoutGrade::Rebuildable,
-  defaultable: true,
+  // Not defaultable, unlike every other `Rebuildable` key, because data was
+  // already written against it. `address_rich` was materialised at whatever
+  // floor was in force, so adopting a configured floor for a database that
+  // never recorded one leaves every address between the two floors in the
+  // table, served on the rich list, with nothing to notice — which is the
+  // offline rebuild the remedy below describes, silently skipped.
+  defaultable: false,
   remedy: "NO RESYNC IS NEEDED: `address_rich` holds no facts of its own — every \
            row is a projection of `address_stats`, so a new floor is an offline \
            rebuild of that one table in a single scan (repopulate `address_rich` \
@@ -372,6 +379,22 @@ impl HyDbLayout {
 /// which is what unit tests and mock facades want.
 static RESOLVED: OnceLock<HyDbLayout> = OnceLock::new();
 
+/// Storage for the fallback the reads above use.
+///
+/// Held apart from [`RESOLVED`] on purpose. Serving the default out of
+/// `RESOLVED` itself — via `get_or_init` — meant any read before
+/// [`install`] latched the default permanently, so the layout agreed with the
+/// store was then refused as a conflicting second one, and every partition name
+/// derived in between had been built from the wrong span.
+static DEFAULTS: OnceLock<HyDbLayout> = OnceLock::new();
+
+/// Whether a read has already been answered with the defaults.
+///
+/// [`install`] consults this: a caller that computed a partition boundary from
+/// the default span before the real layout arrived did so against a database
+/// that may not use it, and that cannot be repaired after the fact.
+static DEFAULTS_SERVED: AtomicBool = AtomicBool::new(false);
+
 /// Install the resolved layout for this process. Called by
 /// [`crate::HyphenDb::connect`] once [`verify`] has agreed it with the store;
 /// kept separate from `verify` so the contract itself can be tested against a
@@ -382,6 +405,17 @@ static RESOLVED: OnceLock<HyDbLayout> = OnceLock::new();
 /// [`HyDbError::Layout`] when a *different* layout is already installed: two
 /// databases with different physical layouts cannot be served by one process.
 pub fn install(layout: HyDbLayout) -> HyDbResult<()> {
+  // A read answered from the defaults before the store was consulted is only
+  // harmless while the two agree. Where they differ, something has already
+  // derived a partition name or an undo horizon from a span this database does
+  // not use, and no later install can undo that.
+  if DEFAULTS_SERVED.load(Ordering::Acquire) && layout != HyDbLayout::default() {
+    return Err(HyDbError::Layout(format!(
+      "the built-in storage layout was read before this database's own layout \
+       was resolved, and they differ (resolved={layout:?}); a partition \
+       boundary derived from the wrong span cannot be corrected afterwards"
+    )));
+  }
   match RESOLVED.set(layout.clone()) {
     Ok(()) => Ok(()),
     Err(_) => {
@@ -399,8 +433,19 @@ pub fn install(layout: HyDbLayout) -> HyDbResult<()> {
 }
 
 /// The resolved layout, or the built-in defaults if none was installed.
+///
+/// The fallback does not become the resolved layout. It is served from its own
+/// cell and recorded, so [`install`] can still agree a real layout with the
+/// store afterwards and can refuse the one case where the fallback has already
+/// done damage.
 pub fn resolved() -> &'static HyDbLayout {
-  RESOLVED.get_or_init(HyDbLayout::default)
+  match RESOLVED.get() {
+    Some(layout) => layout,
+    None => {
+      DEFAULTS_SERVED.store(true, Ordering::Release);
+      DEFAULTS.get_or_init(HyDbLayout::default)
+    }
+  }
 }
 
 /// Height span of one base partition, in blocks.
@@ -472,17 +517,45 @@ pub async fn read_store(pool: &PgPool) -> HyDbResult<Option<Vec<HyDbInitParam>>>
   ))
 }
 
-async fn write_param(pool: &PgPool, key: &str, value: &str, created_by: &str) -> HyDbResult<()> {
-  sqlx::query(
-    "INSERT INTO init_params (key, value, created_by) VALUES ($1, $2, $3) \
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-  )
-  .bind(key)
-  .bind(value)
-  .bind(created_by)
-  .execute(pool)
-  .await
-  .map_err(|e| HyDbError::pg("layout: write init_params", e))?;
+/// Record every layout key in one transaction.
+///
+/// Atomic because a partial layout is not classifiable. `plan` reads
+/// `init_params` and decides first-run against established from what it finds;
+/// a run that failed part-way through writing leaves a row set that is neither,
+/// and the next start has to guess which keys were the database's own and which
+/// were half-written.
+///
+/// # Errors
+///
+/// [`HyDbError::Pg`] if the transaction cannot be opened, written, or committed.
+/// Nothing is recorded unless all of it is.
+async fn write_params(
+  pool: &PgPool,
+  params: &[(&str, String)],
+  created_by: &str,
+) -> HyDbResult<()> {
+  if params.is_empty() {
+    return Ok(());
+  }
+  let mut tx = pool
+    .begin()
+    .await
+    .map_err(|e| HyDbError::pg("layout: begin init_params write", e))?;
+  for (key, value) in params {
+    sqlx::query(
+      "INSERT INTO init_params (key, value, created_by) VALUES ($1, $2, $3) \
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(key)
+    .bind(value)
+    .bind(created_by)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| HyDbError::pg("layout: write init_params", e))?;
+  }
+  tx.commit()
+    .await
+    .map_err(|e| HyDbError::pg("layout: commit init_params write", e))?;
   Ok(())
 }
 
@@ -681,9 +754,7 @@ pub async fn verify(
     }
   }
 
-  for (key, value) in &to_write {
-    write_param(pool, key, value, created_by).await?;
-  }
+  write_params(pool, &to_write, created_by).await?;
 
   if first_run {
     tracing::info!(
@@ -901,11 +972,11 @@ mod tests {
   fn case4_defaultable_key_is_adopted_and_hard_key_is_refused() {
     let store: Vec<_> = full_store()
       .into_iter()
-      .filter(|p| p.key != "rich_list_floor" && p.key != "partition_span")
+      .filter(|p| p.key != "schema_version" && p.key != "partition_span")
       .collect();
     let planned = plan(&full_cfg(), Some(&store));
     assert!(matches!(
-      decision(&planned, "rich_list_floor"),
+      decision(&planned, "schema_version"),
       Decision::Adopt(_)
     ));
     let msg = match decision(&planned, "partition_span") {
@@ -917,6 +988,28 @@ mod tests {
       msg.contains("State the value this database was built with"),
       "{msg}"
     );
+  }
+
+  /// `rich_list_floor` is `Rebuildable`, but data was written against it, so an
+  /// unrecorded one is refused rather than adopted.
+  ///
+  /// Adopting it leaves `address_rich` holding every address between the floor
+  /// it was materialised at and the one now configured, served on the rich list
+  /// indefinitely. That is the offline rebuild the key's own remedy describes,
+  /// skipped without anything saying so.
+  #[test]
+  fn an_unrecorded_rich_list_floor_is_refused_rather_than_adopted() {
+    let store: Vec<_> = full_store()
+      .into_iter()
+      .filter(|p| p.key != "rich_list_floor")
+      .collect();
+    let planned = plan(&full_cfg(), Some(&store));
+    let msg = match decision(&planned, "rich_list_floor") {
+      Decision::Refuse(msg) => msg,
+      other => format!("NOT REFUSED (address_rich was built at some floor): {other:?}"),
+    };
+    assert!(msg.contains("stored=<absent>"), "{msg}");
+    assert!(msg.contains("rich_list_floor"), "{msg}");
   }
 
   #[test]
