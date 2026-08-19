@@ -351,6 +351,30 @@ impl HyDbClientCfg {
         )));
       }
     }
+    // A zero timeout is taken literally by the pool: every connect, or every
+    // acquire, fails the instant it is attempted. Rejected at load rather than
+    // left to present itself at runtime as a storage engine that times out
+    // immediately and always, which reads like a dead server.
+    if self.connect_timeout == 0 {
+      return Err(HyDbError::Config(
+        "db.client.connect_timeout must be at least 1 second — zero is taken \
+         literally and fails every connection attempt outright"
+          .to_owned(),
+      ));
+    }
+    for (section, acquire_timeout) in [
+      ("write", self.write.acquire_timeout),
+      ("query", self.query.acquire_timeout),
+      ("heavy", self.heavy.acquire_timeout),
+      ("admin", self.admin.acquire_timeout()),
+    ] {
+      if acquire_timeout == 0 {
+        return Err(HyDbError::Config(format!(
+          "db.client.{section}.acquire_timeout must be at least 1 second — zero \
+           is taken literally and fails every checkout outright"
+        )));
+      }
+    }
     if self.app_name.trim().is_empty() {
       return Err(HyDbError::Config(
         "db.client.app_name must not be empty — it is what attributes backends \
@@ -578,6 +602,37 @@ mod tests {
     assert!(zero_pool.validate().is_err());
 
     assert!(HyDbClientCfg::default().validate().is_ok());
+  }
+
+  /// A zero timeout is a configuration that cannot work, not a configuration
+  /// meaning "no limit": the pool takes it literally and fails every attempt at
+  /// once, which at runtime looks like a server that is down.
+  #[test]
+  fn validate_rejects_timeouts_of_zero() {
+    let zero_connect = HyDbClientCfg {
+      connect_timeout: 0,
+      ..HyDbClientCfg::default()
+    };
+    let err = zero_connect
+      .validate()
+      .err()
+      .map(|e| e.to_string())
+      .unwrap_or_default();
+    assert!(err.contains("connect_timeout"), "{err}");
+
+    let zero_acquire = HyDbClientCfg {
+      query: HyDbQueryCfg {
+        acquire_timeout: 0,
+        ..HyDbQueryCfg::default()
+      },
+      ..HyDbClientCfg::default()
+    };
+    let err = zero_acquire
+      .validate()
+      .err()
+      .map(|e| e.to_string())
+      .unwrap_or_default();
+    assert!(err.contains("query.acquire_timeout"), "{err}");
   }
 
   #[test]
