@@ -13,8 +13,17 @@
 //! **batched**: one `UNNEST` statement per table per block rather than one
 //! round trip per row. Its disconnect rebuilds the spent UTXOs from those
 //! same facts and drops every row the block wrote.
+//!
+//! `address_txs` is the one table here whose row count is bounded by nothing
+//! but the block's address fan-out, and it is the largest object in the
+//! database (60.0M rows and 17.6 GB of index over a 967k-block mainnet, where
+//! the heap is 6.6 GB — the indexes cost more than twice the facts). So its
+//! write is the one with a row cap, `[db.ingest] batch_rows`, and the one whose
+//! key set is deduplicated in memory on exactly the primary key's columns so
+//! the statement needs no `ON CONFLICT` arbiter. Neither changes what is
+//! written; both bound what one statement can be asked to do.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
@@ -85,8 +94,16 @@ impl IngestStage for BaseStage {
     let mut s_vin: Vec<i32> = Vec::new();
     let mut s_outpoint: Vec<Vec<u8>> = Vec::new();
 
-    // address_txs, deduped across the input and output sides
-    let mut addr_txs: BTreeSet<(String, Vec<u8>, i32)> = BTreeSet::new();
+    // address_txs, deduped across the input and output sides. Keyed by exactly
+    // the columns the table's primary key is keyed by — (address, txid) at a
+    // fixed height — so the key set handed to Postgres is unique by
+    // construction and the insert needs no `ON CONFLICT` arbiter. Keeping the
+    // key wider than the constraint (address, txid, block_pos, as it was) meant
+    // two rows could differ only in `block_pos` and collide in the index, which
+    // is why the arbiter was there. A `BTreeMap` also hands the rows over in
+    // primary-key order, so the index inserts walk the btree forwards instead
+    // of jumping around inside one statement.
+    let mut addr_txs: BTreeMap<(String, Vec<u8>), i32> = BTreeMap::new();
 
     for (t, btx) in block.txs.iter().enumerate() {
       let txid = btx.txid.0.to_vec();
@@ -122,7 +139,9 @@ impl IngestStage for BaseStage {
         o_addr_type.push(out.address_type);
         o_outpoint.push(outpoint);
         if let Some(addr) = &out.address {
-          addr_txs.insert((addr.0.clone(), txid.clone(), pos));
+          addr_txs
+            .entry((addr.0.clone(), txid.clone()))
+            .or_insert(pos);
         }
       }
 
@@ -161,7 +180,9 @@ impl IngestStage for BaseStage {
         s_vin.push(inp.vin_index as i32);
         s_outpoint.push(prev.packed().to_vec());
         if let Some(addr) = spent.and_then(|s| s.address.as_deref()) {
-          addr_txs.insert((addr.to_owned(), txid.clone(), pos));
+          addr_txs
+            .entry((addr.to_owned(), txid.clone()))
+            .or_insert(pos);
         }
       }
     }
@@ -279,24 +300,35 @@ impl IngestStage for BaseStage {
       let mut a_addr: Vec<String> = Vec::with_capacity(addr_txs.len());
       let mut a_txid: Vec<Vec<u8>> = Vec::with_capacity(addr_txs.len());
       let mut a_pos: Vec<i32> = Vec::with_capacity(addr_txs.len());
-      for (addr, txid, pos) in addr_txs {
+      for ((addr, txid), pos) in addr_txs {
         a_addr.push(addr);
         a_txid.push(txid);
         a_pos.push(pos);
       }
-      sqlx::query!(
-        r#"INSERT INTO address_txs (address, block_height, txid, block_pos)
-           SELECT t.address, $1, t.txid, t.block_pos
-             FROM UNNEST($2::text[], $3::bytea[], $4::int4[]) AS t(address, txid, block_pos)
-           ON CONFLICT DO NOTHING"#,
-        height,
-        &a_addr,
-        &a_txid,
-        &a_pos,
-      )
-      .execute(&mut **tx)
-      .await
-      .map_err(HyDbStageError::sql(Self::NAME, "base: insert address_txs"))?;
+      // `address_txs` is the widest write in the database — one row per address
+      // per transaction, 60.0M rows and 17.6 GB of index over a 967k-block
+      // mainnet — and the only table here whose row count is unbounded by
+      // anything but the block's own address fan-out. A pathological block would
+      // otherwise build one statement out of every touch it has; `batch_rows`
+      // caps that. At the measured mainnet-tail fan-out (13,970,758 rows over
+      // the 100,000 blocks of `address_txs_p8`, so ~140 rows a block) the cap
+      // never divides, and the write stays the single statement it was.
+      let batch = crate::tuning::resolved().batch_rows.max(1);
+      for start in (0..a_addr.len()).step_by(batch) {
+        let end = (start + batch).min(a_addr.len());
+        sqlx::query!(
+          r#"INSERT INTO address_txs (address, block_height, txid, block_pos)
+             SELECT t.address, $1, t.txid, t.block_pos
+               FROM UNNEST($2::text[], $3::bytea[], $4::int4[]) AS t(address, txid, block_pos)"#,
+          height,
+          &a_addr[start..end],
+          &a_txid[start..end],
+          &a_pos[start..end],
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(HyDbStageError::sql(Self::NAME, "base: insert address_txs"))?;
+      }
     }
 
     // Special-tx payloads are rare; per-row inserts are fine.
