@@ -483,11 +483,16 @@ async fn empty_case(tmp: &TempDb) -> TestResult {
 ///
 /// Set-but-unreachable fails loudly rather than skipping; unset does nothing,
 /// because there is nothing to point at.
+// Requires a real pruned seed database, which only exists where an 860k-block
+// sync has been run. Marked `ignore` rather than skipping silently on a missing
+// env var: a test that passes without asserting anything is the idiom that let
+// a completely broken search ship green (E2.8). Run it with
+//   HYPHEN_SEED_DATABASE_URL=... cargo test -p hyphen-db --test undo_coverage -- --ignored
 #[tokio::test]
+#[ignore = "needs HYPHEN_SEED_DATABASE_URL pointing at a pruned seed clone"]
 async fn a_pruned_seed_opens_and_a_hole_above_its_floor_does_not() -> TestResult {
-  let Ok(url) = std::env::var("HYPHEN_SEED_DATABASE_URL") else {
-    return Ok(());
-  };
+  let url = std::env::var("HYPHEN_SEED_DATABASE_URL")
+    .map_err(|_| "HYPHEN_SEED_DATABASE_URL must be set to run this test")?;
   let pool = PgPool::connect(&url).await?;
 
   // 1. As synced: pruned to the keep depth, and clean.
