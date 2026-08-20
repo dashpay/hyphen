@@ -43,14 +43,17 @@ pub(super) async fn absorb(
 ) -> HyDbResult<HyDbBlockSeen> {
   let id = data_src.identify(raw)?;
 
-  let known = sqlx::query_scalar!("SELECT 1 FROM ser_blocks WHERE hash = $1", &id.hash.0[..])
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| HyDbError::pg("absorb: existence check", e))?;
-  if known.is_some() {
-    return Ok(HyDbBlockSeen::Known);
-  }
-
+  // No separate existence probe. `ON CONFLICT DO NOTHING ... RETURNING` already
+  // distinguishes "stored it" from "was already there" — an absent row back
+  // means the conflict fired — so asking first only bought the answer twice.
+  //
+  // The probe used to run before the parent lookup, which made re-absorbing a
+  // known block one round trip instead of two. That trade is the wrong way
+  // round for this workload: during a sync essentially every block is new, so
+  // the common path drops from three round trips to two and a missing parent
+  // from two to one, while the case that gets marginally worse is re-absorbing
+  // a block already stored — which happens when the daemon re-polls an
+  // unchanged tip, not while it is catching up.
   let height = if id.prev_hash.0 == GENESIS_PREV {
     0
   } else {
@@ -67,19 +70,23 @@ pub(super) async fn absorb(
     }
   };
 
-  sqlx::query!(
+  let stored = sqlx::query_scalar!(
     "INSERT INTO ser_blocks (hash, prev_hash, height, raw) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (hash) DO NOTHING",
+       ON CONFLICT (hash) DO NOTHING
+       RETURNING height",
     &id.hash.0[..],
     &id.prev_hash.0[..],
     height,
     raw
   )
-  .execute(pool)
+  .fetch_optional(pool)
   .await
   .map_err(|e| HyDbError::pg("absorb: insert", e))?;
 
-  Ok(HyDbBlockSeen::New)
+  Ok(match stored {
+    Some(_) => HyDbBlockSeen::New,
+    None => HyDbBlockSeen::Known,
+  })
 }
 
 /// Ensure the height-range partitions covering `[lo, hi]` exist for every
