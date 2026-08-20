@@ -188,6 +188,66 @@ it is more likely lock or I/O wait. And `address_stats` is an upsert with
 per-address contention, which is the one that would degrade worst as the
 address set grows. Revisit once the sync is deep enough for a trend.
 
+### 5. Storage device dropped out under load — HARDWARE — RECOVERED
+
+Not a code defect, and recorded because the daemon's behaviour under it is
+the only real test the failure path has had.
+
+At 23:22 UTC, height 905,612, the external SSD holding `pgdata` dropped off
+the bus mid-write. Postgres took an unreadable-block error and died:
+
+```
+ERROR hyphend::ingest: ingest cycle failed permanently; pausing ingestion
+  until an operator intervenes
+  error=storage error (advance to tip): postgres error: connect:
+  upsert address_stats: could not read blocks 75760..75760 in file
+  "base/2315177/2315346": Device not configured
+```
+
+**The daemon did exactly the right thing.** `failure_action` classified it as
+`Outcome::Error`, which parks ingestion for an operator rather than retrying
+into a dead disk or taking the process down, and the REST API stayed up
+serving what was already indexed. That is the branch's three-way severity
+policy working against a genuine I/O fault rather than a synthetic one.
+
+**Recovery was clean.** WAL replay took 70 s and the end-of-recovery
+checkpoint wrote 969,551 buffers (92.5%) in 164 s. The one alarming-looking
+line is not corruption:
+
+```
+incorrect resource manager data checksum in record at 101/43170D08
+```
+
+That is the torn final record from the crash, which is how Postgres finds the
+end of the log. Everything before it replayed, and replay actually recovered
+128 blocks *past* the height the daemon last reported.
+
+Integrity after recovery, against the node:
+
+```
+tip     905,740      blocks 905,741   (contiguous, zero gaps)
+txs     7,135,016
+size    59 GB
+init_params  all seven keys intact, schema_version=1
+```
+
+A daemon restart then re-ran the layout and migration-history checks against
+the recovered store and both passed, which is a stronger statement than the
+row counts: the schema is the one the binary expects and the recorded layout
+still matches.
+
+**Cost.** Roughly eight hours idle, because restarting Postgres needs Full
+Disk Access on the removable volume and this shell did not have it. Once
+granted, the same `pg_ctl start` worked first time — its only failure had
+been the PID-file confirmation step, not the server launch.
+
+**Mitigation.** The supervisor now repairs this class of failure itself:
+it restarts Postgres if the postmaster is gone, restarts the daemon if that
+is gone, and clears a parked ingestion by restarting the daemon, since a
+pause deliberately outlives the condition that caused it. A repeat costs
+minutes rather than a night. The durable fix is still to move `pgdata` off a
+volume that disconnects under sustained write load.
+
 ## Sync progress
 
 | Time (UTC) | Height | Notes |
