@@ -9,7 +9,7 @@
 use num_bigint::BigUint;
 
 use dash_primitives::payload::SpecialPayload;
-use dash_primitives::Block;
+use dash_primitives::Transaction;
 
 /// Coinbase transaction fields extracted from the block.
 #[derive(Debug, Default)]
@@ -23,8 +23,11 @@ pub struct CbTxFields {
 }
 
 /// Extract coinbase transaction fields from the first transaction.
-pub fn extract_cbtx_fields(block: &Block, _height: u32) -> CbTxFields {
-  let tx = match block.transactions.first() {
+/// Takes the coinbase transaction rather than the whole block: it only ever
+/// read `transactions.first()`, and asking for the block forced callers that
+/// had the coinbase in hand to keep a fully decoded `Block` alive for it.
+pub fn extract_cbtx_fields(coinbase: Option<&Transaction>, _height: u32) -> CbTxFields {
+  let tx = match coinbase {
     Some(t) => t,
     None => return CbTxFields::default(),
   };

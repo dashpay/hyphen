@@ -12,7 +12,7 @@
 //! can replay it during reorg re-derivation and get identical facts.
 
 use dash_primitives::payload::SpecialPayload;
-use dash_primitives::{Block, Transaction, TxType};
+use dash_primitives::{Transaction, TxType};
 
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbCbFields, HyDbError, HyDbHash,
@@ -38,8 +38,25 @@ impl HyDbBlockSource {
     }
   }
 
-  fn decode_block(raw: &[u8]) -> HyDbResult<Block> {
-    bitcoin_consensus_encoding::decode_from_slice::<Block>(raw)
+  /// The 80-byte header alone.
+  ///
+  /// A block's header is a fixed-size prefix, so reading a header field costs
+  /// nothing more than those 80 bytes. Decoding the whole `Block` to reach one
+  /// walks every input and output and heap-allocates a vector per script,
+  /// which for [`Self::identify`] — a `prev_hash` lookup — was the entire cost
+  /// of the call.
+  fn decode_header(raw: &[u8]) -> HyDbResult<dash_primitives::block_header::BlockHeader> {
+    let head = raw
+      .get(..80)
+      .ok_or_else(|| HyDbError::Derive("decode header: block is under 80 bytes".to_owned()))?;
+    bitcoin_consensus_encoding::decode_from_slice::<dash_primitives::block_header::BlockHeader>(
+      head,
+    )
+    .map_err(|e| HyDbError::Derive(format!("decode header: {e}")))
+  }
+
+  fn decode_block(raw: &[u8]) -> HyDbResult<dash_primitives::Block> {
+    bitcoin_consensus_encoding::decode_from_slice::<dash_primitives::Block>(raw)
       .map_err(|e| HyDbError::Derive(format!("decode block: {e}")))
   }
 
@@ -52,14 +69,24 @@ impl HyDbBlockSource {
 
 impl hyphen_db::HyDbDataSrc for HyDbBlockSource {
   fn identify(&self, raw: &[u8]) -> HyDbResult<HyDbBlockId> {
-    let block = Self::decode_block(raw)?;
+    // Header only: this answers "what is this block and what is its parent",
+    // and both live in the fixed 80-byte prefix.
+    let header = Self::decode_header(raw)?;
     Ok(HyDbBlockId {
       hash: Self::block_hash(raw)?,
-      prev_hash: HyDbHash(block.header.prev_hash.to_bytes()),
+      prev_hash: HyDbHash(header.prev_hash.to_bytes()),
     })
   }
 
   fn decode(&self, raw: &[u8]) -> HyDbResult<HyDbBlock> {
+    // Still two passes over the transactions: `decode_block` decodes them, and
+    // `tx_byte_ranges` decodes them again to record where each one ends. One
+    // pass could yield both, but only from inside `dash-primitives` — the
+    // daemon is barred from wire-level parsing by
+    // `architecture::runtime_primitive_work_stays_inside_primitives`, and that
+    // boundary is worth more than the pass. It needs a primitives-side
+    // `tx_byte_ranges` that returns the decoded transactions alongside the
+    // spans it already computes.
     let block = Self::decode_block(raw)?;
     let ranges = dash_primitives::block::tx_byte_ranges(raw)
       .map_err(|e| HyDbError::Derive(format!("scan txs: {e}")))?;
@@ -71,7 +98,7 @@ impl hyphen_db::HyDbDataSrc for HyDbBlockSource {
       )));
     }
 
-    let cb = crate::index::block::util::extract_cbtx_fields(&block, 0);
+    let cb = crate::index::block::util::extract_cbtx_fields(block.transactions.first(), 0);
     let header = HyDbHeader {
       hash: Self::block_hash(raw)?,
       prev_hash: HyDbHash(block.header.prev_hash.to_bytes()),
@@ -327,4 +354,93 @@ fn register(insert: ValidatorInsert) -> Option<HyDbVlRegister> {
     operator_reward: insert.operator_reward,
     validator_type: vl_type(&insert.validator_type),
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use hyphen_db::HyDbDataSrc;
+
+  /// Mainnet block 1, whole. Small enough to embed (186 bytes) and real, which
+  /// matters here: this seam has to reproduce identical facts from identical
+  /// bytes for reorg re-derivation to be sound, so the fixture is a block the
+  /// chain actually contains rather than a hand-built one.
+  const BLOCK_1: &str = concat!(
+    "02000000b67a40f3cd5804437a108f105533739c37e6229bc1adcab385140b59fd0f0000",
+    "a71c1aade44bf8425bec0deb611c20b16da3442818ef20489ca1e2512be43eef814cdb52",
+    "f0ff0f1edbf7010001010000000100000000000000000000000000000000000000000000",
+    "00000000000000000000ffffffff0a510101062f503253482fffffffff0100743ba40b00",
+    "0000232103a69850243c993c0645a6e8b38c774174174cc766cd3ec2140afd24d831b84c",
+    "41ac00000000"
+  );
+
+  fn block_1() -> Vec<u8> {
+    hex::decode(BLOCK_1).expect("fixture is valid hex")
+  }
+
+  fn src() -> HyDbBlockSource {
+    // Mainnet address versions.
+    HyDbBlockSource::new(0x4c, 0x10)
+  }
+
+  /// The header-only decode must agree with the whole-block decode on every
+  /// header field. `identify` reads the header alone now, and what keeps that
+  /// safe is that a block's header *is* its first 80 bytes — asserted here
+  /// rather than trusted.
+  #[test]
+  fn the_header_only_decode_agrees_with_the_whole_block_decode() {
+    let raw = block_1();
+    let header = HyDbBlockSource::decode_header(&raw).expect("header decodes");
+    let block = HyDbBlockSource::decode_block(&raw).expect("block decodes");
+
+    assert_eq!(
+      header.prev_hash.to_bytes(),
+      block.header.prev_hash.to_bytes()
+    );
+    assert_eq!(
+      header.merkle_root.to_bytes(),
+      block.header.merkle_root.to_bytes()
+    );
+    assert_eq!(header.time, block.header.time);
+    assert_eq!(header.bits, block.header.bits);
+    assert_eq!(header.nonce, block.header.nonce);
+    assert_eq!(header.version, block.header.version);
+  }
+
+  /// `identify` must name this block's parent as genesis. Asserted against the
+  /// real hash rather than against another decode of the same bytes, so a
+  /// decoder that is self-consistently wrong still fails.
+  #[test]
+  fn identify_names_the_genesis_parent() {
+    let id = src().identify(&block_1()).expect("identify succeeds");
+    let mut prev = id.prev_hash.0;
+    prev.reverse();
+    assert_eq!(
+      hex::encode(prev),
+      "00000ffd590b1485b3caadc19b22e6379c733355108f107a430458cdf3407ab6"
+    );
+  }
+
+  /// The facts `decode` derives, against what the chain says they are.
+  #[test]
+  fn decode_reproduces_the_blocks_real_facts() {
+    let raw = block_1();
+    let decoded = src().decode(&raw).expect("decode succeeds");
+
+    assert_eq!(decoded.header.size, 186);
+    assert_eq!(decoded.header.tx_count, 1);
+    assert_eq!(decoded.txs.len(), 1);
+
+    let tx = &decoded.txs[0];
+    let mut txid = tx.txid.0;
+    txid.reverse();
+    assert_eq!(
+      hex::encode(txid),
+      "ef3ee42b51e2a19c4820ef182844a36db1201c61eb0dec5b42f84be4ad1a1ca7"
+    );
+    // A block-1 coinbase: one input, marked as such, and one output.
+    assert_eq!(tx.inputs.len(), 1);
+    assert!(tx.inputs[0].coinbase);
+    assert_eq!(tx.outputs.len(), 1);
+  }
 }

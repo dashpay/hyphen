@@ -257,7 +257,8 @@ fn orphan_block_detail(
     .map_err(|e| ApiError::internal(format!("decode orphan block: {e}")))?;
   let block = ctx.block();
   let header = &block.header;
-  let cb = crate::index::block::util::extract_cbtx_fields(block, topo.height.get());
+  let cb =
+    crate::index::block::util::extract_cbtx_fields(block.transactions.first(), topo.height.get());
   let hash = ctx.block_hash();
   let bits = i32::try_from(header.bits).map_err(|_| ApiError::internal("block bits exceed i32"))?;
   let time =

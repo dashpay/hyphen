@@ -920,10 +920,15 @@ async fn absorb_with_ancestors(
   // `max_reorg_depth` is refused by the disconnect path anyway.
   let max_ancestors = usize::try_from(hyphen_db::tuning::max_reorg_depth().max(0)).unwrap_or(0);
   let mut requested: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
-  let mut stack = vec![raw];
+  // `Bytes` from the start, so handing the block to the engine is a refcount
+  // bump rather than a copy of the whole thing. The clone exists only because
+  // the missing-parent arm pushes the block back to retry after its ancestor,
+  // and that arm is the rare one — copying every block to serve it was paying
+  // a full memcpy per block for a path almost none of them take.
+  let mut stack = vec![Bytes::from(raw)];
   while let Some(raw) = stack.pop() {
     match ingest
-      .on_block(Bytes::from(raw.clone()))
+      .on_block(raw.clone())
       .await
       .map_err(|e| DaemonError::storage("absorb block", e))?
     {
@@ -933,7 +938,7 @@ async fn absorb_with_ancestors(
         let parent_raw = source.raw_block(&parent_hex).await?;
         verify_ancestor_response(&parent, &block_hash(&parent_raw)?)?;
         stack.push(raw);
-        stack.push(parent_raw);
+        stack.push(Bytes::from(parent_raw));
       }
       // Counted here rather than on the way in, because a `MissingParent`
       // block is pushed back and seen a second time.
