@@ -194,9 +194,9 @@ impl HyDbSearch for PgSearch {
     // Merge with the most specific kinds first, so trimming to the total
     // limit sheds block hits (the broadest kind) before anything else.
     let mut hits: Vec<HyDbQrSearchHit> = Vec::new();
-    hits.extend(txs.iter().map(|txid| HyDbQrSearchHit {
+    hits.extend(txs.iter().map(|tx| HyDbQrSearchHit {
       kind: HyDbSearchKind::Tx,
-      id: display_hex(txid),
+      id: display_hex(&tx.txid),
     }));
     hits.extend(addrs.into_iter().map(|addr| HyDbQrSearchHit {
       kind: HyDbSearchKind::Address,

@@ -180,7 +180,7 @@ async fn run_search(tmp: &TempDb) -> TestResult {
   );
   let txs = db.txs().search_prefix(prefix.to_owned(), 10).await?;
   assert!(
-    txs.contains(&HyDbHash(b1)),
+    txs.iter().any(|t| t.txid == HyDbHash(b1)),
     "tx domain search must match a UI prefix"
   );
 

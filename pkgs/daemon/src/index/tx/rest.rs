@@ -395,22 +395,21 @@ pub(crate) async fn search_by_txid_prefix(
   prefix: &str,
   limit: i64,
 ) -> Result<Vec<SearchResponse>, ApiError> {
-  let hashes = state
+  let hits = state
     .hydb()?
     .txs()
     .search_prefix(prefix.to_owned(), limit.max(0) as u32)
     .await
     .map_err(|e| hydb_err(e, "search transaction prefix"))?;
   Ok(
-    hashes
+    hits
       .into_iter()
-      .map(|txid| {
+      .map(|hit| {
         SearchResponse::Tx(SearchTxResult {
-          tx_hash: utils::view_hex(txid.as_bytes(), HashEndian::Ser),
-          // Prefix hits carry no positional detail; coinbase can't be inferred.
+          tx_hash: utils::view_hex(hit.txid.as_bytes(), HashEndian::Ser),
           tx_tags: TxTags {
             mined: true,
-            coinbase: false,
+            coinbase: hit.block_pos == 0,
           },
         })
       })
@@ -421,6 +420,9 @@ pub(crate) async fn search_by_txid_prefix(
 #[cfg(test)]
 mod tests {
   use axum::extract::{Path, State};
+
+  use crate::rest::openapi::SearchResponse;
+  use crate::utils::{self, HashEndian};
 
   fn normal_tx_bytes() -> Vec<u8> {
     let mut buf = Vec::new();
@@ -623,6 +625,85 @@ mod tests {
     assert_eq!(value.vin[0].address.as_deref(), Some("Xprev"));
     assert_eq!(value.vin[0].value, Some(50));
     assert_eq!(value.vout[0].address.as_deref(), Some("Xdest"));
+    Ok(())
+  }
+
+  /// A prefix-search hit must report `coinbase` from the row's own
+  /// `block_pos`, exactly as the exact-match path (`search_by_txid`) does.
+  ///
+  /// Before the fix, `search_by_txid_prefix` hardcoded `coinbase: false` for
+  /// every hit regardless of `block_pos`, so the same genesis coinbase txid
+  /// reported `coinbase:true` via an exact 64-hex lookup and `coinbase:false`
+  /// via a short prefix — this test seeds one coinbase (`block_pos == 0`) and
+  /// one ordinary tx (`block_pos == 1`) sharing a prefix and asserts both
+  /// report correctly through the prefix path.
+  #[tokio::test]
+  async fn search_by_txid_prefix_reports_coinbase_from_block_pos(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    fn tx(
+      txid: [u8; 32],
+      block_pos: i32,
+    ) -> Result<hyphen_db::query::HyDbQrTxDetail, Box<dyn std::error::Error>> {
+      Ok(hyphen_db::query::HyDbQrTxDetail {
+        txid: hyphen_db::HyDbHash::from_slice(&txid)?,
+        block_height: hyphen_db::HyDbHeight::new(0),
+        block_pos,
+        version: 1,
+        tx_type: hyphen_db::HyDbTxType::Normal,
+        lock_time: 0,
+        size: 100,
+        value_out: 0,
+        fee: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        payload: None,
+      })
+    }
+
+    // Stored (internal-order) bytes such that DISPLAY order (byte-reversed)
+    // starts with `aa` for both, so one prefix search matches them together.
+    let coinbase_txid = {
+      let mut b = [0x11u8; 32];
+      b[31] = 0xaa;
+      b
+    };
+    let normal_txid = {
+      let mut b = [0x22u8; 32];
+      b[31] = 0xaa;
+      b
+    };
+
+    let mut state = crate::tests::app_state();
+    state.hydb = crate::rest::hydb_fake::MemDb::new()
+      .with_tx(tx(coinbase_txid, 0)?)
+      .with_tx(tx(normal_txid, 1)?)
+      .into_hydb();
+
+    let results = super::search_by_txid_prefix(&state, "aa", 10)
+      .await
+      .expect("prefix search should succeed");
+    assert_eq!(results.len(), 2, "both txids share the `aa` display prefix");
+
+    let coinbase_hex = utils::view_hex(&coinbase_txid, HashEndian::Ser);
+    let normal_hex = utils::view_hex(&normal_txid, HashEndian::Ser);
+    for result in results {
+      let SearchResponse::Tx(row) = result else {
+        panic!("expected a tx search result");
+      };
+      if row.tx_hash == coinbase_hex {
+        assert!(
+          row.tx_tags.coinbase,
+          "block_pos 0 must report coinbase:true"
+        );
+      } else if row.tx_hash == normal_hex {
+        assert!(
+          !row.tx_tags.coinbase,
+          "block_pos 1 must report coinbase:false"
+        );
+      } else {
+        panic!("unexpected tx hash {}", row.tx_hash);
+      }
+    }
     Ok(())
   }
 }

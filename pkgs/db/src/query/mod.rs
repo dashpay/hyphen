@@ -31,7 +31,7 @@ pub use status::{
   HyDbQrStorageDiag, HyDbStatus,
 };
 pub use txs::{
-  HyDbQrTxDetail, HyDbQrTxIn, HyDbQrTxOut, HyDbQrTxSummary, HyDbTxIdx, HYDB_TX_IO_CAP,
+  HyDbQrTxDetail, HyDbQrTxIn, HyDbQrTxOut, HyDbQrTxRef, HyDbQrTxSummary, HyDbTxIdx, HYDB_TX_IO_CAP,
 };
 pub use validators::{HyDbQrValidator, HyDbQrVlCounts, HyDbQrVlHistory, HyDbVlIdx};
 

@@ -113,6 +113,15 @@ pub struct HyDbQrTxOut {
   pub spent_by: Option<HyDbOutpoint>,
 }
 
+/// A transaction hit from a prefix search: the txid plus enough positional
+/// detail (`block_pos`) for a caller to derive `coinbase` (`block_pos == 0`)
+/// without a second round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyDbQrTxRef {
+  pub txid: HyDbHash,
+  pub block_pos: i32,
+}
+
 /// Query handle for transaction data.
 #[async_trait]
 pub trait HyDbTxIdx: Send + Sync {
@@ -180,9 +189,10 @@ pub trait HyDbTxIdx: Send + Sync {
   /// Total number of canonical transactions (precomputed).
   async fn total(&self) -> HyDbResult<u64>;
 
-  /// txids whose DISPLAY-order hex (what the UI renders) starts with
-  /// `prefix`, most-recent first. Lowercased and `LIKE`-escaped internally.
-  async fn search_prefix(&self, prefix: String, limit: u32) -> HyDbResult<Vec<HyDbHash>>;
+  /// Txids (with `block_pos`) whose DISPLAY-order hex (what the UI renders)
+  /// starts with `prefix`, most-recent first. Lowercased and `LIKE`-escaped
+  /// internally.
+  async fn search_prefix(&self, prefix: String, limit: u32) -> HyDbResult<Vec<HyDbQrTxRef>>;
 }
 
 /// Clamp a caller's page size into `1..=`[`HYDB_TX_IO_CAP`], as an `i64` for
@@ -583,7 +593,7 @@ impl HyDbTxIdx for PgTxIdx {
     Ok(total.max(0) as u64)
   }
 
-  async fn search_prefix(&self, prefix: String, limit: u32) -> HyDbResult<Vec<HyDbHash>> {
+  async fn search_prefix(&self, prefix: String, limit: u32) -> HyDbResult<Vec<HyDbQrTxRef>> {
     let limit = limit.clamp(1, 100) as i64;
     // DISPLAY-order hex match (see the search contract in the schema), backed
     // by the display_hex expression index.
@@ -593,9 +603,13 @@ impl HyDbTxIdx for PgTxIdx {
     // and heap-fetched first. On the retained mainnet database a 4-character
     // prefix costs 39-48 ms ordered against 0.4 ms unordered, and txids are
     // random, so "most recent among prefix matches" is arbitrary UX anyway.
+    //
+    // `block_pos` is selected alongside `txid` so a caller can derive
+    // `coinbase` (`block_pos == 0`) itself, the same way the exact-match path
+    // does — a prefix hit is not missing that detail, it just used to not ask.
     let pattern = hex_prefix_pattern(&prefix);
-    let rows = sqlx::query_scalar!(
-      r#"SELECT txid AS "txid!" FROM transactions
+    let rows = sqlx::query!(
+      r#"SELECT txid AS "txid!", block_pos AS "block_pos!" FROM transactions
           WHERE display_hex(txid) LIKE $1 ESCAPE '\' LIMIT $2"#,
       pattern,
       limit
@@ -603,6 +617,14 @@ impl HyDbTxIdx for PgTxIdx {
     .fetch_all(&self.pg.query)
     .await
     .map_err(|e| HyDbError::pg("search transactions by prefix", e))?;
-    rows.iter().map(|txid| HyDbHash::from_slice(txid)).collect()
+    rows
+      .iter()
+      .map(|r| {
+        Ok(HyDbQrTxRef {
+          txid: HyDbHash::from_slice(&r.txid)?,
+          block_pos: r.block_pos,
+        })
+      })
+      .collect()
   }
 }

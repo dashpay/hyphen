@@ -170,8 +170,29 @@ impl HyDbTxIdx for MemDb {
     Ok(self.txs.len() as u64)
   }
 
-  async fn search_prefix(&self, _prefix: String, _limit: u32) -> HyDbResult<Vec<HyDbHash>> {
-    Ok(Vec::new())
+  async fn search_prefix(
+    &self,
+    prefix: String,
+    limit: u32,
+  ) -> HyDbResult<Vec<hyphen_db::query::HyDbQrTxRef>> {
+    // Mirrors the Postgres arm's contract: match on DISPLAY-order hex (the
+    // byte-reverse of the stored bytes), lowercase, prefix only.
+    let prefix = prefix.to_ascii_lowercase();
+    let mut hits: Vec<hyphen_db::query::HyDbQrTxRef> = self
+      .txs
+      .values()
+      .filter(|tx| {
+        let mut bytes = *tx.txid.as_bytes();
+        bytes.reverse();
+        hex::encode(bytes).starts_with(&prefix)
+      })
+      .map(|tx| hyphen_db::query::HyDbQrTxRef {
+        txid: tx.txid,
+        block_pos: tx.block_pos,
+      })
+      .collect();
+    hits.truncate(limit.max(1) as usize);
+    Ok(hits)
   }
 }
 
