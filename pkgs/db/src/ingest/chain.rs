@@ -18,6 +18,7 @@ use super::HyDbBlockSeen;
 use crate::error::{HyDbError, HyDbResult};
 use crate::layout::{partition_span, undo_span, UNDO_TABLES};
 use crate::records::HyDbDataSrc;
+use crate::tuning;
 use crate::types::HyDbHash;
 
 pub(super) const GENESIS_PREV: [u8; 32] = [0u8; 32];
@@ -114,6 +115,10 @@ pub(super) async fn ensure_partitions_for_range(pool: &PgPool, lo: i32, hi: i32)
         .execute(pool)
         .await
         .map_err(|e| HyDbError::pg("ensure partitions", e))?;
+      // A partition is append-only while it is open, so autovacuum there
+      // reclaims nothing and only competes with the ingest for the device.
+      // The debt is settled by `tuning::compact` once it stops growing.
+      tuning::defer_partition_vacuum(pool, &name).await?;
     }
   }
   ensure_undo_partitions(pool, lo, hi).await

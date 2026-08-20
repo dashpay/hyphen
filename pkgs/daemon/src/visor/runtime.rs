@@ -247,6 +247,40 @@ impl ServeRuntime {
       "storage layout in effect"
     );
 
+    // Settle what the last sync deferred, before anything is served. A sync
+    // writes its height partitions with autovacuum off, so this is where the
+    // reclaim is paid for — once, at a point where nothing is reading yet,
+    // rather than as contention against the ingest that created the debt.
+    // `--skip-compacting` trades that for starting now.
+    let open_index = startup_tip.map(|tip| tip as i32 / layout.partition_span);
+    match db.compaction_debt().await {
+      Ok(owed) if owed.is_empty() => {}
+      Ok(owed) if options.skip_compacting => info!(
+        tables = owed.len(),
+        "skipping compaction on request: {} tables keep their deferred vacuum, \
+         and autovacuum will reclaim them on its own schedule",
+        owed.len()
+      ),
+      Ok(owed) => {
+        info!(
+          tables = owed.len(),
+          "settling the vacuum a sync deferred before serving; \
+           pass --skip-compacting to start without it"
+        );
+        match db.compact(open_index).await {
+          Ok(done) => info!(
+            compacted = done.compacted,
+            deferred = done.deferred,
+            "compaction complete"
+          ),
+          // A failed reclaim costs bloat, not correctness, so it must not
+          // stop a node from coming up.
+          Err(e) => warn!(error = %e, "compaction failed; continuing with the debt outstanding"),
+        }
+      }
+      Err(e) => warn!(error = %e, "could not read the vacuum debt; skipping compaction"),
+    }
+
     let data_src: Arc<dyn hyphen_db::HyDbDataSrc> = Arc::new(
       crate::ingest::datasrc::HyDbBlockSource::new(layout.p2pkh_version, layout.p2sh_version),
     );
@@ -440,6 +474,7 @@ mod tests {
       governance_refresh_secs: 30,
       chainlock_refresh_secs: 5,
       protx_refresh_secs: 30,
+      skip_compacting: false,
     }
   }
 

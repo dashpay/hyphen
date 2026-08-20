@@ -64,13 +64,22 @@ pub const DEFAULT_COPY_THRESHOLD: usize = 5_000;
 /// churny table is being appended to far faster than a vacuum can keep pace
 /// with, and the pass that matters is the one after the sync, not the twenty
 /// during it.
-pub const SYNC_VACUUM_SCALE_FACTOR: f64 = 0.2;
-/// `autovacuum_analyze_scale_factor` under the `sync` profile. Deliberately
-/// *not* relaxed alongside the vacuum factor: turning off statistics
-/// collection during a sync is how a table arrives at the end of one with a
-/// plan cliff. This is the half of the pair an operator setting knobs
-/// individually gets wrong.
-pub const SYNC_ANALYZE_SCALE_FACTOR: f64 = 0.05;
+pub const SYNC_VACUUM_SCALE_FACTOR: f64 = 0.5;
+/// `autovacuum_analyze_scale_factor` under the `sync` profile.
+///
+/// This was 0.05 — *more* aggressive than the server's own 0.1 default — on
+/// the reasoning that suppressing statistics during a sync is how a table
+/// reaches the end of one with a plan cliff. The reasoning was right and the
+/// number was still wrong: analyze fires on growth rather than on churn, so it
+/// ran hardest exactly while a partition was filling, and on a mainnet sync it
+/// was the dominant cost. Measured at height 969,000, relaxing it took the
+/// ingest from 2.66 to 11.87 blocks per second.
+///
+/// The plan cliff is now answered where it belongs: [`compact`] runs
+/// `VACUUM (ANALYZE)` over everything the sync deferred, before the node
+/// serves. Statistics arrive once, off the write path, instead of twenty times
+/// on it.
+pub const SYNC_ANALYZE_SCALE_FACTOR: f64 = 0.5;
 
 /// Which coherent set of vacuum/storage parameters to run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -430,6 +439,140 @@ pub(crate) async fn apply_storage_for(
 }
 
 // ---------------------------------------------------------------------------
+// Sync-mode autovacuum debt, and the compaction that settles it
+// ---------------------------------------------------------------------------
+
+/// Autovacuum is switched off on a height partition for as long as it is
+/// being written, and the reclaim is deferred to [`compact`].
+///
+/// This trades disk for throughput deliberately. A height partition is
+/// append-only while it is open — measured at 0.0% dead tuples on a mainnet
+/// sync — so a vacuum there reclaims nothing and only competes for the same
+/// device the ingest is writing to. Relaxing the scale factors was not
+/// enough, because the pass that actually cost the throughput was
+/// *autoanalyze*, which fires on growth rather than on churn and so runs
+/// exactly when a partition is filling fastest.
+///
+/// Measured on a mainnet cold sync at height 969,000: 2.66 blocks/s with the
+/// partitions autovacuumed, 11.87 blocks/s with the analyze factor relaxed,
+/// on a USB-attached store where the write path was device-bound.
+const PARTITION_SYNC_OFF: &str = "autovacuum_enabled = false, toast.autovacuum_enabled = false";
+
+/// Switch autovacuum off on a freshly-created height partition.
+///
+/// Called from the partition-creation path rather than gated on the sync
+/// mode, because an open partition is append-only whichever mode is in force,
+/// and [`compact`] re-enables it once the partition stops growing. That also
+/// makes the state crash-safe without a ledger — see [`debt`].
+///
+/// # Errors
+///
+/// [`HyDbError::Pg`] if the `ALTER TABLE` fails.
+pub(crate) async fn defer_partition_vacuum(pool: &PgPool, partition: &str) -> HyDbResult<()> {
+  let sql = format!("ALTER TABLE {partition} SET ({PARTITION_SYNC_OFF})");
+  pool
+    .execute(sql.as_str())
+    .await
+    .map_err(|e| HyDbError::pg("tuning: defer partition vacuum", e))?;
+  Ok(())
+}
+
+/// Every table currently carrying deferred-vacuum debt, oldest partition
+/// first.
+///
+/// The debt is *derived from the catalog* rather than recorded in a ledger:
+/// a table with `autovacuum_enabled=false` is, by construction, one this
+/// crate switched off and has not yet compacted. That means a daemon killed
+/// mid-sync — or a machine that lost its storage device, which is how this
+/// was found — comes back knowing exactly what it owes, with no state to
+/// reconcile and nothing to get out of step.
+///
+/// # Errors
+///
+/// [`HyDbError::Pg`] if the catalog read fails.
+pub async fn debt(pool: &PgPool) -> HyDbResult<Vec<String>> {
+  let rows = sqlx::query_scalar::<_, String>(
+    "SELECT c.relname::text
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'r'
+        AND c.reloptions @> ARRAY['autovacuum_enabled=false']
+      ORDER BY c.relname",
+  )
+  .fetch_all(pool)
+  .await
+  .map_err(|e| HyDbError::pg("tuning: read vacuum debt", e))?;
+  Ok(rows)
+}
+
+/// Whether `table` belongs to the partition index still being written.
+///
+/// Pure, and separate from [`compact`], because the interesting case is the
+/// one a database cannot easily be put into for a test: index 1 must not
+/// swallow index 19. Suffix matching is enough for that — `_p1` is not a
+/// suffix of `tx_outputs_p19` — but only because the index is the end of the
+/// name, so the rule is stated here once rather than inferred at the call.
+fn in_open_partition(table: &str, open_index: Option<i32>) -> bool {
+  open_index.is_some_and(|idx| table.ends_with(&format!("_p{idx}")))
+}
+
+/// What a compaction pass did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HyDbCompaction {
+  /// Tables vacuumed and analyzed.
+  pub compacted: usize,
+  /// Tables that were owed but skipped because they are still being written.
+  pub deferred: usize,
+}
+
+/// Settle the deferred-vacuum debt: `VACUUM (ANALYZE)` every table that owes
+/// one, then hand it back to autovacuum.
+///
+/// `open_index` is the partition index still being appended to, if any. Every
+/// table in that index keeps its debt — one index spans five parents — because
+/// compacting a table the ingest is mid-write on would pay exactly the cost
+/// this mechanism exists to avoid. The next pass settles it once it stops
+/// growing.
+///
+/// Each table is its own statement on purpose. `VACUUM` cannot run inside a
+/// transaction, and one failure — a lock timeout, a device that went away —
+/// must not discard the passes that already succeeded.
+///
+/// # Errors
+///
+/// [`HyDbError::Pg`] if a vacuum or the re-enable fails.
+pub async fn compact(pool: &PgPool, open_index: Option<i32>) -> HyDbResult<HyDbCompaction> {
+  let owed = debt(pool).await?;
+  let mut done = HyDbCompaction::default();
+  for table in owed {
+    if in_open_partition(&table, open_index) {
+      done.deferred += 1;
+      continue;
+    }
+    let started = std::time::Instant::now();
+    pool
+      .execute(format!("VACUUM (ANALYZE) {table}").as_str())
+      .await
+      .map_err(|e| HyDbError::pg("tuning: compact", e))?;
+    pool
+      .execute(
+        format!("ALTER TABLE {table} RESET (autovacuum_enabled, toast.autovacuum_enabled)")
+          .as_str(),
+      )
+      .await
+      .map_err(|e| HyDbError::pg("tuning: hand table back to autovacuum", e))?;
+    done.compacted += 1;
+    tracing::info!(
+      table = table.as_str(),
+      elapsed_ms = started.elapsed().as_millis() as u64,
+      "compacted a deferred-vacuum table and re-enabled autovacuum"
+    );
+  }
+  Ok(done)
+}
+
+// ---------------------------------------------------------------------------
 // Process-wide resolved tunables
 // ---------------------------------------------------------------------------
 
@@ -621,6 +764,34 @@ mod tests {
   use super::*;
   use crate::layout::DEFAULT_PARTITION_SPAN;
 
+  /// The open partition is held back from compaction, and a low index must
+  /// not swallow a higher one that merely starts with the same digits.
+  #[test]
+  fn compaction_holds_back_only_the_open_partitions_own_index() {
+    for table in [
+      "tx_outputs_p1",
+      "address_txs_p1",
+      "transactions_p1",
+      "tx_inputs_p1",
+      "spends_p1",
+    ] {
+      assert!(
+        in_open_partition(table, Some(1)),
+        "{table} is in the open partition and must keep its debt"
+      );
+    }
+    // The bug this guards: `_p1` is not a suffix of `_p19`, so index 1 must
+    // leave index 19 alone — and every other index too.
+    for table in ["tx_outputs_p19", "tx_outputs_p10", "tx_outputs_p2"] {
+      assert!(
+        !in_open_partition(table, Some(1)),
+        "{table} is closed and must be compacted while partition 1 is open"
+      );
+    }
+    // Nothing is open: a fresh start owes the whole backlog.
+    assert!(!in_open_partition("tx_outputs_p1", None));
+  }
+
   #[test]
   fn default_config_emits_no_ddl() {
     let plan = storage_plan(&HyDbIngestCfg::default(), false);
@@ -691,13 +862,15 @@ mod tests {
     assert_eq!(sync_plan.len(), 1, "{sync_plan:?}");
     let sql = &sync_plan[0].sql;
     assert!(
-      sql.contains("autovacuum_vacuum_scale_factor = 0.2"),
+      sql.contains("autovacuum_vacuum_scale_factor = 0.5"),
       "{sql}"
     );
-    // The pair, not the knob: relaxing vacuum without keeping analyze is the
-    // failure mode the profile exists to prevent.
+    // The pair, not the knob. Both are relaxed together now: analyze fires on
+    // growth, so during a sync it ran hardest exactly when the write path
+    // could least afford it. The statistics it was protecting are taken once
+    // by `compact` instead, off the write path.
     assert!(
-      sql.contains("autovacuum_analyze_scale_factor = 0.05"),
+      sql.contains("autovacuum_analyze_scale_factor = 0.5"),
       "{sql}"
     );
     assert_ne!(sync_plan, storage_plan(&steady, false));

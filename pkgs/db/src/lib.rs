@@ -58,7 +58,7 @@ pub use records::{
   HyDbTxOut, HyDbVlEvent, HyDbVlRegister, HyDbVlRevoke, HyDbVlUpdRegistrar, HyDbVlUpdService,
 };
 pub use stepped::{HyDbSyncMode, SteppedSync};
-pub use tuning::{HyDbIngestCfg, HyDbTuningProfile};
+pub use tuning::{HyDbCompaction, HyDbIngestCfg, HyDbTuningProfile};
 // The query surface is broad; rather than mirror every row type at the crate
 // root, consumers reach them through `hyphen_db::query::*` (re-exported by
 // `query/mod.rs`). Only the domain traits are pulled in here, for the facade.
@@ -282,6 +282,46 @@ impl HyphenDb {
       .as_ref()
       .map_or_else(|| write.clone(), |pools| pools.admin.clone());
     Ok(HyDbIngest::new(data_src, write.clone(), admin, lock_conn))
+  }
+
+  /// Settle the deferred-vacuum debt a sync leaves behind.
+  ///
+  /// Height partitions are written with autovacuum off, because an open
+  /// partition is append-only and vacuuming it competes with the ingest for
+  /// the same device for no reclaim. This is the pass that pays that back:
+  /// `VACUUM (ANALYZE)` on every table still carrying the debt, then each is
+  /// handed to autovacuum again.
+  ///
+  /// Deliberately slow, and deliberately not on the write path. An operator
+  /// who needs to serve *now* can skip it and let autovacuum catch up on its
+  /// own terms; the cost of skipping is bloat and stale statistics, not
+  /// incorrectness.
+  ///
+  /// The partition still being written keeps its debt for the next pass — see
+  /// [`tuning::compact`]. A mock facade reports nothing done.
+  ///
+  /// # Errors
+  ///
+  /// [`HyDbError::Pg`] if a vacuum fails.
+  pub async fn compact(&self, open_index: Option<i32>) -> HyDbResult<HyDbCompaction> {
+    let Some(pools) = self.pools.as_ref() else {
+      return Ok(HyDbCompaction::default());
+    };
+    tuning::compact(&pools.admin, open_index).await
+  }
+
+  /// The tables currently carrying deferred-vacuum debt, for diagnostics and
+  /// for deciding whether a compaction pass is worth announcing. Empty on a
+  /// mock facade.
+  ///
+  /// # Errors
+  ///
+  /// [`HyDbError::Pg`] if the catalog read fails.
+  pub async fn compaction_debt(&self) -> HyDbResult<Vec<String>> {
+    let Some(pools) = self.pools.as_ref() else {
+      return Ok(Vec::new());
+    };
+    tuning::debt(&pools.admin).await
   }
 
   /// Per-pool utilization for diagnostics (empty on a mock facade).

@@ -85,6 +85,7 @@ mod tests {
       governance_refresh_secs: 1,
       chainlock_refresh_secs: 1,
       protx_refresh_secs: 1,
+      skip_compacting: false,
     }
   }
 

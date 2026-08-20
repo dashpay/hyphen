@@ -42,6 +42,17 @@ pub struct Args {
   /// would do with it. Read-only — it never writes or migrates.
   #[arg(long = "show-layout")]
   pub show_layout: bool,
+
+  /// Start serving without settling the vacuum debt a sync leaves behind.
+  ///
+  /// A sync writes its height partitions with autovacuum off, because an open
+  /// partition is append-only and vacuuming it only competes with the ingest
+  /// for the device. Startup normally pays that back before serving, which on
+  /// a large store takes minutes. This skips it for the case where the node
+  /// has to be up now; the cost is bloat and stale statistics until
+  /// autovacuum catches up on its own, never incorrectness.
+  #[arg(long = "skip-compacting")]
+  pub skip_compacting: bool,
 }
 
 impl Args {

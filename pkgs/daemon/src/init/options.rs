@@ -68,6 +68,10 @@ pub struct Options {
   pub governance_refresh_secs: u64,
   pub chainlock_refresh_secs: u64,
   pub protx_refresh_secs: u64,
+  /// Start serving without settling the vacuum a sync deferred. Carried here
+  /// rather than read from `Args` at the call site so the startup policy has
+  /// one shape, and so a test can exercise both paths without a CLI parse.
+  pub skip_compacting: bool,
 }
 
 impl Options {
@@ -161,6 +165,7 @@ impl Options {
         bind: cfg.api.as_ref().map(|api| api.bind.clone()),
         cors_origin: cfg.api.as_ref().and_then(|api| api.cors_origin.clone()),
       },
+      skip_compacting: args.skip_compacting,
       recent_mempool_txs: live_cfg.recent_mempool_txs,
       stream_client_buffer: live_cfg.stream_client_buffer,
       stream_heartbeat_secs: live_cfg.stream_heartbeat_secs,
@@ -424,6 +429,7 @@ mod tests {
       logconsole: false,
       docs_only: false,
       show_layout: false,
+      skip_compacting: false,
     }
   }
 
