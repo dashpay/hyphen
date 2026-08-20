@@ -623,10 +623,46 @@ impl ModeMachine {
 /// coordination. DDL runs on the admin pool, which is where
 /// `[db.client.admin] maint_work_mem` is set — the parameter that decides how
 /// fast a deferred build runs.
+/// An index build that is happening right now.
+///
+/// Published while a build runs because a build *stalls the advance* — it is
+/// taken on the write path, deliberately, since the writer a `CONCURRENTLY`
+/// build would avoid blocking is the one waiting for it. Without this the
+/// stall is indistinguishable from a slow chain: every layer's rate drops to
+/// zero at once and nothing says why. Measured on mainnet, one such build ran
+/// over ten minutes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyDbIndexBuild {
+  pub index: String,
+  pub table: String,
+  pub partition: i32,
+  /// `true` when the partition has closed, which is the build the mode was
+  /// deferring toward. `false` is a reconcile after leaving stepped mode.
+  pub closed: bool,
+  /// Position in this reconcile's run of builds, 1-based, and its length. The
+  /// pair is what turns "still building" into "3 of 7".
+  pub nth: usize,
+  pub of: usize,
+  /// When this build started, so a caller reports elapsed time from the
+  /// engine's own clock rather than from whenever it happened to notice.
+  pub started: Instant,
+}
+
+/// The stepped-sync state machine and the index maintenance it drives.
+///
+/// One per ingest handle, which is one per database: the ingest advisory lock
+/// already guarantees a single writer, so this needs no cross-process
+/// coordination. DDL runs on the admin pool, which is where
+/// `[db.client.admin] maint_work_mem` is set — the parameter that decides how
+/// fast a deferred build runs.
 #[derive(Debug)]
 pub struct SteppedSync {
   admin: PgPool,
   machine: ModeMachine,
+  /// The build in flight, or `None`. A watch channel rather than a counter so
+  /// a console attaching mid-build sees the current one instead of waiting for
+  /// the next.
+  build_tx: watch::Sender<Option<HyDbIndexBuild>>,
 }
 
 impl SteppedSync {
@@ -642,7 +678,14 @@ impl SteppedSync {
     Self {
       admin,
       machine: ModeMachine::new(enabled, enter_gap),
+      build_tx: watch::channel(None).0,
     }
+  }
+
+  /// The index build in flight, for the status surfaces. `None` between builds.
+  #[must_use]
+  pub fn index_build(&self) -> watch::Receiver<Option<HyDbIndexBuild>> {
+    self.build_tx.subscribe()
   }
 
   /// The admin pool DDL runs on, for callers that must re-apply storage
@@ -779,6 +822,7 @@ impl SteppedSync {
     }
     let live_indexes = existing_indexes(&self.admin, &wanted_indexes).await?;
 
+    let mut builds: Vec<(String, String, &DeferredIndex, i32)> = Vec::new();
     for partition in 0..=open {
       // Closed partitions carry the full set; the open one carries it only in
       // realtime mode — and only once that mode has actually been measured,
@@ -794,7 +838,10 @@ impl SteppedSync {
         }
         let name = child_index_name(spec.stem, partition);
         match (want, live_indexes.get(&name)) {
-          (true, None) => self.build(&name, &table, spec, partition, open).await?,
+          // Collected rather than built here, so the run's length is known
+          // before the first one starts — a build that stalls the advance for
+          // minutes is only legible as "3 of 7", never as "still building".
+          (true, None) => builds.push((name, table, spec, partition)),
           // Present under the right name but with the wrong uniqueness. For
           // the unique member this is the whole constraint on `address_txs`
           // missing, so it is rebuilt rather than accepted: a name match is
@@ -809,13 +856,36 @@ impl SteppedSync {
                the spec; dropping and rebuilding"
             );
             self.drop_index(&name, partition).await?;
-            self.build(&name, &table, spec, partition, open).await?;
+            builds.push((name, table, spec, partition));
           }
           (false, Some(_)) => self.drop_index(&name, partition).await?,
           _ => {}
         }
       }
     }
+
+    let of = builds.len();
+    for (nth, (name, table, spec, partition)) in builds.into_iter().enumerate() {
+      // Announce before starting: the whole point is that a caller watching
+      // the channel learns what is happening *during* the stall, not after it.
+      let _ = self.build_tx.send(Some(HyDbIndexBuild {
+        index: name.clone(),
+        table: table.clone(),
+        partition,
+        closed: partition < open,
+        nth: nth + 1,
+        of,
+        started: Instant::now(),
+      }));
+      let result = self.build(&name, &table, spec, partition, open).await;
+      if result.is_err() {
+        // Clear on the way out too, so a failed build does not leave the
+        // console reporting one that is no longer running.
+        let _ = self.build_tx.send(None);
+      }
+      result?;
+    }
+    let _ = self.build_tx.send(None);
 
     // Only claim the pair as settled when the open partition was actually
     // considered. Recording it after skipping the open one would short-circuit

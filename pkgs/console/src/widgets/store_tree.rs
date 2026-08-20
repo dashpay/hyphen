@@ -96,6 +96,21 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         status = "Stalled".to_string();
         style = theme::disconnected();
       }
+      // An index build outranks both, including "Stalled". A deferred build is
+      // taken on the write path deliberately, so the projection really has
+      // stopped and the watchdog really does see no progress — but that is the
+      // mode working, not a fault, and calling it stalled sends an operator
+      // hunting for a problem that is a scheduled index build.
+      if let Some(build) = snap.ingestion_diag.index_build.as_ref() {
+        status = format!(
+          "Indexing {}/{} p{} {}",
+          build.nth,
+          build.of,
+          build.partition,
+          theme::fmt_dur_secs(build.elapsed_secs)
+        );
+        style = theme::syncing();
+      }
       let bps = state.ingestion_sparkline.last().unwrap_or(0);
       let bps_str = if bps > 0 {
         bps.to_string()

@@ -375,6 +375,7 @@ impl ServeRuntime {
       ingest: ingest.ingest_handle(),
       ingest_status: ingest.status(),
       progress_rx: ingest.progress(),
+      index_build_rx: ingest.index_build(),
       source: Arc::clone(&source),
       rpc: rpc_client.clone(),
       zmq: zmq_source.clone(),

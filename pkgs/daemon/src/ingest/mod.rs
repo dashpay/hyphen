@@ -553,6 +553,15 @@ impl IngestVisor {
     self.ingest.progress()
   }
 
+  /// Watch channel of the deferred index build in flight. Read alongside
+  /// `progress`, which it explains: a build holds the write path, so progress
+  /// stops moving while one runs.
+  pub(crate) fn index_build(
+    &self,
+  ) -> tokio::sync::watch::Receiver<Option<hyphen_db::HyDbIndexBuild>> {
+    self.ingest.index_build_watch()
+  }
+
   /// Spawn the ingest loop.
   pub(crate) fn start(&mut self) {
     let db = self.db.clone();

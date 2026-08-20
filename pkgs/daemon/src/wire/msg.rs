@@ -219,6 +219,32 @@ pub struct IngestionDiag {
   pub backoff_until_epoch: Option<u64>,
   /// Whether the watchdog thinks ingestion is unexpectedly stalled.
   pub stalled: bool,
+  /// The deferred index build in flight, when there is one.
+  ///
+  /// Carried separately from `state` because it explains a state rather than
+  /// replacing it: a build is taken on the write path, so ingestion really is
+  /// committing-and-waiting, and every layer's rate really is zero. Without
+  /// this the console cannot tell that stall from a stopped chain. Defaulted
+  /// so a console talking to an older daemon still decodes the frame.
+  #[serde(default)]
+  pub index_build: Option<IndexBuildDiag>,
+}
+
+/// A deferred index build in progress.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexBuildDiag {
+  pub index: String,
+  pub table: String,
+  pub partition: i32,
+  /// `true` when the partition has closed — the build the deferral was aiming
+  /// at, as opposed to a reconcile after leaving stepped mode.
+  pub closed: bool,
+  /// Position in the run and its length, so a long stall reads as "3 of 7"
+  /// rather than as an unbounded wait.
+  pub nth: usize,
+  pub of: usize,
+  /// Seconds this build has been running.
+  pub elapsed_secs: u64,
 }
 
 /// Human-oriented ingestion activity state.

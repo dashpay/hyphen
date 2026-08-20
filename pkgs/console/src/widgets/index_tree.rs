@@ -227,6 +227,20 @@ fn index_title(state: &AppState) -> String {
   let Some(snap) = state.snapshot.as_ref() else {
     return " Indices ".to_owned();
   };
+  // A deferred build takes precedence over the lane. Every layer is written in
+  // one transaction per block, so while a build holds the write path all six
+  // rows read zero at once; naming the build here is what separates that from
+  // a chain that has stopped.
+  if let Some(build) = snap.ingestion_diag.index_build.as_ref() {
+    return format!(
+      " Indices [building {} — {}/{} p{} {}] ",
+      build.index,
+      build.nth,
+      build.of,
+      build.partition,
+      theme::fmt_dur_secs(build.elapsed_secs)
+    );
+  }
   let diag = &snap.index_scheduler_diag;
   let Some(active_lane) = diag.active_lane else {
     return " Indices ".to_owned();

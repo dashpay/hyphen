@@ -28,7 +28,7 @@ use tokio::sync::watch;
 
 use crate::error::HyDbResult;
 use crate::records::HyDbDataSrc;
-use crate::stepped::{HyDbSyncMode, SteppedSync};
+use crate::stepped::{HyDbIndexBuild, HyDbSyncMode, SteppedSync};
 use crate::types::{HyDbHash, HyDbHeight};
 
 /// What an advance is aiming at, and how far the node is beyond it.
@@ -181,6 +181,17 @@ impl HyDbIngest {
   /// Watch the mode, for callers that would otherwise poll it.
   pub fn sync_mode_watch(&self) -> watch::Receiver<HyDbSyncMode> {
     self.stepped.subscribe()
+  }
+
+  /// Watch the deferred index build in flight, `None` between builds.
+  ///
+  /// A build is taken on the write path on purpose, so it stalls the advance.
+  /// Every projection is written in one transaction per block, so during a
+  /// build *every* layer's rate reads as zero — which without this looks
+  /// identical to a stalled chain. This is what lets a status surface say
+  /// which index, on which partition, and how far through the run it is.
+  pub fn index_build_watch(&self) -> watch::Receiver<Option<HyDbIndexBuild>> {
+    self.stepped.index_build()
   }
 
   pub(crate) fn new(

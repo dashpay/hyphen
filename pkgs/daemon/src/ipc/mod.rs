@@ -70,6 +70,9 @@ pub(crate) struct HeartbeatWorkerTaskConfig {
   pub lifecycle: Arc<Lifecycle>,
   pub ingest_status: Arc<IngestStatus>,
   pub progress_rx: tokio::sync::watch::Receiver<hyphen_db::HyDbProgress>,
+  /// Read alongside `progress_rx`: an index build is what explains a progress
+  /// reading that has stopped advancing.
+  pub index_build_rx: tokio::sync::watch::Receiver<Option<hyphen_db::HyDbIndexBuild>>,
   pub config_snapshot: Arc<wire::msg::ConfigSnapshot>,
   pub pg_diag_base: Arc<wire::msg::PostgresDiag>,
   pub api_metrics: Arc<ApiServerMetrics>,
@@ -284,6 +287,7 @@ fn heartbeat_worker_task(cfg: HeartbeatWorkerTaskConfig) -> WorkerTask<IpcWorker
         zmq: cfg.zmq.as_deref().map(|client| client as &dyn ZmqSource),
         ingest_status: &cfg.ingest_status,
         progress: *cfg.progress_rx.borrow(),
+        index_build: cfg.index_build_rx.borrow().clone(),
         config_snap: &cfg.config_snapshot,
         pg_diag_base: &cfg.pg_diag_base,
         api_metrics: &cfg.api_metrics,

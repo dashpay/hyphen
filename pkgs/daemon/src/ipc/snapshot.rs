@@ -24,9 +24,9 @@ use crate::policy::api::API_DATA_SOURCE_TIMEOUT_SECS;
 use crate::sources::{RestSource, RpcSource, ZmqSource};
 use hyphend::wire::msg::{
   ChainProgressDiag, ConfigSnapshot, CorePipelineDiag, CorePipelineHealth, DaemonSnapshot,
-  ForwardLaneDiag, ForwardLanePhase, ForwardProgressState, IndexSchedulerDiag, IndexSchedulerLane,
-  IngestionDiag, IngestionStateName, PostgresDiag, RestSourceState, RpcDiag, SchedulerLoopPhase,
-  StageProgress, StorageDiag, ZmqDiag,
+  ForwardLaneDiag, ForwardLanePhase, ForwardProgressState, IndexBuildDiag, IndexSchedulerDiag,
+  IndexSchedulerLane, IngestionDiag, IngestionStateName, PostgresDiag, RestSourceState, RpcDiag,
+  SchedulerLoopPhase, StageProgress, StorageDiag, ZmqDiag,
 };
 
 const PG_SIZE_REFRESH_SECS: u64 = 30;
@@ -40,6 +40,10 @@ pub struct HeartbeatCtx<'a> {
   pub zmq: Option<&'a dyn ZmqSource>,
   pub ingest_status: &'a IngestStatus,
   pub progress: HyDbProgress,
+  /// The deferred index build in flight, snapshotted with `progress` because
+  /// the two are read together: this is what explains a `progress` that has
+  /// stopped moving.
+  pub index_build: Option<hyphen_db::HyDbIndexBuild>,
   pub config_snap: &'a ConfigSnapshot,
   pub pg_diag_base: &'a PostgresDiag,
   pub api_metrics: &'a ApiServerMetrics,
@@ -206,6 +210,15 @@ pub async fn build_snapshot(ctx: &HeartbeatCtx<'_>, state: &mut HeartbeatState) 
     retry_attempt: ctx.ingest_status.retry_attempt(),
     backoff_until_epoch: ctx.ingest_status.backoff_until_epoch(),
     stalled: ctx.ingest_status.stalled(),
+    index_build: ctx.index_build.as_ref().map(|b| IndexBuildDiag {
+      index: b.index.clone(),
+      table: b.table.clone(),
+      partition: b.partition,
+      closed: b.closed,
+      nth: b.nth,
+      of: b.of,
+      elapsed_secs: b.started.elapsed().as_secs(),
+    }),
   };
 
   let index_scheduler_diag = scheduler_diag(&ctx.progress, &ingestion_diag, now_epoch);

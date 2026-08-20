@@ -57,7 +57,7 @@ pub use records::{
   HyDbBlock, HyDbBlockId, HyDbCbFields, HyDbDataSrc, HyDbHeader, HyDbPayload, HyDbTx, HyDbTxIn,
   HyDbTxOut, HyDbVlEvent, HyDbVlRegister, HyDbVlRevoke, HyDbVlUpdRegistrar, HyDbVlUpdService,
 };
-pub use stepped::{HyDbSyncMode, SteppedSync};
+pub use stepped::{HyDbIndexBuild, HyDbSyncMode, SteppedSync};
 pub use tuning::{HyDbCompaction, HyDbIngestCfg, HyDbTuningProfile};
 // The query surface is broad; rather than mirror every row type at the crate
 // root, consumers reach them through `hyphen_db::query::*` (re-exported by
