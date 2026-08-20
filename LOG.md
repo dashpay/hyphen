@@ -7,7 +7,7 @@ Live supervision of a from-scratch mainnet sync on branch `sqlite-fixes`
 
 | | |
 |---|---|
-| Branch | `sqlite-fixes` @ `fb12d8d` |
+| Branch | `sqlite-fixes` @ `39fa046` |
 | Build | `cargo build` (debug — unwinding panics, overflow checks on) |
 | Node | dash-qt mainnet, height 2,524,639, unpruned |
 | Postgres | 18.3 Homebrew, `/Volumes/Samsung/pgdata`, unix socket `/tmp` |
@@ -106,7 +106,7 @@ tip=1023 node_tip=2524639 gap=2523616 open_partition=0
 All seven deferred indexes dropped for the open partition; `pg_class` shows
 zero `idx_%_p0` present; `/api/v1/status` reports `syncMode: stepped`.
 
-### 2. Every restart builds the open partition's indexes, then drops them — MEDIUM
+### 2. Every restart rebuilds the open partition's indexes — MEDIUM
 
 No correctness impact. Raised from LOW once it was measured on a populated
 partition rather than an empty one.
@@ -181,6 +181,99 @@ applied [db.ingest] storage tuning table="utxo_set"
   ALTER TABLE utxo_set SET (autovacuum_vacuum_scale_factor = 0.2,
                             autovacuum_analyze_scale_factor = 0.05)
 ```
+
+### 2b. The reconcile cost ten minutes, not fourteen seconds — FIXED
+
+Finding 2 was rated MEDIUM on a 14.0 s measurement. That estimate was wrong,
+and the mechanism was worse than "churn".
+
+A restart at height 983,432, with partition 9 some 83,000 blocks full, spent
+**over ten minutes** rebuilding the open partition's deferred indexes with
+ingest stalled behind them, and had still not finished the seventh:
+
+```
+idx_transactions_txid_p9           9.90s
+idx_transactions_list_p9           8.51s
+idx_transactions_display_txid_p9  26.83s
+... three more, then address_txs still running at the ten-minute mark
+```
+
+Every second of it was waste: the first real observation dropped all seven.
+
+**Root cause.** `ensure_settled` read the mode straight out of the state
+machine, but before the first observation that value is only its *default* —
+and the default is `Realtime`, the one mode that wants those indexes present.
+
+**Fixed in `39fa046`** by tracking whether the mode reflects a measurement and
+leaving the open partition alone until it does. Closed partitions still
+reconcile, because their set does not depend on the mode and building what
+they are missing is how a daemon killed mid-build heals itself.
+
+There is a second trap in the same code, guarded by the same commit: skipping
+the open partition while still recording `settled = (partition, mode)`
+short-circuits every later call, so the open partition is never reconciled and
+the deferred set stays in place for good. That would turn a slow restart into
+a sync that never defers again.
+
+**Verified live.** The next restart logged zero deferred-index builds, went
+straight from `compaction complete compacted=0 deferred=5` into ingesting, and
+on the following mode transition dropped all seven and left zero behind.
+
+### 3b. Autovacuum on untuned tables was the throughput collapse — FIXED
+
+Throughput fell from 92 blocks/s to 1.1 blocks/s by height 969,000. It was
+not block density, not the USB link's ceiling, and not a cache cliff — table
+cache-hit ratios were 98.8% and 99.5%.
+
+The sync profile's autovacuum relaxation reached exactly one of the five
+hottest tables. `TUNED_TABLES` has two entries and only `utxo_set` had
+`vacuum_tuned: true`:
+
+| table | reloptions in force |
+|---|---|
+| `utxo_set` | fillfactor, scale 0.2, analyze 0.05, cost limit, cost delay |
+| `address_stats` | `fillfactor=80` only |
+| `address_txs_p9` | **(none)** |
+| `transactions_p9` | **(none)** |
+| `tx_outputs_p9` | **(none)** |
+
+Every per-height partition — the tables that churn hardest during exactly the
+cold sync the profile exists for — ran on cluster defaults. Caught in the act:
+`autovacuum: ANALYZE public.address_txs_p9` waiting on `IO/AioIoCompletion`
+while the ingest `INSERT` waited on `IO/DataFileWrite` behind it. Each
+partition had taken 9 vacuums and 16 analyzes.
+
+The partitions are **append-only — measured 0.0% dead tuples** — so every one
+of those vacuums reclaimed nothing.
+
+Relaxing analyze took the ingest from **2.66 to 11.87 blocks/s, 4.46x**,
+sustained over the following twenty minutes.
+
+**Fixed in `2a4ac54`**, as a deliberate trade of disk for throughput:
+
+- Height partitions are created with autovacuum off, and the debt is settled
+  by `tuning::compact` once a partition stops growing.
+- The debt is *derived from `pg_class.reloptions`* rather than a ledger. A
+  table with autovacuum disabled is by construction one the engine switched
+  off and has not compacted, so a daemon killed mid-sync — or one whose
+  storage device leaves the bus, which happened here — comes back knowing
+  what it owes with nothing to reconcile.
+- The pass runs at startup before anything is served, with
+  `--skip-compacting` for an operator who needs the node up now. Skipping
+  costs bloat and stale statistics, never correctness, so a failed pass warns
+  and continues rather than holding the node down.
+- `SYNC_ANALYZE_SCALE_FACTOR` went 0.05 to 0.5. It had been *more* aggressive
+  than the server default, on the reasoning that suppressed statistics cause a
+  post-sync plan cliff. The reasoning was right and the number was wrong:
+  analyze fires on growth, so it ran hardest while a partition filled. The
+  cliff is now answered by the compaction pass, which takes statistics once,
+  off the write path, instead of twenty times on it.
+
+One change was made and then reverted. `address_stats` was switched to
+`vacuum_tuned: true` and three tests failed; rechecking the data showed the
+tests were right. It had taken 1 autovacuum and 5 analyzes all run, so it was
+never the cost — its slowness is upsert and bloat, not autovacuum passes. The
+original note about HOT updates needing vacuum to keep running stands.
 
 ### 4. Slow-statement warnings on the write path — OBSERVING
 
@@ -261,6 +354,42 @@ pause deliberately outlives the condition that caused it. A repeat costs
 minutes rather than a night. The durable fix is still to move `pgdata` off a
 volume that disconnects under sustained write load.
 
+### 6. Prefix search reported every coinbase as non-coinbase — FIXED
+
+Found by probing the search API mid-sync. The same txid answered differently
+depending on which path resolved it:
+
+```
+full   e0028eb9…662c7  ->  "coinbase": true
+prefix q=e002          ->  "coinbase": false
+```
+
+`block_height=0` confirms the genesis coinbase, so the prefix path was wrong.
+It was a deliberate shortcut that asserted a value it admitted it did not
+have:
+
+```rust
+// Prefix hits carry no positional detail; coinbase can't be inferred.
+coinbase: false,
+```
+
+Every block has exactly one coinbase, so the prefix path misreported a real
+fraction of its hits. Fixed in `83e000b`: `search_prefix` now carries
+`block_pos` — already present in the table it was scanning — and the REST
+layer derives `coinbase: block_pos == 0` exactly as the exact-match path does.
+
+Three reported search failures were investigated and are **not** defects:
+hex prefixes of 6 to 63 characters, ambiguous base58/hex terms, and
+out-of-range heights all returned 503. One shared cause — the query pool's 5 s
+`statement_timeout` firing on a prefix scan whose index stepped sync had
+deliberately dropped. Out-of-range heights are the same cause, not a separate
+numeric bug: every decimal string is also valid hex, so the term takes the hex
+arm too. The one fair criticism is that `503 … retry shortly` is misleading
+when the index will not exist again for hours.
+
+An empty `validators` table was also reported as an untested gap. It is
+correct: DIP3 masternodes do not activate on mainnet until height 1,028,160.
+
 ## Sync progress
 
 | Time (UTC) | Height | Notes |
@@ -269,6 +398,26 @@ volume that disconnects under sustained write load.
 | 21:08:14 | 1,023 | stepped mode engaged, gap 2,523,616 |
 | 21:09:30 | 4,114 | |
 | 21:10:20 | 9,810 | 25,939 txs, database 90 MB |
+| 22:07 | 642,047 | ~92 blk/s; killed by the harness, resumed clean |
+| 23:22 | 905,612 | storage device dropped out (finding 5) |
+| 12:43 | 905,740 | recovered; WAL replay found 128 blocks more than reported |
+| 07:58 | 969,000 | throughput collapsed to 1.1 blk/s (finding 3b) |
+| 08:00 | 969,298 | autovacuum relaxed: 2.66 -> 11.87 blk/s |
+| 08:21 | 983,652 | reconcile fix in; zero wasted index builds on restart |
+| 08:25 | 986,329 | 12.4M txs, database 80.3 GB, stepped |
 
-Rates this early are not meaningful — blocks before roughly 100k are nearly
-empty. Real figures start once block weight picks up.
+Rates before roughly 100k are not meaningful — those blocks are nearly empty.
+
+Throughput history, with causes rather than a single average:
+
+| phase | rate | limited by |
+|---|---|---|
+| 0 to 642k | ~92 blk/s | mostly small blocks |
+| to 969k | fell to 1.1 blk/s | autovacuum on untuned partitions |
+| after the relax | 11.9 blk/s | device-bound random writes over USB |
+
+The remaining ceiling is the store's transport. The volume is USB-attached and
+measured ~84 MB/s at ~3,200 tps, which is small-random-write bound; that is
+the figure the ingest now runs against, and it does not move without moving
+`pgdata`. Disk headroom is not a concern — 855 GiB free against 80 GB used at
+39% of the chain.
