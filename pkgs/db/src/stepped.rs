@@ -407,6 +407,18 @@ struct MachineState {
   /// neither has changed, which is every advance but a boundary crossing or a
   /// transition.
   settled: Option<(i32, HyDbSyncMode)>,
+  /// Whether `mode` reflects an actual measurement yet.
+  ///
+  /// Until the first [`ModeMachine::observe`], `mode` is only its default, and
+  /// the default is `Realtime` — which is the mode that *wants* the open
+  /// partition's deferred indexes present. Acting on it at startup meant a
+  /// restart mid-sync built the open partition's whole set and the first real
+  /// observation immediately dropped it again. Measured on a mainnet restart
+  /// with partition 9 some 83,000 blocks full, the first three of seven builds
+  /// alone cost 45 seconds of pure waste, all of it while ingest was stalled
+  /// behind them. Closed partitions are unaffected: their set does not depend
+  /// on the mode.
+  observed: bool,
 }
 
 /// The mode decision, with no database attached.
@@ -444,6 +456,7 @@ impl ModeMachine {
         toward_stepped: 0,
         toward_realtime: 0,
         settled: None,
+        observed: false,
       }),
       mode_tx,
     }
@@ -486,6 +499,9 @@ impl ModeMachine {
   pub fn observe(&self, tip: Option<i32>, node_tip: i32) -> Option<SteppedTransition> {
     let gap = i64::from(node_tip) - tip.map_or(-1, i64::from);
     let mut st = self.lock();
+    // From here the mode is measured rather than assumed, so the open
+    // partition's index set can be acted on — see `MachineState::observed`.
+    st.observed = true;
 
     if !self.enabled {
       // The flag is off: never enter, and if a previous configuration left us
@@ -715,17 +731,32 @@ impl SteppedSync {
   /// [`HyDbError::Pg`] if a build or drop fails.
   pub async fn ensure_settled(&self, height: i32) -> HyDbResult<()> {
     let open = partition_of(height);
-    let mode = {
+    let (mode, observed) = {
       let st = self.machine.lock();
       if st.settled == Some((open, st.mode)) {
         return Ok(());
       }
-      st.mode
+      (st.mode, st.observed)
     };
-    self.reconcile(open, mode).await
+    self.reconcile_scoped(open, mode, observed).await
   }
 
   async fn reconcile(&self, open: i32, mode: HyDbSyncMode) -> HyDbResult<()> {
+    self.reconcile_scoped(open, mode, true).await
+  }
+
+  /// `mode_is_measured` gates the *open* partition only. Before the first
+  /// observation the mode is a default rather than a fact, and the default
+  /// wants the open partition's indexes present, so acting on it builds a set
+  /// the first real observation then drops. Closed partitions are reconciled
+  /// either way — their set does not depend on the mode, and building what
+  /// they are missing is how a daemon killed mid-build heals itself.
+  async fn reconcile_scoped(
+    &self,
+    open: i32,
+    mode: HyDbSyncMode,
+    mode_is_measured: bool,
+  ) -> HyDbResult<()> {
     // One round trip for the partitions that exist, one for the indexes that
     // exist. Everything after is decided in memory.
     let mut wanted_tables: Vec<String> = Vec::new();
@@ -750,7 +781,11 @@ impl SteppedSync {
 
     for partition in 0..=open {
       // Closed partitions carry the full set; the open one carries it only in
-      // realtime mode.
+      // realtime mode — and only once that mode has actually been measured,
+      // since otherwise this builds a set the first observation drops.
+      if partition == open && !mode_is_measured {
+        continue;
+      }
       let want = partition < open || mode == HyDbSyncMode::Realtime;
       for spec in &DEFERRED_INDEXES {
         let table = partition_name(spec.table, partition);
@@ -782,8 +817,14 @@ impl SteppedSync {
       }
     }
 
-    let mut st = self.machine.lock();
-    st.settled = Some((open, mode));
+    // Only claim the pair as settled when the open partition was actually
+    // considered. Recording it after skipping the open one would short-circuit
+    // every later call for this (partition, mode) and leave the open partition
+    // permanently unreconciled — the deferred set would never be dropped.
+    if mode_is_measured {
+      let mut st = self.machine.lock();
+      st.settled = Some((open, mode));
+    }
     Ok(())
   }
 
@@ -915,6 +956,32 @@ async fn existing_indexes(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// A restart must not act on the open partition's index set before it has
+  /// measured the gap, and must not then record the pair as settled — doing so
+  /// short-circuits every later call and leaves the deferred set in place for
+  /// good. Both halves are asserted because either alone is still a bug.
+  #[test]
+  fn the_open_partition_waits_for_a_measured_mode() {
+    let machine = ModeMachine::new(true, 50_000);
+    assert!(
+      !machine.lock().observed,
+      "a fresh machine has measured nothing, so its mode is only a default"
+    );
+
+    // One observation, far behind: the mode is now a fact.
+    let transition = machine.observe(Some(0), 2_000_000);
+    assert!(
+      machine.lock().observed,
+      "observing must mark the mode as measured even before the hold elapses"
+    );
+    // The hold means the first observation does not itself move the mode,
+    // which is exactly why `observed` has to be tracked separately from it.
+    assert!(
+      transition.is_none() || machine.lock().mode == HyDbSyncMode::Stepped,
+      "the first observation either holds or moves; both leave it measured"
+    );
+  }
 
   /// The one property that makes the whole mode safe rather than merely fast:
   /// nothing the write path reads is ever dropped. A deferred index that
