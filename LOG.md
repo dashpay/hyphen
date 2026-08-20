@@ -140,10 +140,23 @@ It is not free on a restart part-way through. Run 3 resumed at height
 22:09:19  all seven dropped for the open partition
 ```
 
-That cost scales with how full the open partition is, so a restart late in a
-sync pays more than this, not less — and it is paid on every restart, which
-is exactly when an operator is already waiting. Folding the first reconcile
-into the first observation, rather than running it ahead of one, removes it.
+A third restart, after the storage dropout in finding 5, confirmed what the
+cost tracks. Partition 9 had opened only 5,740 blocks earlier, and the same
+seven builds cost **10.2 s** — less than partition 6's 14.0 s despite the
+chain being denser there, because the table held a fraction of the rows:
+
+```
+partition 6, 42,047 blocks in (42% full)   14.0 s
+partition 9,  5,740 blocks in ( 6% full)   10.2 s
+```
+
+So the bill is proportional to rows already in the open partition, not to
+height. Two consequences. A restart just after a partition boundary is
+cheap, which is why this one was; and a restart just *before* one, in the
+dense back half of the chain, is the worst case rather than the 14 s
+measured here. It is paid on every restart, which is exactly when an
+operator is already waiting. Folding the first reconcile into the first
+observation, rather than running it ahead of one, removes it entirely.
 
 ### 3. Partition close builds the deferred indexes as designed — WORKING
 
