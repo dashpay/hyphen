@@ -340,6 +340,36 @@ it is more likely lock or I/O wait. And `address_stats` is an upsert with
 per-address contention, which is the one that would degrade worst as the
 address set grows. Revisit once the sync is deep enough for a trend.
 
+**Resolved.** `pg_stat_statements`, loaded at the tuning restart, confirms
+both halves. The cost is I/O wait, not row count — `pg_stat_activity` caught
+backends parked on `DataFileRead` and `DataFileWrite` — and `address_stats` is
+indeed the worst of them:
+
+```
+total_ms  calls  mean_ms  statement
+  54192     135   401.42  SELECT block_height FROM transactions WHERE txid=$1
+  24117     222   108.64  SELECT address, balance, ... FROM address_stats
+  16086     222    72.46  INSERT INTO utxo_set ...
+  14649     222    65.99  INSERT INTO address_stats ...
+   8500     220    38.64  SELECT outpoint, address, value FROM utxo_set
+```
+
+Two things this overturned. The `address_stats` pre-read had been dismissed as
+a round-trip-only saving worth doing last; at 108 ms mean and second by total
+time it is the largest ingest-side cost, and belongs first. And the top entry
+is not an ingest statement at all — it is `PgTxIdx::height_of` on the read
+path, whose `ORDER BY block_height DESC LIMIT 1` must sequentially scan the
+open partition because stepped sync deferred that partition's txid index. It
+is the designed cost of deferral meeting read traffic, not a defect, but at
+54 s of database time per ten minutes it competes directly with ingest —
+so tx-detail reads are worth avoiding while a sync is running.
+
+A third finding was self-inflicted. The progress sampler backing this log ran
+`count(*) FROM transactions` every 60 seconds, measured at 2,147 ms against a
+20M-row partitioned table — a full scan competing with the ingest it existed
+to observe. Replaced with the planner's `n_live_tup` estimate. The `tx/s`
+column is therefore not comparable across that change; blocks per second is.
+
 ### 5. Storage device dropped out under load — HARDWARE — RECOVERED
 
 Not a code defect, and recorded because the daemon's behaviour under it is
@@ -435,6 +465,53 @@ when the index will not exist again for hours.
 
 An empty `validators` table was also reported as an untested gap. It is
 correct: DIP3 masternodes do not activate on mainnet until height 1,028,160.
+
+### 8. Postgres was not running its own intended configuration — FIXED
+
+The live instance was on stock defaults where `hyphen_deploy/compose.base.yml`
+specifies otherwise. Measured before: `full_page_writes=on` (source:
+*default*), `max_wal_size=16GB`, `shared_buffers=8GB`, against a deploy config
+of `full_page_writes=off -c max_wal_size=4GB -c wal_init_zero=off
+-c wal_recycle=off`.
+
+Turning full-page writes off is the trade this schema is built for and says so
+in its own header: the database holds chain-derivable data only, so a torn
+page after an unclean shutdown costs a resync rather than data loss. Running
+the safe-for-general-purpose default on a store designed for the opposite was
+simply drift.
+
+Applied at a clean restart, with `shared_buffers` raised to 16 GB (52 GB host)
+and `pg_stat_statements` preloaded. Measured either side, over a 250 s window:
+
+| | before | after |
+|---|---|---|
+| WAL per block | 2.030 MB | **1.321 MB** |
+| WAL rate | 13.2 MB/s | 3.50 MB/s |
+| Throughput | 3.67 blk/s | **4.42 blk/s** |
+
+So a 1.54x cut in WAL per block and a 1.20x throughput gain — real, and
+smaller than the WAL figure alone suggests. The arithmetic explains why: WAL
+was roughly 13 of the ~31 MB/s of Postgres-visible writes, so removing a third
+of it removes about 15% of that traffic. The earlier "12x amplification"
+estimate that made this look larger had a measured numerator and an *estimated*
+denominator, and the estimate flattered it. What full-page writes never touched
+— checkpointer relation-page writes at ~17.6 MB/s, and random reads — is what
+`shared_buffers` addresses, and that benefit arrives as the cache warms rather
+than at once.
+
+Two follow-ons worth recording. The daemon's own startup review immediately
+caught that raising `shared_buffers` had left `effective_cache_size` at 1.5x
+rather than the usual 3x, which pushes the planner *off* index scans and would
+have partly worked against the change; it is a planner hint, so 40 GB was
+applied by reload with no second restart. And the supervisor's Postgres
+auto-restart carried only the bind flag, so a future dropout would have revived
+the server on defaults and silently undone all of this — the only symptom being
+throughput quietly returning to what it was. It now carries the full flag set.
+
+The settings are passed as `pg_ctl` flags rather than `ALTER SYSTEM`
+deliberately: a value that prevents startup is undone by editing the command,
+whereas `postgresql.auto.conf` lives on a volume this environment cannot write
+to, which would have made a bad `shared_buffers` unrecoverable without help.
 
 ## Sync progress
 
