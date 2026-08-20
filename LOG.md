@@ -7,7 +7,7 @@ Live supervision of a from-scratch mainnet sync on branch `sqlite-fixes`
 
 | | |
 |---|---|
-| Branch | `sqlite-fixes` @ `39fa046` |
+| Branch | `sqlite-fixes` @ `922ec90` |
 | Build | `cargo build` (debug — unwinding panics, overflow checks on) |
 | Node | dash-qt mainnet, height 2,524,639, unpruned |
 | Postgres | 18.3 Homebrew, `/Volumes/Samsung/pgdata`, unix socket `/tmp` |
@@ -275,6 +275,52 @@ tests were right. It had taken 1 autovacuum and 5 analyzes all run, so it was
 never the cost — its slowness is upsert and bloat, not autovacuum passes. The
 original note about HOT updates needing vacuum to keep running stands.
 
+### 3c. The compaction step, measured — WORKING
+
+The trade in finding 3b, priced on real data. First restart with genuine debt
+settled partition 9's five tables and correctly held back partition 10's five
+as the open one:
+
+```
+settling the vacuum a sync deferred before serving  tables=10
+  address_txs_p9    31.6s
+  tx_inputs_p9      26.1s
+  spends_p9         23.8s
+  tx_outputs_p9     16.7s
+  transactions_p9    9.2s
+                   ------
+                   107.0s
+compaction complete compacted=5 deferred=5
+```
+
+So the bill is roughly **1.8 minutes of one-time startup cost per 100,000
+blocks**, against the 4.46x throughput it buys during the sync. Paid once with
+nothing competing for the device, rather than continuously against the ingest
+that created it. Autovacuum is handed back per table as each completes, so a
+compacted table is under normal management again immediately instead of
+staying deferred until the whole pass ends.
+
+### 7. An index build was indistinguishable from a stall — FIXED
+
+A deferred build runs on the write path deliberately: the writer a
+`CONCURRENTLY` build would avoid blocking is the one waiting for it. So while
+one runs the projection stops, and because derivation is atomic per block,
+*every* layer's rate reads zero at once. The console had no surface for it, and
+the watchdog called it `Stalled` — which sends an operator hunting for a fault
+that is a scheduled index build.
+
+Worth stating plainly, because it looks like a display bug and is not: the six
+layers are **not** independent and their identical rates are truthful. The
+daemon says so where it fills them in — "every stage is lock-step at the
+canonical tip: derivation is atomic per block in the storage engine". There are
+no per-layer heights to decouple. What is asynchronous is the index build.
+
+Fixed in `922ec90`: `SteppedSync` publishes the build in flight on a watch
+channel, the heartbeat carries it beside the state it explains, and the console
+renders it in the chain-data row and the indices panel title, outranking
+`Stalled`. The run is collected before the first build starts, so a long wait
+reads as `3/7` rather than an unbounded "still building".
+
 ### 4. Slow-statement warnings on the write path — OBSERVING
 
 Not yet a finding. The 500 ms `slow_query_ms` threshold fires on ingest
@@ -405,6 +451,9 @@ correct: DIP3 masternodes do not activate on mainnet until height 1,028,160.
 | 08:00 | 969,298 | autovacuum relaxed: 2.66 -> 11.87 blk/s |
 | 08:21 | 983,652 | reconcile fix in; zero wasted index builds on restart |
 | 08:25 | 986,329 | 12.4M txs, database 80.3 GB, stepped |
+| 08:45 | 1,000,328 | partition 10 created with vacuum deferred |
+| 08:59 | 1,009,793 | first real compaction pass: 5 settled, 5 deferred, 107s |
+| 09:05 | 1,010,938 | 12.9M txs, database 89.1 GB |
 
 Rates before roughly 100k are not meaningful — those blocks are nearly empty.
 
