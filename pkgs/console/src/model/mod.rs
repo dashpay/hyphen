@@ -207,6 +207,9 @@ pub struct AppState {
   pub overview_sub: OverviewSubFocus,
   pub store_cursor: usize,
 
+  /// Explicit `--api-url`, when the operator gave one. Otherwise the endpoint
+  /// comes from the daemon's reported config, so this stays `None`.
+  pub api_url_override: Option<String>,
   pub rest_pending: bool,
   pub rest_error: Option<String>,
 
@@ -264,6 +267,7 @@ impl AppState {
       index_tree_cursor: 0,
       overview_sub: OverviewSubFocus::Indices,
       store_cursor: 0,
+      api_url_override: None,
       rest_pending: false,
       rest_error: None,
       index_sparklines: HashMap::new(),
