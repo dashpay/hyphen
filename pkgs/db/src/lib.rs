@@ -303,11 +303,18 @@ impl HyphenDb {
   /// # Errors
   ///
   /// [`HyDbError::Pg`] if a vacuum fails.
-  pub async fn compact(&self, open_index: Option<i32>) -> HyDbResult<HyDbCompaction> {
+  /// `keep_going` is consulted between tables, so a shutdown request during a
+  /// long pass is answered promptly instead of after it. Whatever is left
+  /// stays owed and settles on the next start.
+  pub async fn compact(
+    &self,
+    open_index: Option<i32>,
+    keep_going: &(dyn Fn() -> bool + Sync),
+  ) -> HyDbResult<HyDbCompaction> {
     let Some(pools) = self.pools.as_ref() else {
       return Ok(HyDbCompaction::default());
     };
-    tuning::compact(&pools.admin, open_index).await
+    tuning::compact(&pools.admin, open_index, keep_going).await
   }
 
   /// The tables currently carrying deferred-vacuum debt, for diagnostics and

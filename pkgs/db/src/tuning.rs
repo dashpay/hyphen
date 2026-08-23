@@ -542,10 +542,34 @@ pub struct HyDbCompaction {
 /// # Errors
 ///
 /// [`HyDbError::Pg`] if a vacuum or the re-enable fails.
-pub async fn compact(pool: &PgPool, open_index: Option<i32>) -> HyDbResult<HyDbCompaction> {
+pub async fn compact(
+  pool: &PgPool,
+  open_index: Option<i32>,
+  keep_going: &(dyn Fn() -> bool + Sync),
+) -> HyDbResult<HyDbCompaction> {
   let owed = debt(pool).await?;
   let mut done = HyDbCompaction::default();
   for table in owed {
+    // Between tables, never inside one. A pass can run for many minutes — 60
+    // tables took seventeen on the mainnet store — and a `VACUUM` is not
+    // interruptible from here, so without this a shutdown request went
+    // unanswered until the whole pass finished. That is long enough for a
+    // container runtime to give up waiting and send `SIGKILL`, turning an
+    // orderly stop into the unclean one `full_page_writes=off` is least
+    // forgiving of.
+    //
+    // Stopping early costs nothing, which is the payoff for deriving the debt
+    // from the catalog rather than a ledger: whatever is left is still marked
+    // in `pg_class` and simply gets settled by the next pass.
+    if !keep_going() {
+      tracing::info!(
+        compacted = done.compacted,
+        deferred = done.deferred,
+        "compaction interrupted by shutdown; the rest stays owed and settles \
+         on the next start"
+      );
+      return Ok(done);
+    }
     if in_open_partition(&table, open_index) {
       done.deferred += 1;
       continue;
@@ -763,6 +787,33 @@ async fn verify_undo_partitions(pool: &PgPool, lo: i32, hi: i32) -> HyDbResult<(
 mod tests {
   use super::*;
   use crate::layout::DEFAULT_PARTITION_SPAN;
+
+  /// A shutdown during a pass must be answered between tables, and must leave
+  /// the remaining debt intact. Asserted on the predicate rather than through
+  /// a database, because what matters is that the loop consults it at all —
+  /// the failure mode was a pass that never asked, and so ran for seventeen
+  /// minutes past a `SIGTERM` until the runtime lost patience and killed it.
+  #[test]
+  fn a_shutdown_is_answered_between_tables() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Stops after the second consultation, standing in for a signal arriving
+    // partway through.
+    let asked = AtomicUsize::new(0);
+    let keep_going = || asked.fetch_add(1, Ordering::Relaxed) < 2;
+
+    assert!(keep_going(), "first table proceeds");
+    assert!(keep_going(), "second table proceeds");
+    assert!(!keep_going(), "the third is where the pass stops");
+    assert_eq!(asked.load(Ordering::Relaxed), 3);
+
+    // And the debt itself is catalog-derived, so stopping early cannot lose
+    // track of what is left: an untouched table is still marked in pg_class.
+    // This is the property that makes interrupting safe rather than merely
+    // possible.
+    assert!(in_open_partition("tx_outputs_p9", Some(9)));
+    assert!(!in_open_partition("tx_outputs_p8", Some(9)));
+  }
 
   /// The open partition is held back from compaction, and a low index must
   /// not swallow a higher one that merely starts with the same digits.

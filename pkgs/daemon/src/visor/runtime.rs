@@ -267,7 +267,14 @@ impl ServeRuntime {
           "settling the vacuum a sync deferred before serving; \
            pass --skip-compacting to start without it"
         );
-        match db.compact(open_index).await {
+        // The pass yields to a shutdown request between tables. Without that
+        // a `docker stop` waits out the whole thing and is answered with
+        // `SIGKILL` — the unclean exit this store is least forgiving of.
+        let keep_going = {
+          let lifecycle = Arc::clone(&lifecycle);
+          move || lifecycle.running()
+        };
+        match db.compact(open_index, &keep_going).await {
           Ok(done) => info!(
             compacted = done.compacted,
             deferred = done.deferred,
