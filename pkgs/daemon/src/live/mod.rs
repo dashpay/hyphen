@@ -55,6 +55,9 @@ pub(crate) struct MempoolSummaryWorkerTaskConfig {
   pub live_state: Arc<state::LiveState>,
   pub rpc: Arc<CoreRpcClient>,
   pub lifecycle: Arc<Lifecycle>,
+  /// Read to decide whether the projection can answer at all — the mempool is
+  /// meaningless while the chain behind it is still being built.
+  pub ingest_status: Arc<crate::ingest::IngestStatus>,
   pub recent_mempool_txs: usize,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
@@ -285,15 +288,16 @@ where
 
 fn mempool_summary_worker_task(cfg: MempoolSummaryWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("mempool_summary", Arc::clone(&cfg.lifecycle), async move {
-    mempool::refresh_summary_loop(
-      cfg.db,
-      cfg.live_state,
-      cfg.rpc,
-      cfg.lifecycle,
-      cfg.recent_mempool_txs,
-      cfg.p2pkh_version,
-      cfg.p2sh_version,
-    )
+    mempool::refresh_summary_loop(mempool::MempoolRefresh {
+      db: cfg.db,
+      live_state: cfg.live_state,
+      rpc: cfg.rpc,
+      lifecycle: cfg.lifecycle,
+      ingest_status: cfg.ingest_status,
+      keep: cfg.recent_mempool_txs,
+      p2pkh_version: cfg.p2pkh_version,
+      p2sh_version: cfg.p2sh_version,
+    })
     .await;
     Ok(())
   })

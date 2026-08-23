@@ -306,6 +306,7 @@ impl ServeRuntime {
         rpc: rpc_client.clone(),
         zmq: zmq_source.clone(),
         lifecycle: Arc::clone(&lifecycle),
+        ingest_status: ingest.status(),
         overlay_plan,
         p2pkh_version: layout.p2pkh_version,
         p2sh_version: layout.p2sh_version,

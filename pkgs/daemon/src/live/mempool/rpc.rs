@@ -122,17 +122,64 @@ async fn refresh_summary_once(
   refresh_recent_snapshot(db, live_state, rpc, keep, p2pkh_version, p2sh_version).await
 }
 
+/// What the refresh loop needs. A struct rather than a parameter list because
+/// the list had grown past the point where the call site said anything about
+/// which `u8` was which.
+pub(crate) struct MempoolRefresh {
+  pub db: HyphenDb,
+  pub live_state: Arc<LiveState>,
+  pub rpc: Arc<dyn RpcSource>,
+  pub lifecycle: Arc<Lifecycle>,
+  pub ingest_status: Arc<crate::ingest::IngestStatus>,
+  pub keep: usize,
+  pub p2pkh_version: u8,
+  pub p2sh_version: u8,
+}
+
 /// Periodically refresh the in-RAM mempool summary + recent set until shutdown.
-pub async fn refresh_summary_loop(
-  db: HyphenDb,
-  live_state: Arc<LiveState>,
-  rpc: Arc<dyn RpcSource>,
-  lifecycle: Arc<Lifecycle>,
-  keep: usize,
-  p2pkh_version: u8,
-  p2sh_version: u8,
-) {
+pub(crate) async fn refresh_summary_loop(params: MempoolRefresh) {
+  let MempoolRefresh {
+    db,
+    live_state,
+    rpc,
+    lifecycle,
+    ingest_status,
+    keep,
+    p2pkh_version,
+    p2sh_version,
+  } = params;
   while lifecycle.running() {
+    // Nothing to do until the projection reaches the node. A mempool
+    // transaction spends outputs that already exist, and resolving one needs
+    // those outputs indexed; while the chain behind it is still being built
+    // the answer is not stale, it is unavailable. Attempting it anyway is not
+    // free — each refresh issues txid lookups that scan the partition stepped
+    // sync has deliberately left unindexed, competing for the disk with the
+    // ingest that would eventually make the answer possible, and failing
+    // regardless. Measured on a mainnet sync: 47 consecutive hydrate
+    // failures, every one of them unavoidable.
+    if !ingest_status.projection_near_tip() {
+      // Nothing is published rather than something wrong: before the first
+      // successful refresh the summary is already absent, which is the honest
+      // answer while the projection cannot resolve a mempool transaction.
+      warn::warn_every(
+        "live_mempool_awaiting_tip",
+        std::time::Duration::from_secs(API_REFRESH_WARN_INTERVAL_SECS),
+        |suppressed| {
+          tracing::info!(
+            suppressed,
+            local_tip = ?ingest_status.local_tip(),
+            node_tip = ?ingest_status.network_tip(),
+            "mempool idle until the projection reaches the node tip; \
+             its transactions cannot be resolved before then"
+          );
+        },
+      );
+      lifecycle
+        .sleep(std::time::Duration::from_secs(SUMMARY_REFRESH_SECS))
+        .await;
+      continue;
+    }
     if let Err(e) = refresh_summary_once(
       &db,
       &live_state,

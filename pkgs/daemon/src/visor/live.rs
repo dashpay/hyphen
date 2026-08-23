@@ -27,6 +27,9 @@ pub(crate) struct LiveVisorConfig {
   pub rpc: Option<Arc<CoreRpcClient>>,
   pub zmq: Option<Arc<CoreZmqSource>>,
   pub lifecycle: Arc<Lifecycle>,
+  /// Shared with the mempool worker, which needs to know whether the
+  /// projection has reached the node before its queries can be answered.
+  pub ingest_status: Arc<crate::ingest::IngestStatus>,
   pub mempool_enabled: bool,
   pub islock_enabled: bool,
   pub network_enabled: bool,
@@ -57,6 +60,7 @@ pub(crate) struct LiveVisorOptionsInput {
   pub rpc: Option<Arc<CoreRpcClient>>,
   pub zmq: Option<Arc<CoreZmqSource>>,
   pub lifecycle: Arc<Lifecycle>,
+  pub ingest_status: Arc<crate::ingest::IngestStatus>,
   pub overlay_plan: OverlayPlan,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
@@ -164,6 +168,7 @@ impl LiveVisor {
       rpc: input.rpc,
       zmq: input.zmq,
       lifecycle: input.lifecycle,
+      ingest_status: input.ingest_status,
       mempool_enabled: options.live.mempool,
       islock_enabled: options.live.islock,
       network_enabled: options.live.network,
@@ -259,6 +264,7 @@ impl Visor for LiveVisor {
           live_state: Arc::clone(&self.handles.live_state),
           rpc,
           lifecycle: Arc::clone(&self.cfg.lifecycle),
+          ingest_status: Arc::clone(&self.cfg.ingest_status),
           recent_mempool_txs: self.cfg.recent_mempool_txs,
           p2pkh_version: self.cfg.p2pkh_version,
           p2sh_version: self.cfg.p2sh_version,

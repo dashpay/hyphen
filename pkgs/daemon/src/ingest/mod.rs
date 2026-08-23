@@ -56,6 +56,11 @@ const CHAIN_TX_STATS_REFRESH_SECS: u64 = 300;
 /// progress while behind the node tip.
 const STALL_AFTER_SECS: u64 = 120;
 
+/// How far behind the node the projection may be before the live subsystems
+/// that read it are considered unable to answer. See
+/// [`IngestStatus::projection_near_tip`].
+const LIVE_TIP_MARGIN_BLOCKS: u32 = 4;
+
 fn unix_now() -> u64 {
   std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
@@ -594,6 +599,30 @@ impl IngestStatus {
 
   pub(crate) fn local_tip(&self) -> Option<u32> {
     u32::try_from(self.local_tip.load(Ordering::Relaxed)).ok()
+  }
+
+  /// Whether the projection is close enough to the node for the live
+  /// subsystems that read it to get sensible answers.
+  ///
+  /// A mempool transaction spends outputs that already exist, very often ones
+  /// created within the last few blocks. Resolving it needs those outputs in
+  /// the projection, so while the projection is behind, hydration cannot
+  /// succeed — it is not merely stale, it is *unanswerable*. During the
+  /// mainnet sync this was not free: every refresh issued txid lookups that
+  /// seq-scanned the open partition, whose txid index stepped sync had
+  /// deliberately dropped, and then failed anyway. The work competed for the
+  /// same disk as the ingest that would eventually have made it possible.
+  ///
+  /// The margin is small on purpose. Being a block or two behind is ordinary
+  /// while following the tip and should not switch the mempool off, but tens
+  /// of blocks behind means recent outputs are missing and hydration starts
+  /// failing again.
+  pub(crate) fn projection_near_tip(&self) -> bool {
+    match (self.local_tip(), self.network_tip()) {
+      (Some(local), Some(node)) => node.saturating_sub(local) <= LIVE_TIP_MARGIN_BLOCKS,
+      // Nothing ingested yet, or the node's height is not known: not near.
+      _ => false,
+    }
   }
 
   pub(crate) fn blocks_ingested_total(&self) -> u64 {
@@ -1313,6 +1342,45 @@ mod tests {
   /// F2: a run must report progress by transaction as well as by block, and
   /// the two must disagree while density is still rising ahead of the indexer.
   /// The reference run read 36% by block at ~6% by transaction; the numbers
+  /// The live subsystems must stay idle while the projection is behind, and
+  /// must not switch off for the block-or-two lag that is ordinary at the tip.
+  /// Both halves matter: gating too eagerly makes the mempool flap during
+  /// normal operation, and not gating at all is what had it issuing 47
+  /// consecutive unanswerable queries against a partition whose index stepped
+  /// sync had dropped.
+  #[test]
+  fn live_reads_wait_for_the_projection_to_reach_the_node() {
+    let status = IngestStatus::new();
+    // Nothing ingested yet, and no node height: not near the tip.
+    assert!(!status.projection_near_tip());
+
+    // Mid-sync, a million blocks behind.
+    status.local_tip.store(1_204_010, Ordering::Relaxed);
+    status.network_tip.store(2_525_888, Ordering::Relaxed);
+    assert!(!status.projection_near_tip());
+
+    // Just outside the margin.
+    status.local_tip.store(
+      2_525_888 - i64::from(LIVE_TIP_MARGIN_BLOCKS) - 1,
+      Ordering::Relaxed,
+    );
+    assert!(!status.projection_near_tip());
+
+    // Exactly at the margin, and fully caught up: both are near.
+    status.local_tip.store(
+      2_525_888 - i64::from(LIVE_TIP_MARGIN_BLOCKS),
+      Ordering::Relaxed,
+    );
+    assert!(status.projection_near_tip());
+    status.local_tip.store(2_525_888, Ordering::Relaxed);
+    assert!(status.projection_near_tip());
+
+    // Ahead of the node — briefly possible between a connect and the next
+    // poll — must not read as "behind" through an underflow.
+    status.local_tip.store(2_525_890, Ordering::Relaxed);
+    assert!(status.projection_near_tip());
+  }
+
   /// below are that run's, with the node's own count as the denominator.
   #[test]
   fn progress_is_reported_by_transaction_as_well_as_block() {
