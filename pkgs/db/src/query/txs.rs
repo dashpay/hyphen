@@ -250,14 +250,37 @@ impl PgTxIdx {
   /// occurrence is the one every part of a read resolves against. Pinning the
   /// height also prunes the partition fan-out to one partition and keeps a
   /// duplicated txid from concatenating both occurrences' rows.
+  /// Deliberately unordered, with the maximum taken here rather than by the
+  /// database.
+  ///
+  /// `ORDER BY block_height DESC LIMIT 1` reads like the cheaper phrasing and
+  /// is a trap. The primary key is `(block_height, txid)`, so that ordering
+  /// lets the planner walk the primary key backwards and stop at the first
+  /// matching txid — which it costs as near-free, because it expects to stop
+  /// almost immediately. When the txid *is* present that bet pays: 0.099 ms.
+  /// When it is absent there is nothing to stop at, so the scan runs to
+  /// completion across every partition. Measured on the full mainnet store,
+  /// 26 partitions and 70M rows:
+  ///
+  /// ```text
+  ///   ORDER BY block_height DESC LIMIT 1, txid absent   722,345 buffers   1094 ms
+  ///   plain WHERE txid = $1, absent                          95 buffers      0.1 ms
+  /// ```
+  ///
+  /// The absent case is not exotic — it is every lookup for a transaction
+  /// that is still in the mempool, which is exactly what the live mempool
+  /// path asks about. Dropping the ordering lets the planner use
+  /// `idx_transactions_txid`, and the maximum is taken over the handful of
+  /// rows a txid can have. Only a pre-BIP30 recurrence yields more than one,
+  /// and a scan of the full mainnet store found no txid occurring twice — so
+  /// this is defending a case the chain does not currently contain, which is
+  /// the whole reason the height is pinned rather than assumed.
   async fn height_of(&self, key: &[u8]) -> HyDbResult<Option<i32>> {
-    sqlx::query_scalar!(
-      "SELECT block_height FROM transactions WHERE txid = $1 ORDER BY block_height DESC LIMIT 1",
-      key
-    )
-    .fetch_optional(&self.pg.query)
-    .await
-    .map_err(|e| HyDbError::pg("transaction height", e))
+    let heights = sqlx::query_scalar!("SELECT block_height FROM transactions WHERE txid = $1", key)
+      .fetch_all(&self.pg.query)
+      .await
+      .map_err(|e| HyDbError::pg("transaction height", e))?;
+    Ok(heights.into_iter().max())
   }
 
   /// `limit` inputs of `(txid, height)` from `from_index` upward.
