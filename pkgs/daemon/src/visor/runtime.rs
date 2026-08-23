@@ -345,6 +345,7 @@ impl ServeRuntime {
         node_tip: ingest.status().network_tip_handle(),
         sync_mode: ingest.status().sync_mode_handle(),
         ingest_progress_epoch: ingest.status().progress_epoch_handle(),
+        ingest_status: ingest.status(),
         bind,
         cors_origin: options.api.cors_origin.clone(),
         server_metrics: Arc::clone(&api_metrics),

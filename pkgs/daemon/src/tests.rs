@@ -44,5 +44,6 @@ pub fn app_state() -> AppState {
     node_tip: Arc::new(std::sync::atomic::AtomicI64::new(-1)),
     sync_mode: Arc::new(std::sync::atomic::AtomicU8::new(0)),
     ingest_progress_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    ingest_status: Arc::new(crate::ingest::IngestStatus::new()),
   }
 }

@@ -22,6 +22,18 @@ use std::time::Duration;
 pub struct Lifecycle {
   interrupted: AtomicBool,
   terminated: AtomicBool,
+  /// Set when a subsystem interrupted the daemon on its own — an
+  /// unrecoverable ingest failure, or a bounded park that timed out with no
+  /// operator intervention — as opposed to an operator's SIGINT/SIGTERM.
+  ///
+  /// The top-level run loop only ever *waits* for an OS signal; without this
+  /// flag it has no way to notice that an internal subsystem already decided
+  /// to shut down, so it would keep waiting forever (a live process, in `ps`,
+  /// answering nothing) even after every worker had wound itself down. This
+  /// is also what lets `main` choose a non-zero exit code for that case, so a
+  /// supervisor watching the process (not just the API) sees it die instead
+  /// of a silent, permanent "graceful" shutdown that never returns.
+  fatal: AtomicBool,
   tx: tokio::sync::watch::Sender<bool>,
 }
 
@@ -30,6 +42,7 @@ impl std::fmt::Debug for Lifecycle {
     f.debug_struct("Lifecycle")
       .field("interrupted", &self.interrupted.load(Ordering::Relaxed))
       .field("terminated", &self.terminated.load(Ordering::Relaxed))
+      .field("fatal", &self.fatal.load(Ordering::Relaxed))
       .finish()
   }
 }
@@ -41,6 +54,7 @@ impl Lifecycle {
     Arc::new(Self {
       interrupted: AtomicBool::new(false),
       terminated: AtomicBool::new(false),
+      fatal: AtomicBool::new(false),
       tx,
     })
   }
@@ -51,10 +65,28 @@ impl Lifecycle {
     let _ = self.tx.send(true);
   }
 
+  /// Like [`Self::interrupt`], but marks the shutdown as self-initiated by a
+  /// subsystem rather than requested by an operator. `main` watches for this
+  /// so it can actually exit — not just quiesce workers and then wait
+  /// forever for a signal that was never coming — and does so with a
+  /// non-zero exit code, so a supervisor (Docker, systemd) restarts the
+  /// process instead of leaving it parked with nothing watching it.
+  pub fn interrupt_fatal(&self) {
+    self.fatal.store(true, Ordering::SeqCst);
+    self.interrupt();
+  }
+
   /// Signal loops to abandon work immediately (SIGTERM).
   pub fn stop(&self) {
     self.terminated.store(true, Ordering::SeqCst);
     self.interrupt();
+  }
+
+  /// `true` when the shutdown in progress was triggered by
+  /// [`Self::interrupt_fatal`] rather than an operator signal.
+  #[inline]
+  pub fn is_fatal(&self) -> bool {
+    self.fatal.load(Ordering::Relaxed)
   }
 
   /// `true` after a graceful interrupt has been requested.

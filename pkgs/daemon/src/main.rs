@@ -227,6 +227,14 @@ async fn run_async(
   }
 
   let lifecycle = runtime.lifecycle();
+  // Subscribed *before* the heartbeat select below can itself request a
+  // shutdown, so a subsystem that calls `lifecycle.interrupt_fatal()` (an
+  // unrecoverable ingest failure, or a bounded park timing out) wakes this
+  // loop up on its own. Without this, the only way out of this select was an
+  // OS signal — a subsystem-initiated shutdown would quiesce every worker
+  // and then leave this loop waiting for a SIGINT/SIGTERM that nobody sends,
+  // which is a live, unresponsive process indistinguishable from a hang.
+  let mut internal_rx = lifecycle.subscribe();
 
   // ── Heartbeat / signal loop ───────────────────────────────────────────
   info!("all subsystems started");
@@ -242,11 +250,32 @@ async fn run_async(
       lifecycle.stop();
       false
     }
+    changed = internal_rx.changed() => {
+      if changed.is_ok() && *internal_rx.borrow_and_update() {
+        info!("a subsystem requested shutdown on its own; shutting down");
+      }
+      false
+    }
   };
   let graceful_deadline = graceful_shutdown_started
     .then(|| tokio::time::Instant::now() + Duration::from_secs(GRACEFUL_SHUTDOWN_TIMEOUT_SECS));
 
   runtime.stop_all(&mut sigterm, graceful_deadline).await?;
+
+  // A subsystem-initiated shutdown (an unrecoverable ingest failure, or a
+  // bounded park that timed out with no operator intervention) must end the
+  // process with a non-zero exit code: that is the only liveness signal a
+  // container supervisor without a healthcheck has, and returning `Ok(())`
+  // here — as every operator-requested shutdown does — would report success
+  // for exactly the condition this exists to surface.
+  if lifecycle.is_fatal() {
+    return Err(DaemonError::Supervisor {
+      subsystem: "ingest",
+      failure: crate::error::SupervisorFailure::Unavailable(
+        "shut down on its own (unrecoverable failure, or a bounded park that timed out)",
+      ),
+    });
+  }
 
   Ok(())
 }

@@ -120,6 +120,7 @@ fn classify_pg(code: Option<&str>, message: &str) -> Outcome {
       _ if sqlstate.starts_with("53") => Outcome::Warning, // insufficient resources
       _ if sqlstate.starts_with("57") => Outcome::Warning, // operator intervention
       "55006" => Outcome::Warning,                         // database in recovery
+      _ if sqlstate.starts_with("58") => classify_class_58(sqlstate),
       _ => Outcome::Error,
     };
   }
@@ -134,11 +135,70 @@ fn classify_pg(code: Option<&str>, message: &str) -> Outcome {
     "the database system is shutting down",
     "the database system is starting up",
     "could not connect to server",
+    // Below: class-58 (`system_error`) wording, for the rare path where the
+    // driver surfaces an OS-level I/O failure as a plain `sqlx::Error` (e.g.
+    // a socket write failing outright) rather than as a `Database` error with
+    // a SQLSTATE attached. When a SQLSTATE *is* present, `classify_class_58`
+    // above runs instead and this list is never consulted — see the doc
+    // comment on that function for why "Device not configured" reaching this
+    // fallback was never actually the bug.
+    "device not configured",
+    "input/output error",
+    "no such device",
   ];
   if TRANSIENT.iter().any(|p| lower.contains(p)) {
     Outcome::Warning
   } else {
     Outcome::Error
+  }
+}
+
+/// Classify a class-58 (`system_error`) SQLSTATE: an error PostgreSQL raises
+/// about the world outside itself — the filesystem, the OS, the device under
+/// its data directory — rather than about the statement it was asked to run.
+///
+/// This is the class the mainnet incident actually hit: an external SSD
+/// dropped off the bus mid-sync, a read failed with `ENXIO` ("Device not
+/// configured"), and PostgreSQL reported it as SQLSTATE `58030` (`io_error`).
+/// Before this function existed, class 58 fell through the blanket `_ =>
+/// Outcome::Error` arm in [`classify_pg`], which the daemon turns into
+/// [`FailureAction::Pause`](crate) — a park that needs a human — for a fault
+/// that resolved itself when the device remounted a few minutes later. A
+/// vanished-then-returned device is the textbook definition of transient.
+///
+/// The message-substring `TRANSIENT` fallback in [`classify_pg`] was never in
+/// a position to catch this: the driver *did* attach a SQLSTATE (`58030`), so
+/// `classify_pg` returns from the `Some(sqlstate)` arm before the substring
+/// list is ever consulted. That fallback only runs when the driver error
+/// carries no SQLSTATE at all (a connection that never reached the server),
+/// which is a different failure shape from a statement that reached Postgres
+/// and got an error back.
+///
+/// Class 58 is not treated as uniformly transient, though — two of its named
+/// members describe a genuine misconfiguration rather than a device blip:
+///
+/// - `58030` `io_error` — a read/write against the data directory failed at
+///   the OS level. External to Postgres by definition, and exactly the shape
+///   of a device that dropped off the bus and can come back. **Warning.**
+/// - `58P01` `undefined_file` — Postgres looked for a file it expects to
+///   exist (e.g. a tablespace or WAL segment) and it was not there. Retrying
+///   reads the same absent file; this needs an operator to explain why the
+///   file is gone. **Error.**
+/// - `58P02` `duplicate_file` — the reverse shape: Postgres tried to create a
+///   file that already exists. Also not something a retry resolves on its
+///   own. **Error.**
+/// - Any other/future class-58 code (including the bare `58000` root) is
+///   classified `Warning`, on the same reasoning as `58030`: this whole class
+///   is specifically the one PostgreSQL reserves for external system faults,
+///   as opposed to the classes covering query, schema, or permission errors.
+///   Erring toward "retry" here matches the ladder's own backstop
+///   ([`MAX_BACKOFF_SECS`](crate) caps it, and the daemon's bounded park
+///   catches a false "Warning" that never actually resolves), whereas erring
+///   toward "needs a human" is exactly the defect this function exists to fix.
+fn classify_class_58(sqlstate: &str) -> Outcome {
+  match sqlstate {
+    "58P01" | "58P02" => Outcome::Error,
+    _ => Outcome::Warning,
   }
 }
 
@@ -166,7 +226,21 @@ mod tests {
   #[case("55006", Outcome::Warning)] // object in use — database in recovery
   #[case("23505", Outcome::Error)] // unique violation — permanent
   #[case("42P01", Outcome::Error)] // undefined table — permanent
-  #[case("42601", Outcome::Error)] // syntax error — permanent
+  #[case("42601", Outcome::Error)]
+  // syntax error — permanent
+  // Class 58 (`system_error`): the mainnet incident's actual SQLSTATE.
+  // `58030` is `io_error` — a vanished-then-returned block device is
+  // transient by definition. Before this fix, every class-58 code fell
+  // through the blanket `_ => Outcome::Error` arm, which is what turned a
+  // device blip into a 26-hour operator-required park.
+  #[case("58030", Outcome::Warning)] // io_error — external I/O fault
+  #[case("58000", Outcome::Warning)] // bare system_error root — unclassified, err toward retry
+  #[case("58003", Outcome::Warning)]
+  // an unnamed/future class-58 member
+  // `undefined_file`/`duplicate_file` are real misconfiguration, not a device
+  // blip: retrying re-reads the same absent (or already-present) file.
+  #[case("58P01", Outcome::Error)] // undefined_file
+  #[case("58P02", Outcome::Error)] // duplicate_file
   fn classifies_pg_by_sqlstate(#[case] code: &str, #[case] want: Outcome) {
     let err = HyDbError::Pg {
       message: "irrelevant".into(),
@@ -192,12 +266,53 @@ mod tests {
     "ERROR: duplicate key value violates unique constraint",
     Outcome::Error
   )]
+  // Defense-in-depth for the rare case where a class-58 fault surfaces as a
+  // driver-level I/O failure with no SQLSTATE at all (e.g. a socket write
+  // failing outright rather than a statement the server itself rejected).
+  #[case(
+    "could not read blocks 369426..369426 in file \"base/16401/369426\": Device not configured",
+    Outcome::Warning
+  )]
+  #[case(
+    "Io(Custom { kind: Other, error: \"Input/output error\" })",
+    Outcome::Warning
+  )]
   fn classifies_pg_by_message_fallback(#[case] message: &str, #[case] want: Outcome) {
     let err = HyDbError::Pg {
       message: message.into(),
       code: None,
     };
     assert_eq!(err.classify(), want);
+  }
+
+  /// The exact incident: a `58030` (`io_error`) SQLSTATE from PostgreSQL for
+  /// "could not read blocks ... Device not configured" must classify as
+  /// transient, not permanent — this is what turns a 26-hour operator-required
+  /// park into a backoff-ladder retry that resolves within minutes once the
+  /// device remounts.
+  #[test]
+  fn the_incident_device_error_is_transient() {
+    let err = HyDbError::Pg {
+      message: "could not read blocks 369426..369426 in file \"base/16401/369426\": \
+                Device not configured"
+        .to_owned(),
+      code: Some("58030".to_owned()),
+    };
+    assert_eq!(err.classify(), Outcome::Warning);
+    assert!(err.is_transient());
+  }
+
+  /// A SQLSTATE, when present, always wins over the message — the substring
+  /// fallback is consulted only when the driver attached no SQLSTATE at all.
+  /// A message that happens to contain transient-sounding wording must not
+  /// downgrade a genuinely permanent code.
+  #[test]
+  fn a_present_sqlstate_short_circuits_the_message_fallback() {
+    let err = HyDbError::Pg {
+      message: "connection refused, but this is actually a syntax error".to_owned(),
+      code: Some("42601".to_owned()),
+    };
+    assert_eq!(err.classify(), Outcome::Error);
   }
 
   /// The non-Pg, non-config variants all classify as plain `Error`.

@@ -107,6 +107,26 @@ pub(crate) struct IngestStatus {
   retry_attempt: AtomicU32,
   /// Epoch at which the current backoff sleep ends (0 = not backing off).
   backoff_until_epoch: AtomicU64,
+  /// Epoch the current park began (0 = not parked). Set once, the first time
+  /// [`Self::request_operator_pause`] fires, and cleared the next time the
+  /// loop observes the pause lifted — never touched while the pause is still
+  /// in effect, so it measures the whole park, not just its latest cycle.
+  /// This is what the bounded-park timeout in the ingest loop measures
+  /// against, and what an operator's IPC command implicitly resets by
+  /// clearing the pause flag itself.
+  paused_since_epoch: AtomicU64,
+  /// Epoch the "still paused" heartbeat was last logged (0 = never). Distinct
+  /// from `paused_since_epoch`, which never moves for the life of one park:
+  /// this is what makes the periodic log line periodic instead of once.
+  last_pause_log_epoch: AtomicU64,
+  /// Epoch of the ingest loop's last iteration, updated once per pass through
+  /// its `while` loop regardless of outcome (healthy, backing off, or
+  /// parked). Shared with the REST health endpoint as an `Arc<AtomicU64>` so
+  /// a liveness probe can tell "the loop is asleep on a legitimate backoff or
+  /// poll interval" from "the loop's task is wedged and has stopped
+  /// iterating at all" without ever touching a connection pool itself — the
+  /// health endpoint's entire reason for existing.
+  loop_heartbeat_epoch: Arc<AtomicU64>,
 }
 
 const STATE_BOOT: u8 = 0;
@@ -123,6 +143,39 @@ const STATE_PAUSED: u8 = 6;
 /// so that a Postgres restart or an exhausted pool is not hammered at poll
 /// cadence, and stops doubling here.
 const MAX_BACKOFF_SECS: u64 = 300;
+
+/// How long a failure-induced park may sit waiting for an operator before the
+/// ingest loop gives up and takes the whole daemon down with it.
+///
+/// The rule this exists to enforce: Hyphen must either wait around and
+/// actually resume, or exit — never sit wedged, because a wedge defeats
+/// liveness checking. A park that never ends is worse than either genuine
+/// outcome, so it is bounded: past this, the daemon exits non-zero (see
+/// [`crate::lifecycle::Lifecycle::interrupt_fatal`]) so a supervisor (Docker,
+/// systemd) restarts it, which is strictly better than sitting parked for 26
+/// hours the way the mainnet incident did.
+const PARK_TIMEOUT_SECS: u64 = 30 * 60;
+
+/// How often the ingest loop logs a heartbeat while parked.
+///
+/// Before this existed, a park produced exactly one log line and then total
+/// silence for as long as the park lasted — 24 hours of it, in the mainnet
+/// incident — which is indistinguishable from a deadlock. A periodic "still
+/// parked" line makes silence itself diagnostic: if this stops appearing, the
+/// loop's task has actually wedged, which is a different and worse problem
+/// than a park (and is what [`IngestStatus::loop_heartbeat_epoch`] and the
+/// REST health endpoint are for).
+const PAUSE_HEARTBEAT_LOG_SECS: u64 = 5 * 60;
+
+/// How long the ingest loop's heartbeat may go unrefreshed before the REST
+/// health endpoint calls it wedged rather than merely asleep.
+///
+/// Set comfortably above [`MAX_BACKOFF_SECS`] (the longest legitimate gap
+/// between heartbeat touches from a single backoff sleep) so a healthy loop
+/// riding out its worst-case backoff never trips it, while still catching a
+/// loop whose task has stopped iterating altogether — the exact shape of the
+/// wedge this whole task is about.
+const HEALTH_HEARTBEAT_STALE_SECS: u64 = 2 * MAX_BACKOFF_SECS;
 
 /// Transactions in a serialized block, from the CompactSize count that
 /// follows the 80-byte header.
@@ -175,6 +228,24 @@ fn failure_action(error: &DaemonError) -> FailureAction {
   }
 }
 
+/// `true` once `heartbeat_epoch` has gone unrefreshed for longer than
+/// [`HEALTH_HEARTBEAT_STALE_SECS`] as of `now`. Split out from
+/// [`IngestStatus::loop_heartbeat_stale`] so the health-endpoint decision is
+/// testable without a running loop behind it.
+fn loop_heartbeat_is_stale(heartbeat_epoch: u64, now: u64) -> bool {
+  now.saturating_sub(heartbeat_epoch) > HEALTH_HEARTBEAT_STALE_SECS
+}
+
+/// `true` once a park that began at `paused_since_epoch` has run past
+/// [`PARK_TIMEOUT_SECS`] as of `now`, meaning the ingest loop must stop
+/// waiting for an operator and take the daemon down so a supervisor restarts
+/// it. Split out from the loop body for the same reason as
+/// [`loop_heartbeat_is_stale`]: testable without a storage engine, a node, or
+/// a running loop.
+fn park_should_exit(paused_since_epoch: u64, now: u64) -> bool {
+  paused_since_epoch > 0 && now.saturating_sub(paused_since_epoch) >= PARK_TIMEOUT_SECS
+}
+
 /// Backoff sleep for the `attempt`-th consecutive transient failure
 /// (1-based): `poll_secs * 2^(attempt-1)`, capped at [`MAX_BACKOFF_SECS`].
 fn backoff_delay(poll_secs: u64, attempt: u32) -> Duration {
@@ -200,7 +271,7 @@ pub(crate) fn sync_mode_label(raw: u8) -> &'static str {
 }
 
 impl IngestStatus {
-  fn new() -> Self {
+  pub(crate) fn new() -> Self {
     Self {
       state: AtomicU8::new(STATE_BOOT),
       stalled: AtomicBool::new(false),
@@ -221,6 +292,13 @@ impl IngestStatus {
       operator_pause_requested: Arc::new(AtomicBool::new(false)),
       retry_attempt: AtomicU32::new(0),
       backoff_until_epoch: AtomicU64::new(0),
+      paused_since_epoch: AtomicU64::new(0),
+      last_pause_log_epoch: AtomicU64::new(0),
+      // Starts fresh rather than at 0/unset: a brand-new loop has not failed
+      // to iterate, it just has not iterated yet, and a health probe hit in
+      // the gap between process start and the loop's first pass must not
+      // read that as a wedge.
+      loop_heartbeat_epoch: Arc::new(AtomicU64::new(unix_now())),
     }
   }
 
@@ -359,9 +437,74 @@ impl IngestStatus {
   }
 
   /// Park ingestion until an operator intervenes.
-  fn request_operator_pause(&self) {
+  pub(crate) fn request_operator_pause(&self) {
     self.operator_pause_requested.store(true, Ordering::Relaxed);
     self.set_state(STATE_PAUSED);
+    // Only stamped the first time: a park that fails its `Pause` classifier
+    // again on a later cycle (rare, but the flag stays set until an operator
+    // command lifts it) must not have its clock reset, or the bounded-park
+    // timeout below could never fire.
+    self
+      .paused_since_epoch
+      .compare_exchange(0, unix_now(), Ordering::Relaxed, Ordering::Relaxed)
+      .ok();
+  }
+
+  /// Seconds the current park has lasted, when one is in effect.
+  pub(crate) fn pause_elapsed_secs(&self) -> Option<u64> {
+    let since = self.paused_since_epoch.load(Ordering::Relaxed);
+    (since > 0).then(|| unix_now().saturating_sub(since))
+  }
+
+  /// Reset the park clock once the pause is observed lifted. A no-op while
+  /// still paused; called on every iteration where the loop finds itself not
+  /// parked, which is the only signal it has that an operator's command
+  /// cleared the flag since the last check.
+  fn clear_pause_started(&self) {
+    self.paused_since_epoch.store(0, Ordering::Relaxed);
+    self.last_pause_log_epoch.store(0, Ordering::Relaxed);
+  }
+
+  /// Log the "still parked" heartbeat if [`PAUSE_HEARTBEAT_LOG_SECS`] have
+  /// passed since the last one. Returns the park's age for the caller's own
+  /// bounded-timeout check, so both read `unix_now()` against the same
+  /// `paused_since_epoch` rather than risking two slightly different clocks.
+  fn log_pause_heartbeat_if_due(&self, attempt_context: &str) -> u64 {
+    let elapsed = self.pause_elapsed_secs().unwrap_or(0);
+    let now = unix_now();
+    let last = self.last_pause_log_epoch.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= PAUSE_HEARTBEAT_LOG_SECS {
+      self.last_pause_log_epoch.store(now, Ordering::Relaxed);
+      warn!(
+        elapsed_secs = elapsed,
+        park_timeout_secs = PARK_TIMEOUT_SECS,
+        "{attempt_context}: ingestion is still parked awaiting operator intervention"
+      );
+    }
+    elapsed
+  }
+
+  /// Record that the ingest loop is still iterating, whatever the outcome.
+  fn note_loop_heartbeat(&self) {
+    self
+      .loop_heartbeat_epoch
+      .store(unix_now(), Ordering::Relaxed);
+  }
+
+  /// Shared handle to the loop heartbeat, for the REST health endpoint.
+  pub(crate) fn loop_heartbeat_handle(&self) -> Arc<AtomicU64> {
+    Arc::clone(&self.loop_heartbeat_epoch)
+  }
+
+  /// `true` once the loop heartbeat has gone unrefreshed longer than
+  /// [`HEALTH_HEARTBEAT_STALE_SECS`] — the loop's task has stopped iterating,
+  /// as opposed to merely sleeping through a legitimate backoff or poll
+  /// interval.
+  pub(crate) fn loop_heartbeat_stale(&self) -> bool {
+    loop_heartbeat_is_stale(
+      self.loop_heartbeat_epoch.load(Ordering::Relaxed),
+      unix_now(),
+    )
   }
 
   /// Drop the per-cycle runtime view. A failed cycle released every lease and
@@ -434,6 +577,15 @@ impl IngestStatus {
 
   pub(crate) fn stalled(&self) -> bool {
     self.stalled.load(Ordering::Relaxed)
+  }
+
+  /// Force the stall flag for a test in another module (e.g. the REST health
+  /// endpoint's), which needs a stalled `IngestStatus` but has no access to
+  /// the private `local_tip`/`network_tip`/progress bookkeeping that
+  /// [`Self::update_stall`] derives it from.
+  #[cfg(test)]
+  pub(crate) fn force_stalled_for_test(&self) {
+    self.stalled.store(true, Ordering::Relaxed);
   }
 
   pub(crate) fn network_tip(&self) -> Option<u32> {
@@ -584,15 +736,44 @@ impl IngestVisor {
       // blip that resolves does not carry its ladder into the next hour.
       let mut attempt: u32 = 0;
       while lifecycle.running() {
+        // Proves the loop's task is still iterating at all, independent of
+        // whether this pass finds work to do. Read by the REST health
+        // endpoint, which otherwise has no way to tell "asleep on a
+        // legitimate backoff" from "wedged mid-cycle and never coming back" —
+        // and deliberately cannot ask a connection pool, which is the thing
+        // that was wedged in the incident this exists to catch.
+        status.note_loop_heartbeat();
         if status.operator_pause_requested() {
           // Parked by a non-transient failure. Nothing here can clear it: an
           // operator command (rewind, disconnect-tip, force-reindex) does,
           // because those are the acts that change the situation.
           status.set_state(STATE_PAUSED);
           status.update_stall();
+          let elapsed = status.log_pause_heartbeat_if_due("ingest loop");
+          if elapsed >= PARK_TIMEOUT_SECS {
+            // The rule this loop exists to enforce: either wait around and
+            // actually resume, or exit — never sit wedged. A human has had
+            // `PARK_TIMEOUT_SECS` to intervene; past that, staying parked
+            // forever is worse than exiting, because it defeats liveness
+            // checking. Exit non-zero so a supervisor restarts the daemon,
+            // which is what should have happened within minutes of the
+            // mainnet incident instead of after 26 hours and a manual kill.
+            error!(
+              elapsed_secs = elapsed,
+              park_timeout_secs = PARK_TIMEOUT_SECS,
+              "ingestion has been parked past its bounded timeout with no \
+               operator intervention; exiting so a supervisor restarts the daemon"
+            );
+            lifecycle.interrupt_fatal();
+            break;
+          }
           lifecycle.sleep(poll).await;
           continue;
         }
+        // Reached only when not parked: either healthy, or an operator
+        // command just lifted a pause. Either way the park clock (and its
+        // heartbeat cadence) must not carry into whatever park comes next.
+        status.clear_pause_started();
         if let Some(rpc) = rpc.as_ref() {
           let now = unix_now();
           if now.saturating_sub(chain_stats_refreshed_at) >= CHAIN_TX_STATS_REFRESH_SECS {
@@ -615,7 +796,11 @@ impl IngestVisor {
               error!(%error, outcome = "fatal", "ingest cycle failed unrecoverably; shutting down");
               status.clear_runtime();
               status.request_operator_pause();
-              lifecycle.interrupt();
+              // Fatal, not a park: no amount of waiting fixes this, so the
+              // daemon exits (non-zero) immediately rather than sitting
+              // parked. See `interrupt_fatal`'s doc comment for why plain
+              // `interrupt()` alone left the process alive-but-unresponsive.
+              lifecycle.interrupt_fatal();
               break;
             }
             FailureAction::Pause => {
@@ -927,6 +1112,11 @@ async fn absorb_with_ancestors(
   // a full memcpy per block for a path almost none of them take.
   let mut stack = vec![Bytes::from(raw)];
   while let Some(raw) = stack.pop() {
+    // Touched per block, not only once per outer loop pass: a large cold-sync
+    // chunk can legitimately run longer than the health endpoint's staleness
+    // threshold, and without this its own progress would be indistinguishable
+    // from the loop having wedged mid-chunk.
+    status.note_loop_heartbeat();
     match ingest
       .on_block(raw.clone())
       .await
@@ -1234,5 +1424,71 @@ mod tests {
     status.clear_runtime();
     assert_eq!(status.retry_attempt(), None);
     assert_eq!(status.backoff_until_epoch(), None);
+  }
+
+  /// The bounded-park decision, pinned directly: a park must not trip the
+  /// exit before `PARK_TIMEOUT_SECS`, must trip at or past it, and "not
+  /// currently parked" (`paused_since_epoch == 0`) must never trip it no
+  /// matter how large `now` is — otherwise a freshly booted, never-parked
+  /// daemon could read as needing to exit.
+  #[test]
+  fn park_should_exit_is_bounded_by_the_park_timeout() {
+    let started = 1_000_000u64;
+    assert!(!park_should_exit(started, started));
+    assert!(!park_should_exit(started, started + PARK_TIMEOUT_SECS - 1));
+    assert!(park_should_exit(started, started + PARK_TIMEOUT_SECS));
+    assert!(park_should_exit(started, started + PARK_TIMEOUT_SECS + 100));
+    assert!(!park_should_exit(0, started + PARK_TIMEOUT_SECS + 100));
+  }
+
+  /// The loop-heartbeat staleness decision, pinned directly: fresh reads
+  /// alive, and it only flips at strictly more than
+  /// `HEALTH_HEARTBEAT_STALE_SECS` of silence — comfortably past the longest
+  /// single legitimate gap (one backoff sleep, capped at `MAX_BACKOFF_SECS`),
+  /// which is the whole point of the margin.
+  #[test]
+  fn loop_heartbeat_staleness_has_margin_over_the_worst_case_backoff() {
+    let now = 1_000_000u64;
+    assert!(!loop_heartbeat_is_stale(now, now));
+    assert!(!loop_heartbeat_is_stale(now - MAX_BACKOFF_SECS, now));
+    assert!(!loop_heartbeat_is_stale(
+      now - HEALTH_HEARTBEAT_STALE_SECS,
+      now
+    ));
+    assert!(loop_heartbeat_is_stale(
+      now - HEALTH_HEARTBEAT_STALE_SECS - 1,
+      now
+    ));
+  }
+
+  /// The whole point of `paused_since_epoch`: it survives across repeated
+  /// `Pause`-classified failures (the clock must not reset each cycle, or the
+  /// bounded-park timeout could never fire on a park that keeps re-failing),
+  /// but resets the moment the loop observes the pause lifted, so the next
+  /// park starts its own clock rather than inheriting the last one's age.
+  #[test]
+  fn pause_clock_survives_repeats_and_resets_on_clear() {
+    let status = IngestStatus::new();
+    assert_eq!(status.pause_elapsed_secs(), None);
+
+    status.request_operator_pause();
+    let first = status.paused_since_epoch.load(Ordering::Relaxed);
+    assert!(first > 0);
+
+    // A second failure while still parked must not move the clock.
+    status.request_operator_pause();
+    assert_eq!(status.paused_since_epoch.load(Ordering::Relaxed), first);
+    assert!(status.pause_elapsed_secs().is_some());
+
+    // An operator command lifts the flag; the loop observes that and clears
+    // the clock (this is what `clear_pause_started` is called for, on the
+    // non-paused path through the loop).
+    status.pause_handle().store(false, Ordering::Relaxed);
+    status.clear_pause_started();
+    assert_eq!(status.pause_elapsed_secs(), None);
+
+    // A fresh park after the clear starts its own clock, not the old one's.
+    status.request_operator_pause();
+    assert!(status.paused_since_epoch.load(Ordering::Relaxed) >= first);
   }
 }

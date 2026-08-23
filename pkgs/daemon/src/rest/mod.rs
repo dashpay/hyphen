@@ -7,6 +7,7 @@
 //! REST API server built on Axum.
 
 pub mod error;
+pub mod health;
 pub(crate) mod hydb;
 #[cfg(any(test, feature = "tests"))]
 pub(crate) mod hydb_fake;
@@ -216,6 +217,12 @@ pub struct AppState {
   /// Unix epoch of the last ingest progress (0 = never), so `updated_at`
   /// reflects when indexing last advanced rather than "now".
   pub ingest_progress_epoch: Arc<std::sync::atomic::AtomicU64>,
+  /// The ingest loop's shared status view, for the `/healthz` liveness probe.
+  /// Read for its in-process atomics only (pause flag, stall flag, loop
+  /// heartbeat) — deliberately never used to reach a connection pool, which
+  /// is exactly what left `/api/v1/status` unable to answer for 24 hours
+  /// during the mainnet incident this endpoint exists to prevent a repeat of.
+  pub(crate) ingest_status: Arc<crate::ingest::IngestStatus>,
 }
 
 /// Inputs needed to construct one supervised API worker task.
@@ -625,6 +632,11 @@ pub fn router(
       get(validator_rest::get_validator),
     )
     .route("/api/v1/status", get(status::status))
+    // Deliberately outside `/api/v1`: this is a supervisor's liveness probe,
+    // not a versioned client-facing endpoint, and it must not be confused
+    // with `/api/v1/status` — see `health`'s module doc for why the two are
+    // not interchangeable.
+    .route("/healthz", get(health::healthz))
     .layer(CompressionLayer::new())
     .layer(cors_layer(cors_origin))
     .with_state(state)

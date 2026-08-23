@@ -37,6 +37,7 @@ pub(crate) struct RestVisorConfig {
   pub node_tip: std::sync::Arc<std::sync::atomic::AtomicI64>,
   pub sync_mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
   pub ingest_progress_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+  pub ingest_status: Arc<crate::ingest::IngestStatus>,
   pub bind: String,
   pub cors_origin: Option<String>,
   pub server_metrics: Arc<ApiServerMetrics>,
@@ -87,6 +88,7 @@ impl RestVisor {
       node_tip: std::sync::Arc::clone(&self.cfg.node_tip),
       sync_mode: std::sync::Arc::clone(&self.cfg.sync_mode),
       ingest_progress_epoch: std::sync::Arc::clone(&self.cfg.ingest_progress_epoch),
+      ingest_status: Arc::clone(&self.cfg.ingest_status),
     }
   }
 }
