@@ -268,7 +268,14 @@ pub(super) async fn advance(
       let from_height = from_tip.map(|(h, _)| h).unwrap_or(-1);
       let floor = fork_height.unwrap_or(-1);
       let max_reorg = max_reorg_depth();
-      if i64::from(from_height - floor) > max_reorg {
+      // Widen before subtracting, as the rewind path does. In `i32` the
+      // subtraction overflows before the comparison ever sees it, and an
+      // overflowed depth compares as small — turning the refusal into an
+      // acceptance of exactly the too-deep reorg it exists to stop. Not
+      // reachable at real chain heights, but it is the same expression the
+      // rewind path fixed and documented, and leaving one of the two is how
+      // the pair drifts apart.
+      if i64::from(from_height) - i64::from(floor) > max_reorg {
         return Err(HyDbError::Derive(format!(
           "reorg from height {from_height} to fork {floor} exceeds the supported depth ({max_reorg})"
         )));
