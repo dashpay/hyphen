@@ -111,6 +111,10 @@ impl Default for ListParams {
 
 impl ListParams {
   fn validate(mut self) -> Result<Self, ApiError> {
+    // `status` reaches a text parameter unvalidated; `type` is checked below.
+    if let Some(status) = self.status.as_deref() {
+      ApiError::reject_untypable_text("status", status)?;
+    }
     if self.limit < 1 || self.limit > MAX_VALIDATOR_PAGE_LIMIT {
       return Err(ApiError::bad_request(format!(
         "limit must be between 1 and {MAX_VALIDATOR_PAGE_LIMIT}",

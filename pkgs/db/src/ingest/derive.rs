@@ -15,7 +15,7 @@
 //! block's write transaction so reorg re-derivation sees the branch state the
 //! transaction has already built.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 
@@ -136,7 +136,7 @@ impl IngestDerive for PgDeriver {
     let mut spent_outpoints: Vec<HyDbOutpoint> = Vec::new();
     // Every outpoint this block spends, so a second spend of one is a refusal
     // rather than a double count.
-    let mut spent_once: std::collections::HashSet<[u8; 36]> = std::collections::HashSet::new();
+    let mut spent_once: HashSet<[u8; 36]> = HashSet::new();
 
     // Cumulative metric inputs for this block.
     let mut spendable_created: i64 = 0;
@@ -194,11 +194,7 @@ impl IngestDerive for PgDeriver {
         // so this cannot fire against a healthy source. It is here because the
         // cost is one hash per input and the alternative is silent corruption
         // if that assumption ever stops holding.
-        if !spent_once.insert(packed) {
-          return Err(HyDbDeriveError::Malformed {
-            what: format!("outpoint {prev:?} is spent twice in block {height}"),
-          });
-        }
+        claim_spend(&mut spent_once, packed, &prev, height)?;
         let spent = match block_outputs.get(&packed) {
           Some(s) => s.clone(),
           None => persisted
@@ -255,5 +251,80 @@ impl IngestDerive for PgDeriver {
       chainwork,
     );
     Ok(())
+  }
+}
+
+/// Record that this block spends `packed`, refusing a second claim on it.
+///
+/// Extracted from the derive walk so the refusal can be tested. It guards the
+/// system's least forgiving invariant — two inputs consuming one outpoint in
+/// one block would count the value, the UTXO and the fee twice, leaving the
+/// balance and the supply wrong with nothing failing — and inside the walk it
+/// was unreachable from a test, because the integration fixture cannot build a
+/// block with two spends of the same outpoint. Deleting the check therefore
+/// left the whole suite green.
+///
+/// Consensus forbids the input and the node validates before this sees a
+/// block, so it cannot fire against a healthy source. It exists because the
+/// cost is a hash per input and the alternative is silent corruption if that
+/// assumption ever stops holding.
+///
+/// # Errors
+///
+/// [`HyDbDeriveError::Malformed`] naming the outpoint and the block.
+fn claim_spend(
+  seen: &mut HashSet<[u8; 36]>,
+  packed: [u8; 36],
+  prev: &HyDbOutpoint,
+  height: i32,
+) -> Result<(), HyDbDeriveError> {
+  if seen.insert(packed) {
+    return Ok(());
+  }
+  Err(HyDbDeriveError::Malformed {
+    what: format!("outpoint {prev:?} is spent twice in block {height}"),
+  })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn outpoint(txid_byte: u8, vout: u32) -> HyDbOutpoint {
+    HyDbOutpoint {
+      txid: crate::types::HyDbHash([txid_byte; 32]),
+      vout,
+    }
+  }
+
+  /// The same outpoint twice in one block is refused; different outpoints are
+  /// not. The `vout` cases matter because the packed key carries it in the
+  /// trailing four bytes, so a guard keyed on the txid alone would reject two
+  /// legitimate spends of different outputs of the same transaction — which is
+  /// ordinary, and would halt the chain.
+  #[test]
+  fn one_outpoint_may_be_spent_once_per_block() {
+    let mut seen = HashSet::new();
+
+    let a = outpoint(0xAA, 0);
+    assert!(claim_spend(&mut seen, a.packed(), &a, 100).is_ok());
+
+    // Same outpoint again: refused, and the message names both the outpoint
+    // and the height so the offending block is identifiable from the log.
+    let err = claim_spend(&mut seen, a.packed(), &a, 100)
+      .expect_err("a second claim on one outpoint must be refused");
+    let HyDbDeriveError::Malformed { what } = err else {
+      panic!("a double spend must be reported as malformed, got {err:?}");
+    };
+    assert!(what.contains("spent twice"), "{what}");
+    assert!(what.contains("100"), "{what}");
+
+    // A different vout of the same transaction is a different outpoint.
+    let a1 = outpoint(0xAA, 1);
+    assert!(claim_spend(&mut seen, a1.packed(), &a1, 100).is_ok());
+
+    // And a different transaction entirely.
+    let b = outpoint(0xBB, 0);
+    assert!(claim_spend(&mut seen, b.packed(), &b, 100).is_ok());
   }
 }

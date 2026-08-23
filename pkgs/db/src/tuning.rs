@@ -18,12 +18,20 @@
 //! `vacuum_cost_delay`, `fillfactor`) name per-table storage parameters that
 //! the schema already sets, with values that were measured rather than
 //! guessed (see the commentary in `sql/0001_schema.sql`). Nothing here
-//! replaces those numbers: the schema stays the baseline, and this module
-//! emits `ALTER TABLE … SET` **only for a parameter whose resolved value
-//! differs from the baseline**. A default configuration therefore emits no
-//! DDL at all and the database is bit-for-bit what the migration created —
-//! which is asserted by a test that reads the baseline back out of the
-//! shipped `0001_schema.sql`.
+//! replaces those numbers — the schema stays the baseline, and a parameter
+//! whose resolved value matches it is never written as a departure.
+//!
+//! The two keys the `sync` profile can write are an exception, and they have
+//! to be. This module used to emit nothing whenever the resolved value equalled
+//! the baseline, which sounds like the same rule and is not: leaving `sync`
+//! also resolved to the baseline, so it also emitted nothing, so the relaxed
+//! factors `sync` had written stayed on disk for good. A synced mainnet store
+//! was found still carrying scale factor 0.5 against a committed 0.02, with no
+//! code path that could ever put it back. Those two keys are therefore always
+//! resolved to something explicit — the override, the sync value, or the
+//! baseline restated — and one the schema never declared is `RESET` rather
+//! than left behind. The cost is two idempotent statements at connect; the
+//! alternative was a database that silently kept sync settings forever.
 //!
 //! # Why a profile
 //!
@@ -344,44 +352,77 @@ pub fn storage_plan(cfg: &HyDbIngestCfg, stepped: bool) -> Vec<StorageChange> {
 
   for table in &TUNED_TABLES {
     let mut diffs: Vec<String> = Vec::new();
-    let mut push = |param: &str, want: StorageValue| {
-      let base = table
+    let mut resets: Vec<&str> = Vec::new();
+    let baseline_of = |param: &str| {
+      table
         .baseline
         .iter()
         .find(|(name, _)| *name == param)
-        .map(|(_, value)| *value);
-      if base != Some(want) {
-        diffs.push(format!("{param} = {}", want.render()));
-      }
+        .map(|(_, value)| *value)
+    };
+    // A plain helper rather than a closure that captures `diffs`: the restore
+    // arm below also needs to append, and a closure holding the borrow for the
+    // whole block would rule that out.
+    let departure = |param: &str, want: StorageValue| -> Option<String> {
+      (baseline_of(param) != Some(want)).then(|| format!("{param} = {}", want.render()))
     };
 
     if let Some(fillfactor) = cfg.fillfactor {
       // Only where the schema already declares one.
       if table.baseline.iter().any(|(name, _)| *name == "fillfactor") {
-        push("fillfactor", StorageValue::Int(fillfactor));
+        if let Some(sql) = departure("fillfactor", StorageValue::Int(fillfactor)) {
+          diffs.push(sql);
+        }
       }
     }
 
     if table.vacuum_tuned {
-      let scale = cfg.vacuum_scale_factor.or(match profile {
-        HyDbTuningProfile::Sync => Some(SYNC_VACUUM_SCALE_FACTOR),
-        _ => None,
-      });
-      if let Some(scale) = scale {
-        push("autovacuum_vacuum_scale_factor", StorageValue::Float(scale));
-      }
-      let analyze = cfg.vacuum_analyze_factor.or(match profile {
-        HyDbTuningProfile::Sync => Some(SYNC_ANALYZE_SCALE_FACTOR),
-        _ => None,
-      });
-      if let Some(analyze) = analyze {
-        push(
+      // Restated, not merely departed from. The original contract here was
+      // that the schema's measured numbers are the baseline and this function
+      // only ever *departs* from them, so a profile resolving to the baseline
+      // emitted nothing at all. That is why nothing ever came back: leaving
+      // the sync profile also emitted nothing, so the relaxed factors it had
+      // written stayed on disk permanently. Confirmed on a synced mainnet
+      // store, long after the sync ended, still carrying scale factor 0.5
+      // against a committed 0.02.
+      //
+      // So the two keys the sync profile can write are now always resolved to
+      // something explicit — the override, the sync value, or the baseline —
+      // and a key with no baseline is `RESET` rather than left behind.
+      for (param, sync_value, over) in [
+        (
+          "autovacuum_vacuum_scale_factor",
+          SYNC_VACUUM_SCALE_FACTOR,
+          cfg.vacuum_scale_factor,
+        ),
+        (
           "autovacuum_analyze_scale_factor",
-          StorageValue::Float(analyze),
-        );
+          SYNC_ANALYZE_SCALE_FACTOR,
+          cfg.vacuum_analyze_factor,
+        ),
+      ] {
+        let want = over.or(match profile {
+          HyDbTuningProfile::Sync => Some(sync_value),
+          _ => None,
+        });
+        match want {
+          Some(value) => {
+            if let Some(sql) = departure(param, StorageValue::Float(value)) {
+              diffs.push(sql);
+            }
+          }
+          // Steady with no override: put the committed value back, or clear
+          // the parameter when the schema never declared one.
+          None => match baseline_of(param) {
+            Some(base) => diffs.push(format!("{param} = {}", base.render())),
+            None => resets.push(param),
+          },
+        }
       }
       if let Some(delay) = cfg.vacuum_cost_delay {
-        push("autovacuum_vacuum_cost_delay", StorageValue::Int(delay));
+        if let Some(sql) = departure("autovacuum_vacuum_cost_delay", StorageValue::Int(delay)) {
+          diffs.push(sql);
+        }
       }
     }
 
@@ -389,6 +430,12 @@ pub fn storage_plan(cfg: &HyDbIngestCfg, stepped: bool) -> Vec<StorageChange> {
       plan.push(StorageChange {
         table: table.name,
         sql: format!("ALTER TABLE {} SET ({})", table.name, diffs.join(", ")),
+      });
+    }
+    if !resets.is_empty() {
+      plan.push(StorageChange {
+        table: table.name,
+        sql: format!("ALTER TABLE {} RESET ({})", table.name, resets.join(", ")),
       });
     }
   }
@@ -571,6 +618,30 @@ pub async fn compact(
       return Ok(done);
     }
     if in_open_partition(&table, open_index) {
+      // The open partition keeps its vacuum debt, but not its ignorance.
+      //
+      // Switching autovacuum off to defer the vacuum switches *autoanalyze*
+      // off with it, so an open partition carries no statistics at all for its
+      // whole ~100,000-block life — confirmed on the mainnet store, where the
+      // open partition had `reltuples = -1` and zero rows in `pg_stats` while
+      // its closed neighbour had eight million and eleven. With nothing to go
+      // on the planner guessed thousands of matches for a unique txid and
+      // chose a plan that read 722,345 buffers where the right one reads 95.
+      //
+      // `ANALYZE` alone is the cheap half: it samples rather than scanning,
+      // reclaims nothing, and rewrites no heap, so it does not reintroduce the
+      // cost the deferral exists to avoid. Doing it here means every start
+      // leaves the planner informed, which is when plans matter most.
+      let started = std::time::Instant::now();
+      pool
+        .execute(format!("ANALYZE {table}").as_str())
+        .await
+        .map_err(|e| HyDbError::pg("tuning: analyze the open partition", e))?;
+      tracing::info!(
+        table = table.as_str(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "analyzed the open partition; its vacuum stays deferred"
+      );
       done.deferred += 1;
       continue;
     }
@@ -843,21 +914,50 @@ mod tests {
     assert!(!in_open_partition("tx_outputs_p1", None));
   }
 
+  /// A steady plan restates the two keys the sync profile can write, rather
+  /// than emitting nothing. That is the whole point: a plan that only ever
+  /// *departs* from the baseline can never put it back, which is how a synced
+  /// mainnet store ended up carrying scale factor 0.5 against a committed 0.02
+  /// permanently. Restating is idempotent and costs two statements at connect.
   #[test]
-  fn default_config_emits_no_ddl() {
+  fn a_steady_plan_restates_the_committed_values() {
     let plan = storage_plan(&HyDbIngestCfg::default(), false);
+    let sql: String = plan.iter().map(|c| c.sql.clone()).collect();
     assert!(
-      plan.is_empty(),
-      "a default [db.ingest] must leave the committed schema untouched, got {plan:?}"
+      sql.contains("autovacuum_vacuum_scale_factor = 0.02"),
+      "steady must put the committed vacuum factor back, got {plan:?}"
     );
-    // ...and explicitly restating the committed values is still no-op.
+    assert!(
+      sql.contains("RESET (autovacuum_analyze_scale_factor)"),
+      "a key the schema never declared must be cleared, not left behind, got {plan:?}"
+    );
+    // Only the vacuum-tuned table is touched; `address_stats` declares no
+    // autovacuum parameters and must not acquire any.
+    assert!(
+      plan.iter().all(|c| c.table == "utxo_set"),
+      "steady touched a table the schema leaves on server defaults: {plan:?}"
+    );
+    // An operator restating the committed values by hand adds no *departure*
+    // — those keys match the baseline, so nothing is emitted for them — but
+    // the analyze reset still stands, because it is what undoes a sync.
     let restated = HyDbIngestCfg {
       tuning_profile: HyDbTuningProfile::Steady,
       vacuum_scale_factor: Some(0.02),
       vacuum_cost_delay: Some(2),
       ..HyDbIngestCfg::default()
     };
-    assert!(storage_plan(&restated, false).is_empty());
+    let restated_sql: String = storage_plan(&restated, false)
+      .iter()
+      .map(|c| c.sql.clone())
+      .collect();
+    assert!(
+      !restated_sql.contains("autovacuum_vacuum_scale_factor = "),
+      "restating the committed value is not a departure: {restated_sql}"
+    );
+    assert!(
+      restated_sql.contains("RESET (autovacuum_analyze_scale_factor)"),
+      "{restated_sql}"
+    );
   }
 
   /// The baseline mirrored here must be the schema that actually ships. The
@@ -909,7 +1009,6 @@ mod tests {
       ..HyDbIngestCfg::default()
     };
     let sync_plan = storage_plan(&sync, false);
-    assert!(storage_plan(&steady, false).is_empty());
     assert_eq!(sync_plan.len(), 1, "{sync_plan:?}");
     let sql = &sync_plan[0].sql;
     assert!(
@@ -936,8 +1035,11 @@ mod tests {
       HyDbTuningProfile::Steady
     );
     assert_eq!(cfg.tuning_profile.effective(true), HyDbTuningProfile::Sync);
-    assert!(storage_plan(&cfg, false).is_empty());
+    // Both directions emit: stepped departs from the baseline, steady puts it
+    // back. Neither is silent, and they must not be the same plan.
+    assert!(!storage_plan(&cfg, false).is_empty());
     assert!(!storage_plan(&cfg, true).is_empty());
+    assert_ne!(storage_plan(&cfg, false), storage_plan(&cfg, true));
   }
 
   #[test]

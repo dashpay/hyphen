@@ -71,6 +71,29 @@ impl ApiError {
     }
   }
 
+  /// Reject client text that PostgreSQL cannot accept as a parameter.
+  ///
+  /// A `text` parameter may not contain a NUL byte. Passed through, the driver
+  /// raises SQLSTATE 22021, which grades as a permanent storage fault and
+  /// surfaces as `500 InternalError` — so `?status=%00weird` was logged as a
+  /// server defect and counted against the error budget, when it is simply
+  /// malformed input. Other control characters cannot break a parameter but
+  /// have no business in an address, a status or a hash, and rejecting them
+  /// keeps the log readable.
+  ///
+  /// # Errors
+  ///
+  /// [`ApiError::bad_request`] naming `field`, when `value` is unusable.
+  pub fn reject_untypable_text(field: &str, value: &str) -> Result<(), Self> {
+    if let Some(bad) = value.chars().find(|c| *c == '\0' || c.is_control()) {
+      return Err(Self::bad_request(format!(
+        "{field} contains a character that cannot be queried (U+{:04X})",
+        bad as u32
+      )));
+    }
+    Ok(())
+  }
+
   /// Construct a `400 bad request` response.
   pub fn bad_request(msg: impl Into<String>) -> Self {
     Self {

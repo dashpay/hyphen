@@ -92,6 +92,7 @@ pub async fn get_address(
   State(state): State<AppState>,
   Path(addr): Path<String>,
 ) -> Result<Json<AddressSummary>, ApiError> {
+  ApiError::reject_untypable_text("address", &addr)?;
   let stage = state.stage_status_typed(crate::index::Stage::Spent).await?;
   state.check_address_summary_stage(stage)?;
   let row = state
@@ -150,6 +151,7 @@ pub async fn get_address_txs(
   Path(addr): Path<String>,
   Query(params): Query<CursorParams>,
 ) -> Result<Json<IndexedCursorPage<AddressTxSummary>>, ApiError> {
+  ApiError::reject_untypable_text("address", &addr)?;
   let stage = state.stage_status_typed(crate::index::Stage::Spent).await?;
   let params = params.validate(MAX_ADDRESS_PAGE_LIMIT)?;
   let limit = params.limit;
@@ -299,6 +301,7 @@ pub async fn get_address_utxos(
   Path(addr): Path<String>,
   Query(params): Query<CursorParams>,
 ) -> Result<Json<IndexedCursorPage<Utxo>>, ApiError> {
+  ApiError::reject_untypable_text("address", &addr)?;
   let stage = state.stage_status_typed(crate::index::Stage::Spent).await?;
   let params = params.validate(MAX_ADDRESS_PAGE_LIMIT)?;
   let limit = params.limit;
