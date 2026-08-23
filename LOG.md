@@ -7,7 +7,7 @@ Live supervision of a from-scratch mainnet sync on branch `sqlite-fixes`
 
 | | |
 |---|---|
-| Branch | `sqlite-fixes` @ `922ec90` |
+| Branch | `sqlite-fixes` @ `fa89690` |
 | Build | `cargo build` (debug — unwinding panics, overflow checks on) |
 | Node | dash-qt mainnet, height 2,524,639, unpruned |
 | Postgres | 18.3 Homebrew, `/Volumes/Samsung/pgdata`, unix socket `/tmp` |
@@ -513,6 +513,52 @@ deliberately: a value that prevents startup is undone by editing the command,
 whereas `postgresql.auto.conf` lives on a volume this environment cannot write
 to, which would have made a bad `shared_buffers` unrecoverable without help.
 
+### 9. What the sync validated, and what a review of it then found
+
+The sync completed. Tip 2,526,686 matching the node, 2,526,687 contiguous
+blocks from genesis, and **70,614,105 transactions — the node's own
+`getchaintxstats` figure to the transaction**. Zero errors across the run.
+
+A planner estimate said 46.6M and briefly looked like a 34% shortfall. It was
+stale statistics — the crash in finding 5 reset the counters, and the
+partitions had autovacuum deliberately disabled — so `n_live_tup` undercounted
+badly. Worth recording because the estimate is the number most readily to
+hand, and it was wrong by 24 million.
+
+A full review of the migration and everything on top of it then found four
+things worth fixing, three of them consequences of the deferred-vacuum design
+in finding 3b:
+
+- **The tuning plan could depart from the schema's measured parameters but
+  never return to them.** It emitted DDL only where the resolved value
+  differed from the baseline, so leaving the sync profile — which also
+  resolves to the baseline — emitted nothing, and the relaxed factors stayed
+  on disk permanently. Found live, long after the sync, still carrying scale
+  factor 0.5 against a committed 0.02.
+- **Deferring a partition's vacuum switched off its autoanalyze too**, so an
+  open partition carried no statistics for its whole ~100,000-block life —
+  `reltuples = -1` and nothing in `pg_stats`, where its closed neighbour had
+  eight million rows and eleven stat entries. This is the *cause* behind the
+  query in finding 4. Fixing the query text was right and did not address it.
+- **A NUL byte in a path or query string returned 500**, because it reached a
+  text parameter, raised SQLSTATE 22021 and graded permanent — logging
+  malformed input as a server fault.
+- **The double-spend-in-block refusal had no test**, and the fixture could not
+  express the case, so deleting the check left the suite green. On the
+  invariant whose failure silently double-counts value, UTXO count and fees.
+
+The review also recounted the projection from base facts against the live
+store — supply, positive-balance count, rich list, per-address balances,
+transaction totals, undo horizon — all exact. For a system whose one
+non-negotiable is re-derivability, that is the result that matters, and it is
+independent of anything this log claims.
+
+One finding is deliberately left: `idx_block_metrics_height` duplicates the
+primary key and costs 97 MB and a maintained index per block. Removing it
+means editing the committed schema, which changes the migration checksum, and
+the daemon refuses a database built by another schema generation. It needs a
+real migration in a future schema version, not a checksum change.
+
 ## Sync progress
 
 | Time (UTC) | Height | Notes |
@@ -528,6 +574,7 @@ to, which would have made a bad `shared_buffers` unrecoverable without help.
 | 08:00 | 969,298 | autovacuum relaxed: 2.66 -> 11.87 blk/s |
 | 08:21 | 983,652 | reconcile fix in; zero wasted index builds on restart |
 | 08:25 | 986,329 | 12.4M txs, database 80.3 GB, stepped |
+| 14:36 | 2,526,686 | **synced**, 70,614,105 txs, ~480 GB |
 | 08:45 | 1,000,328 | partition 10 created with vacuum deferred |
 | 08:59 | 1,009,793 | first real compaction pass: 5 settled, 5 deferred, 107s |
 | 09:05 | 1,010,938 | 12.9M txs, database 89.1 GB |
