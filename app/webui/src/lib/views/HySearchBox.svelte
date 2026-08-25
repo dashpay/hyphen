@@ -13,6 +13,7 @@
     type ApiSearchResponse,
   } from "$lib";
   import HyTag from "./HyTag.svelte";
+  import { HySearchShouldUseExactLookup as shouldUseExactLookup } from "./HySearchBoxUtil";
 
   type SearchSuggestionKind = "address" | "block" | "proposal" | "transaction" | "validator";
 
@@ -129,27 +130,6 @@
 
   function normalizeQuery(value: string): string {
     return value.trim().toLowerCase();
-  }
-
-  function isHexQuery(value: string): boolean {
-    return /^[0-9a-f]+$/i.test(value);
-  }
-
-  function isFullHash(value: string): boolean {
-    return /^[0-9a-f]{64}$/i.test(value);
-  }
-
-  function shouldUseExactLookup(value: string): boolean {
-    const trimmedValue = value.trim();
-    if (trimmedValue.length === 0) {
-      return false;
-    }
-
-    if (isHexQuery(trimmedValue)) {
-      return isFullHash(trimmedValue);
-    }
-
-    return trimmedValue.length >= 3;
   }
 
   function buildHref(kind: SearchSuggestionKind, id: string): string {

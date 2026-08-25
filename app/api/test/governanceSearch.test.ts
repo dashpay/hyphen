@@ -52,11 +52,13 @@ describe("governance and search routes", (): void => {
           },
         ],
       },
+      // Identifier keys below are the daemon's own: one per variant, named
+      // after what it is. They are NOT `id` — the client normalizes to that.
       "/api/v1/search?q=block": {
         value: [
           {
             type: "block",
-            id: "0000blocka",
+            blockHash: "0000blocka",
             status: "canonical",
             blockTags: {
               orphan: false,
@@ -68,7 +70,7 @@ describe("governance and search routes", (): void => {
         value: [
           {
             type: "tx",
-            id: "tx-1",
+            txHash: "tx-1",
             txTags: {
               mined: true,
               coinbase: false,
@@ -80,7 +82,7 @@ describe("governance and search routes", (): void => {
         value: [
           {
             type: "address",
-            id: "Xabc",
+            address: "Xabc",
           },
         ],
       },
@@ -88,7 +90,7 @@ describe("governance and search routes", (): void => {
         value: [
           {
             type: "validator",
-            id: "protx-1",
+            proTxHash: "protx-1",
             status: "ENABLED",
           },
         ],
@@ -97,7 +99,7 @@ describe("governance and search routes", (): void => {
         value: [
           {
             type: "proposal",
-            id: "proposal-1",
+            hash: "proposal-1",
           },
         ],
       },
@@ -125,6 +127,15 @@ describe("governance and search routes", (): void => {
     expect(address.value[0]?.type).toBe("address");
     expect(validator.value[0]?.type).toBe("validator");
     expect(proposalSearch.value[0]?.type).toBe("proposal");
+
+    // The identifier itself, per variant. Asserting only `type` is what let a
+    // parser that read every id from a key the daemon never sends pass green
+    // while the search dropdown rendered nothing.
+    expect(block.value[0]?.id).toBe("0000blocka");
+    expect(tx.value[0]?.id).toBe("tx-1");
+    expect(address.value[0]?.id).toBe("Xabc");
+    expect(validator.value[0]?.id).toBe("protx-1");
+    expect(proposalSearch.value[0]?.id).toBe("proposal-1");
   });
 
   it("returns a contract error for an unsupported search discriminator", async (): Promise<void> => {

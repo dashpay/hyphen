@@ -240,6 +240,34 @@ function parseProposalVote(value: unknown, path: string): ProposalVote {
   };
 }
 
+/**
+ * The wire field carrying each variant's identifier.
+ *
+ * The daemon names the identifier after what it *is* — `blockHash`, `txHash`,
+ * `address`, `proTxHash`, `hash` — one key per variant, matching the sibling
+ * block/transaction/validator routes. `SearchResult` normalizes all five to
+ * `id`, because a search dropdown renders every kind through one code path and
+ * has no use for five differently-named keys.
+ *
+ * This mapping used to be absent: every variant was read from `id`, a key the
+ * API has never emitted. `readField` therefore threw on the first result and
+ * `parseSearchList` failed as a whole, so a working search endpoint rendered an
+ * empty dropdown. It survived because the fixtures were hand-written to match
+ * the parser rather than the daemon.
+ */
+const SEARCH_ID_FIELD = {
+  address: "address",
+  block: "blockHash",
+  proposal: "hash",
+  tx: "txHash",
+  validator: "proTxHash",
+} as const;
+
+function readSearchId(object: Record<string, unknown>, kind: keyof typeof SEARCH_ID_FIELD, path: string): string {
+  const field = SEARCH_ID_FIELD[kind];
+  return expectString(readField(object, field, path), `${path}.${field}`);
+}
+
 function parseSearchResult(value: unknown, path: string): SearchResult {
   const object = expectObject(value, path);
   const kind = expectString(readField(object, "type", path), `${path}.type`);
@@ -247,13 +275,13 @@ function parseSearchResult(value: unknown, path: string): SearchResult {
     case "address":
       return {
         type: "address",
-        id: expectString(readField(object, "id", path), `${path}.id`),
+        id: readSearchId(object, "address", path),
       };
     case "block": {
       const blockTags = expectObject(readField(object, "blockTags", path), `${path}.blockTags`);
       return {
         type: "block",
-        id: expectString(readField(object, "id", path), `${path}.id`),
+        id: readSearchId(object, "block", path),
         status: expectString(readField(object, "status", path), `${path}.status`),
         blockTags: {
           orphan: expectBoolean(readField(blockTags, "orphan", `${path}.blockTags`), `${path}.blockTags.orphan`),
@@ -263,13 +291,13 @@ function parseSearchResult(value: unknown, path: string): SearchResult {
     case "proposal":
       return {
         type: "proposal",
-        id: expectString(readField(object, "id", path), `${path}.id`),
+        id: readSearchId(object, "proposal", path),
       };
     case "tx": {
       const txTags = expectObject(readField(object, "txTags", path), `${path}.txTags`);
       return {
         type: "tx",
-        id: expectString(readField(object, "id", path), `${path}.id`),
+        id: readSearchId(object, "tx", path),
         txTags: {
           mined: expectBoolean(readField(txTags, "mined", `${path}.txTags`), `${path}.txTags.mined`),
           coinbase: expectBoolean(readField(txTags, "coinbase", `${path}.txTags`), `${path}.txTags.coinbase`),
@@ -279,7 +307,7 @@ function parseSearchResult(value: unknown, path: string): SearchResult {
     case "validator":
       return {
         type: "validator",
-        id: expectString(readField(object, "id", path), `${path}.id`),
+        id: readSearchId(object, "validator", path),
         status: expectString(readField(object, "status", path), `${path}.status`),
       };
     default:
