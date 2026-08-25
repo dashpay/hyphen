@@ -38,7 +38,6 @@ struct AppThreads {
 impl AppThreads {
   fn start(
     socket_path: &Path,
-    api_url: &str,
     event_tx: mpsc::Sender<AppEvent>,
     rest_req_rx: mpsc::Receiver<RestRequest>,
     ipc_cmd_rx: mpsc::Receiver<DaemonCommand>,
@@ -46,7 +45,7 @@ impl AppThreads {
     let shutdown = Arc::new(AtomicBool::new(false));
     let ipc_reader = ipc::spawn_ipc_thread(socket_path, event_tx.clone(), Arc::clone(&shutdown));
     let ipc_writer = ipc::spawn_ipc_cmd_thread(socket_path, ipc_cmd_rx, event_tx.clone());
-    let rest_worker = rest::spawn_rest_thread(api_url, event_tx.clone(), rest_req_rx);
+    let rest_worker = rest::spawn_rest_thread(event_tx.clone(), rest_req_rx);
     let terminal_worker = spawn_terminal_thread(event_tx.clone(), Arc::clone(&shutdown));
     let tick_worker = spawn_tick_thread(event_tx, Arc::clone(&shutdown));
     Self {
@@ -126,13 +125,13 @@ impl Drop for TerminalSession {
 /// # Errors
 ///
 /// Returns `TuiError::Io` when terminal setup, drawing, or teardown fails.
-pub fn run(datadir: &Path, api_url: &str) -> Result<(), TuiError> {
+pub fn run(datadir: &Path, api_url: Option<&str>) -> Result<(), TuiError> {
   let socket_path = datadir.join("hyphen.sock");
 
   let (event_tx, event_rx) = mpsc::channel::<AppEvent>();
   let (rest_req_tx, rest_req_rx) = mpsc::channel::<RestRequest>();
   let (ipc_cmd_tx, ipc_cmd_rx) = mpsc::channel::<DaemonCommand>();
-  let threads = AppThreads::start(&socket_path, api_url, event_tx, rest_req_rx, ipc_cmd_rx);
+  let threads = AppThreads::start(&socket_path, event_tx, rest_req_rx, ipc_cmd_rx);
   let mut session = TerminalSession::enter()?;
 
   let backend = CrosstermBackend::new(std::io::stdout());
@@ -142,6 +141,7 @@ pub fn run(datadir: &Path, api_url: &str) -> Result<(), TuiError> {
   })?;
 
   let mut state = AppState::new(rest_req_tx, ipc_cmd_tx);
+  state.api_url_override = api_url.map(str::to_owned);
   let result = event_loop(&mut terminal, &mut state, event_rx);
   drop(state);
   drop(terminal);
@@ -699,20 +699,6 @@ fn handle_key(state: &mut AppState, code: KeyCode, modifiers: KeyModifiers) {
         }));
       }
     }
-    KeyCode::Char('c') => {
-      if state.focus == Focus::Main
-        && state.section == Section::Overview
-        && state.overview_sub == OverviewSubFocus::Stores
-        && state.connected
-        && state.store_cursor < STORE_TREE.len()
-      {
-        let (cf, name, _) = STORE_TREE[state.store_cursor];
-        state.prompt = Some(PromptState::Confirm(ControlAction::Compact {
-          cf: cf.to_owned(),
-          name: name.to_owned(),
-        }));
-      }
-    }
     KeyCode::Char('d') => {
       if state.focus == Focus::Main && state.section == Section::Overview && state.connected {
         state.prompt = Some(PromptState::Confirm(ControlAction::DisconnectTip));
@@ -828,17 +814,6 @@ fn issue_control_action(state: &mut AppState, action: ControlAction) {
         return;
       }
     }
-    ControlAction::Compact { cf, name } => {
-      if !issue_daemon_command(
-        state,
-        command_id,
-        DaemonCommand::ForceCompact { id: command_id, cf },
-        format!("compacting {name}"),
-        format!("Compacting {name}..."),
-      ) {
-        return;
-      }
-    }
     ControlAction::DisconnectTip => {
       let _ = issue_daemon_command(
         state,
@@ -894,7 +869,7 @@ fn cursor_to_browse_index(cursor: usize) -> Option<BrowseIndex> {
 fn on_section_enter(state: &mut AppState) {
   state.page_scroll = 0;
   if state.section == Section::Health {
-    state.health_panel = HealthPanel::RocksDb;
+    state.health_panel = HealthPanel::Storage;
     state.health_scrolls = [0; 4];
     state.health_scroll_limits = [0; 4];
   }
@@ -915,7 +890,7 @@ fn on_section_enter(state: &mut AppState) {
 
 fn scroll_health_panel(state: &mut AppState, delta: i16) {
   let idx = match state.health_panel {
-    HealthPanel::RocksDb => 0,
+    HealthPanel::Storage => 0,
     HealthPanel::Postgres => 1,
     HealthPanel::Services => 2,
     HealthPanel::Status => 3,
@@ -926,12 +901,41 @@ fn scroll_health_panel(state: &mut AppState, delta: i16) {
 }
 
 fn fire_browse(state: &mut AppState, index: BrowseIndex) {
+  // Resolved per request from the latest frame, so moving the bind or turning
+  // the API off is reflected without restarting the console.
+  let base_url = match browse_endpoint(state) {
+    crate::apibase::ApiBase::Url(url) => url,
+    crate::apibase::ApiBase::Disabled => {
+      state.rest_pending = false;
+      state.rest_error =
+        Some("REST API is disabled in hyphen.conf ([api] absent); nothing to browse".to_owned());
+      return;
+    }
+    crate::apibase::ApiBase::Unknown => {
+      state.rest_pending = false;
+      state.rest_error = Some("waiting for the daemon to report its API address".to_owned());
+      return;
+    }
+  };
   state.rest_pending = true;
   state.rest_error = None;
   state.browse_next_cursor = None;
   let _ = state.rest_tx.send(RestRequest::Browse {
+    base_url,
     index,
     limit: state.browse_limit,
     cursor: state.browse_cursor_history.last().cloned().unwrap_or(None),
   });
+}
+
+/// Where browse requests should go right now, from the flag and the most
+/// recent heartbeat.
+fn browse_endpoint(state: &AppState) -> crate::apibase::ApiBase {
+  crate::apibase::resolve(
+    state.api_url_override.as_deref(),
+    state
+      .snapshot
+      .as_ref()
+      .map(|snap| (snap.config.api.enabled, snap.config.api.bind.as_deref())),
+  )
 }

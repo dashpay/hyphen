@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT vin_index, prev_txid, prev_vout, prev_address, prev_value, script_sig, sequence\n           FROM tx_inputs\n          WHERE txid = $1 AND block_height = $2 AND vin_index >= $3\n          ORDER BY vin_index LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vin_index",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "prev_txid",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "prev_vout",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "prev_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "prev_value",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "script_sig",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "sequence",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "0c84dae2be7c116f25a415c9f11e61018b7c3fa0ddfda6fbcf26552cef888763"
+}

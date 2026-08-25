@@ -200,16 +200,17 @@ impl CoreZmqSource {
         socket.subscribe(topic.subscription_name()),
       )
       .await
-      .map_err(|_| {
-        DaemonError::RestSource {
-          message: format!(
-            "ZMQ subscribe timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {}",
-            topic.subscription_name()
-          ),
-          kind: RestErrorKind::Timeout,
-        }
+      .map_err(|_| DaemonError::RestSource {
+        message: format!(
+          "ZMQ subscribe timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {}",
+          topic.subscription_name()
+        ),
+        kind: RestErrorKind::Timeout,
       })?
-      .map_err(|e| DaemonError::RestSource { message: format!("ZMQ subscribe failed: {e}"), kind: RestErrorKind::Connect })?;
+      .map_err(|e| DaemonError::RestSource {
+        message: format!("ZMQ subscribe failed: {e}"),
+        kind: RestErrorKind::Connect,
+      })?;
     }
     for endpoint in &config.connect {
       info!(%endpoint, "connecting to Core ZMQ endpoint");
@@ -218,15 +219,14 @@ impl CoreZmqSource {
         socket.connect(endpoint),
       )
       .await
-      .map_err(|_| {
-        DaemonError::RestSource {
-          message: format!(
-            "ZMQ connect timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {endpoint}"
-          ),
-          kind: RestErrorKind::Timeout,
-        }
+      .map_err(|_| DaemonError::RestSource {
+        message: format!("ZMQ connect timed out after {ZMQ_STARTUP_TIMEOUT_SECS}s: {endpoint}"),
+        kind: RestErrorKind::Timeout,
       })?
-      .map_err(|e| DaemonError::RestSource { message: format!("ZMQ connect failed: {e}"), kind: RestErrorKind::Connect })?;
+      .map_err(|e| DaemonError::RestSource {
+        message: format!("ZMQ connect failed: {e}"),
+        kind: RestErrorKind::Connect,
+      })?;
     }
     let metrics = ZmqMetrics::new(config);
     metrics.mark_connected();
@@ -247,7 +247,10 @@ impl CoreZmqSource {
     let mut socket = self.socket.lock().await;
     let msg = socket.recv().await.map_err(|e| {
       self.metrics.record_error("receive");
-      DaemonError::RestSource { message: format!("ZMQ receive failed: {e}"), kind: RestErrorKind::Other }
+      DaemonError::RestSource {
+        message: format!("ZMQ receive failed: {e}"),
+        kind: RestErrorKind::Other,
+      }
     })?;
     Ok(RawZmqMessage {
       frames: split_message(msg),
@@ -313,16 +316,15 @@ fn split_message(msg: ZmqMessage) -> Vec<Vec<u8>> {
 fn decode_event(raw: &RawZmqMessage) -> Result<ZmqEvent, DaemonError> {
   if raw.frames.len() != 3 {
     return Err(DaemonError::RestSource {
-      message: format!(
-        "ZMQ message must have 3 frames, got {}",
-        raw.frames.len()
-      ),
+      message: format!("ZMQ message must have 3 frames, got {}", raw.frames.len()),
       kind: RestErrorKind::Other,
     });
   }
 
-  let topic = std::str::from_utf8(&raw.frames[0])
-    .map_err(|e| DaemonError::RestSource { message: format!("ZMQ topic is not valid UTF-8: {e}"), kind: RestErrorKind::Other })?;
+  let topic = std::str::from_utf8(&raw.frames[0]).map_err(|e| DaemonError::RestSource {
+    message: format!("ZMQ topic is not valid UTF-8: {e}"),
+    kind: RestErrorKind::Other,
+  })?;
   let payload = raw.frames[1].clone();
   let sequence = parse_u32_le(&raw.frames[2], "ZMQ sequence")?;
 
@@ -385,17 +387,17 @@ impl ZmqEvent {
 fn decode_sequence_event(payload: &[u8]) -> Result<SequenceEvent, DaemonError> {
   if payload.len() < 33 {
     return Err(DaemonError::RestSource {
-      message: format!(
-        "sequence payload too short: {}",
-        payload.len()
-      ),
+      message: format!("sequence payload too short: {}", payload.len()),
       kind: RestErrorKind::Other,
     });
   }
 
   let hash: [u8; 32] = payload[..32]
     .try_into()
-    .map_err(|_| DaemonError::RestSource { message: "sequence hash must be 32 bytes".to_owned(), kind: RestErrorKind::Other })?;
+    .map_err(|_| DaemonError::RestSource {
+      message: "sequence hash must be 32 bytes".to_owned(),
+      kind: RestErrorKind::Other,
+    })?;
   let kind = payload[32];
   match kind {
     b'C' => {
@@ -441,16 +443,18 @@ fn ensure_sequence_len(payload: &[u8], expected: usize) -> Result<(), DaemonErro
 }
 
 fn parse_u32_le(bytes: &[u8], field: &str) -> Result<u32, DaemonError> {
-  let raw: [u8; 4] = bytes
-    .try_into()
-    .map_err(|_| DaemonError::RestSource { message: format!("{field} must be 4 bytes"), kind: RestErrorKind::Other })?;
+  let raw: [u8; 4] = bytes.try_into().map_err(|_| DaemonError::RestSource {
+    message: format!("{field} must be 4 bytes"),
+    kind: RestErrorKind::Other,
+  })?;
   Ok(u32::from_le_bytes(raw))
 }
 
 fn parse_u64_le(bytes: &[u8], field: &str) -> Result<u64, DaemonError> {
-  let raw: [u8; 8] = bytes
-    .try_into()
-    .map_err(|_| DaemonError::RestSource { message: format!("{field} must be 8 bytes"), kind: RestErrorKind::Other })?;
+  let raw: [u8; 8] = bytes.try_into().map_err(|_| DaemonError::RestSource {
+    message: format!("{field} must be 8 bytes"),
+    kind: RestErrorKind::Other,
+  })?;
   Ok(u64::from_le_bytes(raw))
 }
 

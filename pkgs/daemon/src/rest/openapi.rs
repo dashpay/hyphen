@@ -197,7 +197,8 @@ pub struct TxSummary {
   #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
-  pub lock_time: i32,
+  /// Wide enough for the full u32 nLockTime range.
+  pub lock_time: i64,
   #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
@@ -288,7 +289,8 @@ pub struct TxDetail {
   #[serde(rename = "txVersion")]
   pub version: i16,
   pub tx_type: String,
-  pub lock_time: i32,
+  /// Wide enough for the full u32 nLockTime range.
+  pub lock_time: i64,
   #[serde(rename = "txSize")]
   pub size: i32,
   pub value_out: i64,
@@ -429,8 +431,24 @@ pub struct BalancePageMeta {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BalanceResponse {
+  /// Canonical height this page was read at.
+  ///
+  /// Per page, not per listing. The rich list is maintained in place, so paging
+  /// across several requests is not a consistent snapshot — an address that
+  /// crosses a page boundary between requests can appear twice or not at all.
   pub as_of_height: i32,
+  /// How many entries this listing holds, and can therefore page through.
+  ///
+  /// The rich list is served from a side table holding only the addresses above
+  /// the configured floor, so this is that table's size. It used to be the
+  /// chain-wide positive-balance count, which is far larger and left most of
+  /// the advertised total unreachable: the cursor went terminal at the floor.
   pub total_count: i64,
+  /// Addresses holding any positive balance, chain-wide.
+  ///
+  /// Reported separately because it is not the size of this listing. It is the
+  /// number `total_count` used to carry.
+  pub positive_balance_count: i64,
   pub value: Vec<BalanceEntry>,
   pub meta: BalancePageMeta,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -746,6 +764,9 @@ pub struct ValidatorPose {
 #[derive(Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidatorLive {
+  #[serde(rename = "type")]
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub validator_type: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub valid: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -838,6 +859,10 @@ pub struct StageStatus {
 #[serde(rename_all = "camelCase")]
 pub struct StatusResponse {
   pub sync_status: String,
+  /// Index-maintenance regime: `realtime` maintains every index per block,
+  /// `stepped` defers the open partition's query-only indexes until it closes.
+  /// Results are identical either way; only the cost of producing them moves.
+  pub sync_mode: String,
   pub block_height: i32,
   pub indices: std::collections::HashMap<String, StageStatus>,
   pub version: String,

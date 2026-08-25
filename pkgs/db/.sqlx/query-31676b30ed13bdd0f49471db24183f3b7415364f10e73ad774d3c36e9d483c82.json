@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM utxo_set WHERE outpoint = ANY($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "ByteaArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31676b30ed13bdd0f49471db24183f3b7415364f10e73ad774d3c36e9d483c82"
+}

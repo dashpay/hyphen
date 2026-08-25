@@ -17,7 +17,7 @@ use hyphend::wire::msg::{IngestionActivity, IngestionStateName};
 
 use crate::model::{AppState, Focus, OverviewSubFocus};
 use crate::theme;
-use crate::widgets::calc_eta;
+use crate::widgets::{calc_eta, calc_eta_by_transactions};
 
 /// Render the storage backends table.
 pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -56,10 +56,16 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
               theme::connected(),
             )
           } else {
+            // Both figures, always. A block percentage on its own read "36%"
+            // on a run that was ~6% done by transaction.
+            let progress = match snap.chain_progress_diag.tx_progress_pct {
+              Some(tx_pct) => format!("{:.0}% blk / {tx_pct:.0}% tx", ratio * 100.0),
+              None => format!("{:.0}% blk", ratio * 100.0),
+            };
             (
               theme::fmt_num(height),
               theme::fmt_num(tip),
-              format!("Importing ({:.0}%)", ratio * 100.0),
+              format!("Importing ({progress})"),
               theme::syncing(),
             )
           }
@@ -90,25 +96,50 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         status = "Stalled".to_string();
         style = theme::disconnected();
       }
+      // An index build outranks both, including "Stalled". A deferred build is
+      // taken on the write path deliberately, so the projection really has
+      // stopped and the watchdog really does see no progress — but that is the
+      // mode working, not a fault, and calling it stalled sends an operator
+      // hunting for a problem that is a scheduled index build.
+      if let Some(build) = snap.ingestion_diag.index_build.as_ref() {
+        status = format!(
+          "Indexing {}/{} p{} {}",
+          build.nth,
+          build.of,
+          build.partition,
+          theme::fmt_dur_secs(build.elapsed_secs)
+        );
+        style = theme::syncing();
+      }
       let bps = state.ingestion_sparkline.last().unwrap_or(0);
       let bps_str = if bps > 0 {
         bps.to_string()
       } else {
         "-".to_string()
       };
-      let eta = calc_eta(
-        ingestion_height.map(|height| height as i32),
-        abs_tip.map(|tip| tip as i32),
+      // Prefer the transaction-weighted ETA; the block-rate one is optimistic
+      // by roughly the density climb still ahead of it.
+      let eta = calc_eta_by_transactions(
+        snap.chain_progress_diag.transactions_indexed,
+        snap.chain_progress_diag.transactions_estimated_total,
+        snap.chain_progress_diag.txs_per_block_recent,
         bps,
-      );
+      )
+      .unwrap_or_else(|| {
+        calc_eta(
+          ingestion_height.map(|height| height as i32),
+          abs_tip.map(|tip| tip as i32),
+          bps,
+        )
+      });
       let name_style = if stores_focused && state.store_cursor == 0 {
         theme::highlight()
       } else {
         theme::normal()
       };
       vec![Row::new(vec![
-        Cell::from(Span::styled(" Blocks", name_style)),
-        Cell::from(Span::styled("RocksDB", theme::muted())),
+        Cell::from(Span::styled(" Chain Data", name_style)),
+        Cell::from(Span::styled("PostgreSQL", theme::muted())),
         Cell::from(Span::styled(height, theme::normal())),
         Cell::from(Span::styled(tip, theme::muted())),
         Cell::from(Span::styled(bps_str, theme::info())),
@@ -143,12 +174,9 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 fn ingest_state_label(state: IngestionStateName) -> &'static str {
   match state {
     IngestionStateName::Boot => "boot",
-    IngestionStateName::Reconciling => "reconciling",
     IngestionStateName::PollingTip => "polling",
     IngestionStateName::Idle => "idle",
     IngestionStateName::Paused => "paused",
-    IngestionStateName::Admitting => "admitting",
-    IngestionStateName::Throttled => "throttled",
     IngestionStateName::Fetching => "fetching",
     IngestionStateName::Committing => "committing",
     IngestionStateName::Backoff => "backoff",

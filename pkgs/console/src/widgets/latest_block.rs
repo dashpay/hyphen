@@ -80,12 +80,9 @@ pub fn draw(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 fn ingest_state_label(state: IngestionStateName) -> &'static str {
   match state {
     IngestionStateName::Boot => "boot",
-    IngestionStateName::Reconciling => "reconciling",
     IngestionStateName::PollingTip => "polling",
     IngestionStateName::Idle => "idle",
     IngestionStateName::Paused => "paused",
-    IngestionStateName::Admitting => "admitting",
-    IngestionStateName::Throttled => "throttled",
     IngestionStateName::Fetching => "fetching",
     IngestionStateName::Committing => "committing",
     IngestionStateName::Backoff => "backoff",

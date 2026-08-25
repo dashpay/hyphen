@@ -7,7 +7,6 @@
 //! Shared supervision helpers and lifecycle contracts for long-lived daemon
 //! tasks.
 
-pub(crate) mod core;
 pub(crate) mod ipc;
 pub(crate) mod live;
 pub(crate) mod rest;
@@ -195,7 +194,10 @@ where
   }
 }
 
-#[allow(dead_code)]
+#[expect(
+  dead_code,
+  reason = "the gate is implemented ahead of the callers that will drive it"
+)]
 /// Lifecycle control shared by all long-lived supervisors.
 pub(crate) trait InterruptGate {
   /// Request graceful interruption.
@@ -205,7 +207,6 @@ pub(crate) trait InterruptGate {
   fn interrupt_point(&self) -> bool;
 }
 
-#[allow(dead_code)]
 /// Common lifecycle surface for daemon supervisors.
 #[async_trait]
 pub(crate) trait Visor: InterruptGate {
@@ -1036,11 +1037,15 @@ mod tests {
           fenced: Arc::new(AtomicBool::new(false)),
         },
         async {
-          // Pg with SQLSTATE 23505 (unique violation) classifies as Error, not Fatal
-          Err(DaemonError::Pg {
-            message: "constraint violation".to_owned(),
-            code: Some("23505".to_owned()),
-          })
+          // A storage error carrying SQLSTATE 23505 (unique violation)
+          // classifies as Error, not Fatal.
+          Err(DaemonError::storage(
+            "test",
+            hyphen_db::HyDbError::Pg {
+              message: "constraint violation".to_owned(),
+              code: Some("23505".to_owned()),
+            },
+          ))
         },
       ),
       || {

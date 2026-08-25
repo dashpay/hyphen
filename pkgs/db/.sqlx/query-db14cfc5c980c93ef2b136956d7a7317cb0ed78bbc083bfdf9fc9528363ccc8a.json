@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO blocks\n           (height, hash, prev_hash, merkle_root, time, bits, nonce, version, size, tx_count,\n            chainwork, cb_height, cb_merkle_root, cb_merkle_flags, cb_best_cl_height,\n            cb_best_cl_sig, cb_credit_pool)\n         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Int8",
+        "Int4",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Int4",
+        "Int4",
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "db14cfc5c980c93ef2b136956d7a7317cb0ed78bbc083bfdf9fc9528363ccc8a"
+}

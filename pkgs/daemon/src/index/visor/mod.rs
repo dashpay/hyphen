@@ -6,7 +6,7 @@
 
 //! Index-side supervision seams.
 //!
-//! This module is the ownership boundary for long-lived SQL/RocksDB-backed
+//! This module is the ownership boundary for long-lived storage-backed
 //! index orchestration. Runtime migration happens incrementally; existing stage
 //! and runner code remains below this seam until it is folded into a dedicated
 //! supervisor.

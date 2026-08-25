@@ -6,6 +6,7 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
+mod apibase;
 mod app;
 mod appview;
 mod args;
@@ -31,7 +32,7 @@ fn run() -> Result<(), TuiError> {
     None => hyphend::wire::datadir::platform_datadir().ok_or(TuiError::NoPlatformDataDir)?,
   };
   tracing::info!(path = %dir.display(), "resolved datadir");
-  app::run(&dir, &args.api_url)
+  app::run(&dir, args.api_url.as_deref())
 }
 
 fn main() {

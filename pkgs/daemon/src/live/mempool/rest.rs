@@ -50,13 +50,13 @@ struct MempoolTxCursor {
 pub async fn summary(State(state): State<AppState>) -> Result<Json<MempoolResponse>, ApiError> {
   state.check_live_feature(LiveFeature::Mempool)?;
 
-  let row = crate::sql::live::mempool::summary(&state.pool)
-    .await
-    .map_err(|e| ApiError::from_daemon(e, "query mempool summary"))?
+  let row = state
+    .live_state
+    .mempool_summary()
     .ok_or_else(|| ApiError::service_unavailable("mempool summary is not ready"))?;
-  let recent = crate::sql::live::mempool::recent_txs(&state.pool, MAX_MEMPOOL_TX_LIMIT)
-    .await
-    .map_err(|e| ApiError::from_daemon(e, "query mempool recent txs"))?;
+  let recent = state
+    .live_state
+    .mempool_recent(MAX_MEMPOOL_TX_LIMIT as usize, None);
 
   Ok(Json(MempoolResponse {
     count: row.tx_count,
@@ -66,7 +66,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<MempoolRespon
     updated_at: rfc3339_time(row.updated_at)?,
     recent_hashes: recent
       .into_iter()
-      .map(|row| utils::view_hex(&row.txid, HashEndian::Ser))
+      .map(|tx| utils::view_hex(&tx.txid, HashEndian::Ser))
       .collect(),
   }))
 }
@@ -110,30 +110,30 @@ pub async fn recent_txs(
   let after_ref = after
     .as_ref()
     .map(|(last_seen_at, txid)| (*last_seen_at, txid.as_slice()));
-  let mut rows = crate::sql::live::mempool::recent_tx_details(&state.pool, limit + 1, after_ref)
-    .await
-    .map_err(|e| ApiError::from_daemon(e, "query mempool recent tx details"))?;
+  let mut rows = state
+    .live_state
+    .mempool_recent((limit + 1) as usize, after_ref);
   let has_more = rows.len() as i64 > limit;
   rows.truncate(limit as usize);
   let mut value = Vec::with_capacity(rows.len());
-  for row in &rows {
+  for tx in &rows {
     value.push(MempoolTxSummary {
-      txid: utils::view_hex(&row.txid, HashEndian::Ser),
-      tx_type: row.tx_type.clone(),
-      size: row.size as usize,
-      value_out: row.value_out,
-      first_seen_at: rfc3339_time(row.first_seen_at)?,
-      last_seen_at: rfc3339_time(row.last_seen_at)?,
+      txid: utils::view_hex(&tx.txid, HashEndian::Ser),
+      tx_type: tx.tx_type.clone(),
+      size: tx.size as usize,
+      value_out: tx.value_out,
+      first_seen_at: rfc3339_time(tx.first_seen_at)?,
+      last_seen_at: rfc3339_time(tx.last_seen_at)?,
       tags: TxTags {
         mined: false,
         coinbase: false,
       },
     });
   }
-  let total_count = crate::sql::live::mempool::summary(&state.pool)
-    .await
-    .map_err(|e| ApiError::from_daemon(e, "query mempool summary"))?
-    .map_or(value.len() as i64, |row| row.tx_count);
+  let total_count = state
+    .live_state
+    .mempool_summary()
+    .map_or(value.len() as i64, |summary| summary.tx_count);
 
   Ok(Json(CursorPage {
     total_count,
@@ -141,10 +141,10 @@ pub async fn recent_txs(
     next_cursor: if has_more {
       rows
         .last()
-        .map(|row| {
+        .map(|tx| {
           encode_cursor(&MempoolTxCursor {
-            last_seen_at: row.last_seen_at,
-            txid: utils::view_hex(&row.txid, HashEndian::Ser),
+            last_seen_at: tx.last_seen_at,
+            txid: utils::view_hex(&tx.txid, HashEndian::Ser),
           })
         })
         .transpose()?

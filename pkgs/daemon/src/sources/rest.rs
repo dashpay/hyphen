@@ -248,10 +248,7 @@ impl CoreRestClient {
   /// cannot be read as text.
   pub async fn rest_text(&self, path: &str) -> Result<String, DaemonError> {
     let resp = self.rest_get(path).await?;
-    let text = resp
-      .text()
-      .await
-      .map_err(|e| rest_err("REST text", e))?;
+    let text = resp.text().await.map_err(|e| rest_err("REST text", e))?;
     Ok(text.trim().to_owned())
   }
 }

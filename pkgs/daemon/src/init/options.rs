@@ -7,27 +7,20 @@
 //! Derived runtime options resolved from CLI args and config.
 
 use crate::config::{
-  self, ApiConfig, Config, DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD,
-  DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG, DEFAULT_CHAINLOCK_REFRESH_SECS,
-  DEFAULT_GOVERNANCE_REFRESH_SECS, DEFAULT_NETWORK_REFRESH_SECS, DEFAULT_PROTX_REFRESH_SECS,
+  self, ApiConfig, Config, DEFAULT_CHAINLOCK_REFRESH_SECS, DEFAULT_GOVERNANCE_REFRESH_SECS,
+  DEFAULT_NETWORK_REFRESH_SECS, DEFAULT_PROTX_REFRESH_SECS,
 };
 use crate::error::DaemonError;
-use crate::init::args::{Args, IndexTarget, StoreTarget as StoreTargetArg};
+use crate::init::args::Args;
 use hyphend::wire::msg::{
-  ConfigApiSnapshot, ConfigCacheSnapshot, ConfigIndexSnapshot, ConfigLiveSnapshot,
-  ConfigOverlaySnapshot, ConfigPerformanceSnapshot, ConfigSnapshot, ConfigSourcesSnapshot,
+  ConfigApiSnapshot, ConfigIndexSnapshot, ConfigLiveSnapshot, ConfigOverlaySnapshot,
+  ConfigPostgresSnapshot, ConfigSnapshot, ConfigSourcesSnapshot,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupMode {
   Serve,
   DocsOnly,
-  RebuildIndex(IndexTarget),
-  RebuildStore(crate::store::StoreTarget),
-  VerifyIndex(IndexTarget),
-  VerifyStore(crate::store::StoreTarget),
-  CompactStore(crate::store::StoreTarget),
-  RewindAll { target_height: Option<u32> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,19 +47,6 @@ pub struct OverlayOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheOptions {
-  pub enabled: bool,
-  pub address_enabled: bool,
-  pub address_budget: String,
-  pub address_budget_bytes: usize,
-  pub address_hot_cache_threshold: i32,
-  pub address_summary_catchup_lag: i32,
-  pub readiness_enabled: bool,
-  pub readiness_budget: String,
-  pub readiness_budget_bytes: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiOptions {
   pub enabled: bool,
   pub bind: Option<String>,
@@ -79,7 +59,6 @@ pub struct Options {
   pub indices: IndexOptions,
   pub live: LiveOptions,
   pub overlays: OverlayOptions,
-  pub cache: CacheOptions,
   pub api: ApiOptions,
   pub recent_mempool_txs: usize,
   pub stream_client_buffer: usize,
@@ -89,17 +68,10 @@ pub struct Options {
   pub governance_refresh_secs: u64,
   pub chainlock_refresh_secs: u64,
   pub protx_refresh_secs: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConfigSnapshotParams {
-  pub ingestion_batch_size: u32,
-  pub max_ingestion_lead_blocks: u32,
-  pub prefetch_blocks: u32,
-  pub commit_batch_blocks: u32,
-  pub min_batch_size: u32,
-  pub max_batch_size: u32,
-  pub target_batch_ms: u64,
+  /// Start serving without settling the vacuum a sync deferred. Carried here
+  /// rather than read from `Args` at the call site so the startup policy has
+  /// one shape, and so a test can exercise both paths without a CLI parse.
+  pub skip_compacting: bool,
 }
 
 impl Options {
@@ -111,25 +83,12 @@ impl Options {
   pub fn resolve(args: &Args, cfg: &Config) -> Result<Self, DaemonError> {
     let startup_mode = if args.docs_only {
       StartupMode::DocsOnly
-    } else if let Some(target) = args.rebuild_index {
-      StartupMode::RebuildIndex(target)
-    } else if let Some(target) = args.rebuild_store {
-      StartupMode::RebuildStore(store_target(target))
-    } else if let Some(target) = args.verify_index {
-      StartupMode::VerifyIndex(target)
-    } else if let Some(target) = args.verify_store {
-      StartupMode::VerifyStore(store_target(target))
-    } else if let Some(target) = args.compact_store {
-      StartupMode::CompactStore(store_target(target))
-    } else if let Some(target_height) = args.rewind_all {
-      StartupMode::RewindAll { target_height }
     } else {
       StartupMode::Serve
     };
 
     let live_cfg = cfg.live.clone().unwrap_or_default();
     let overlay_cfg = cfg.overlays.clone().unwrap_or_default();
-    let cache_cfg = cfg.cache.clone().unwrap_or_default();
     if startup_mode != StartupMode::DocsOnly {
       let rpc_enabled = cfg.core.rpc.as_ref().is_some_and(|rpc| rpc.enabled);
       let zmq_enabled = cfg.core.zmq.as_ref().is_some_and(|zmq| zmq.enabled);
@@ -182,17 +141,6 @@ impl Options {
       }
     }
 
-    let address_budget_bytes = if cache_cfg.enabled && cache_cfg.address.enabled {
-      config::parse_memory_budget(&cache_cfg.address.budget)?
-    } else {
-      1
-    };
-    let readiness_budget_bytes = if cache_cfg.enabled && cache_cfg.readiness.enabled {
-      config::parse_memory_budget(&cache_cfg.readiness.budget)?
-    } else {
-      1
-    };
-
     Ok(Self {
       startup_mode,
       indices: IndexOptions {
@@ -212,30 +160,12 @@ impl Options {
         protx: overlay_cfg.enable_protx,
         chainlock: overlay_cfg.enable_chainlock,
       },
-      cache: CacheOptions {
-        enabled: cache_cfg.enabled,
-        address_enabled: cache_cfg.enabled && cache_cfg.address.enabled,
-        address_budget: cache_cfg.address.budget,
-        address_budget_bytes,
-        address_hot_cache_threshold: if cache_cfg.enabled {
-          cache_cfg.address.hot_threshold
-        } else {
-          DEFAULT_ADDRESS_CACHE_HOT_THRESHOLD
-        },
-        address_summary_catchup_lag: if cache_cfg.enabled {
-          cache_cfg.address.summary_catchup_lag
-        } else {
-          DEFAULT_ADDRESS_SUMMARY_CATCHUP_LAG
-        },
-        readiness_enabled: cache_cfg.enabled && cache_cfg.readiness.enabled,
-        readiness_budget: cache_cfg.readiness.budget,
-        readiness_budget_bytes,
-      },
       api: ApiOptions {
         enabled: cfg.api.is_some(),
         bind: cfg.api.as_ref().map(|api| api.bind.clone()),
         cors_origin: cfg.api.as_ref().and_then(|api| api.cors_origin.clone()),
       },
+      skip_compacting: args.skip_compacting,
       recent_mempool_txs: live_cfg.recent_mempool_txs,
       stream_client_buffer: live_cfg.stream_client_buffer,
       stream_heartbeat_secs: live_cfg.stream_heartbeat_secs,
@@ -267,24 +197,91 @@ impl Options {
     })
   }
 
+  /// The optional capabilities this run has, as `(name, enabled)` pairs.
+  ///
+  /// The structs are destructured rather than field-accessed on purpose: add a
+  /// flag to `LiveOptions`, `OverlayOptions` or `IndexOptions` and this stops
+  /// compiling until the flag is named here too, so the startup report cannot
+  /// silently fall behind the configuration it claims to describe.
+  pub fn capability_flags(&self) -> Vec<(&'static str, bool)> {
+    let LiveOptions {
+      mempool,
+      islock,
+      chainlock: live_chainlock,
+      governance,
+      network,
+      stream,
+    } = self.live;
+    let OverlayOptions {
+      protx,
+      chainlock: overlay_chainlock,
+    } = self.overlays;
+    let IndexOptions {
+      address,
+      validator,
+      metrics,
+    } = self.indices;
+    vec![
+      ("live.mempool", mempool),
+      ("live.islock", islock),
+      ("live.chainlock", live_chainlock),
+      ("live.governance", governance),
+      ("live.network", network),
+      ("live.stream", stream),
+      ("overlay.protx", protx),
+      ("overlay.chainlock", overlay_chainlock),
+      ("index.address", address),
+      ("index.validator", validator),
+      ("index.metrics", metrics),
+    ]
+  }
+
+  /// Report which optional capabilities this run has.
+  ///
+  /// Both halves are named. An earlier run shipped with every overlay off and
+  /// said nothing about it; the state was recoverable only by reading struct
+  /// defaults, so "off" has to be as loud as "on".
+  pub fn log_capabilities(&self) {
+    let flags = self.capability_flags();
+    let enabled: Vec<&str> = flags
+      .iter()
+      .filter(|(_, on)| *on)
+      .map(|(name, _)| *name)
+      .collect();
+    let disabled: Vec<&str> = flags
+      .iter()
+      .filter(|(_, on)| !*on)
+      .map(|(name, _)| *name)
+      .collect();
+
+    if enabled.is_empty() {
+      tracing::warn!(
+        disabled = %disabled.join(","),
+        "every optional capability is off: this run indexes blocks only, with no live, overlay or secondary-index surfaces"
+      );
+    } else {
+      tracing::info!(
+        enabled = %enabled.join(","),
+        disabled = %if disabled.is_empty() { "none".to_owned() } else { disabled.join(",") },
+        "optional capabilities resolved"
+      );
+    }
+  }
+
   /// Build the runtime config snapshot published to IPC and the console.
   ///
   /// # Errors
   ///
   /// Returns `DaemonError::Config` when one configured RPC auth mode cannot be
   /// resolved for snapshot diagnostics.
-  pub fn config_snapshot(
-    &self,
-    cfg: &Config,
-    params: ConfigSnapshotParams,
-  ) -> Result<ConfigSnapshot, DaemonError> {
+  pub fn config_snapshot(&self, cfg: &Config) -> Result<ConfigSnapshot, DaemonError> {
     Ok(ConfigSnapshot {
       sources: ConfigSourcesSnapshot {
         rest_url: cfg.core.url.clone(),
         postgres_enabled: true,
-        postgres_write_pool_size: Some(cfg.postgres.write_pool_size),
-        postgres_query_pool_size: Some(cfg.postgres.query_pool_size),
-        postgres_admin_pool_size: Some(cfg.postgres.admin_pool_size),
+        postgres_write_pool_size: Some(cfg.db.client.write.size),
+        postgres_query_pool_size: Some(cfg.db.client.query.size),
+        postgres_admin_pool_size: Some(cfg.db.client.admin.size),
         rpc_enabled: cfg.core.rpc.as_ref().is_some_and(|rpc| rpc.enabled),
         rpc_url: cfg.core.rpc.as_ref().map(|rpc| rpc.url.clone()),
         rpc_auth_type: cfg
@@ -324,7 +321,7 @@ impl Options {
               .collect()
           })
           .unwrap_or_default(),
-        postgres_url: Some(crate::ipc::snapshot::redact_pg_url(&cfg.postgres.url)),
+        postgres_url: Some(cfg.db.client.endpoint()),
       },
       api: ConfigApiSnapshot {
         enabled: self.api.enabled,
@@ -352,37 +349,15 @@ impl Options {
         protx: self.overlays.protx,
         chainlock: self.overlays.chainlock,
       },
-      performance: ConfigPerformanceSnapshot {
-        ingestion_batch_size: Some(params.ingestion_batch_size),
-        max_ingestion_lead_blocks: Some(params.max_ingestion_lead_blocks),
-        prefetch_blocks: Some(params.prefetch_blocks),
-        commit_batch_blocks: Some(params.commit_batch_blocks),
-        min_batch_size: Some(params.min_batch_size),
-        max_batch_size: Some(params.max_batch_size),
-        target_batch_ms: Some(params.target_batch_ms),
-      },
-      cache: ConfigCacheSnapshot {
-        enabled: self.cache.enabled,
-        address_enabled: self.cache.address_enabled,
-        address_budget: self
-          .cache
-          .enabled
-          .then(|| self.cache.address_budget.clone()),
-        readiness_enabled: self.cache.readiness_enabled,
-        readiness_budget: self
-          .cache
-          .enabled
-          .then(|| self.cache.readiness_budget.clone()),
+      postgres: ConfigPostgresSnapshot {
+        url_redacted: Some(cfg.db.client.endpoint()),
+        write_pool_size: Some(cfg.db.client.write.size),
+        query_pool_size: Some(cfg.db.client.query.size),
+        heavy_query_pool_size: Some(cfg.db.client.heavy.size),
+        admin_pool_size: Some(cfg.db.client.admin.size),
+        slow_query_ms: Some(cfg.db.client.slow_query_ms),
       },
     })
-  }
-}
-
-fn store_target(arg: StoreTargetArg) -> crate::store::StoreTarget {
-  match arg {
-    StoreTargetArg::All => crate::store::StoreTarget::All,
-    StoreTargetArg::Address => crate::store::StoreTarget::AddressHistory,
-    StoreTargetArg::Prevout => crate::store::StoreTarget::PrevoutLookup,
   }
 }
 
@@ -405,7 +380,47 @@ impl ApiOptions {
 #[cfg(test)]
 mod tests {
   use super::{Options, StartupMode};
-  use crate::init::args::{IndexTarget, StoreTarget};
+
+  /// F1: the startup report must name every optional capability, in both
+  /// states. A run with all of them off looked identical to a normal one.
+  #[test]
+  fn capability_flags_name_every_optional_feature() -> Result<(), Box<dyn std::error::Error>> {
+    let args = default_args();
+    let cfg = crate::config::Config::default();
+    // `?` rather than an assert followed by an else-return. The crate denies
+    // `expect`, and a returning else-arm is the shape that let vacuous skips
+    // accumulate elsewhere, so the test carries a `Result` instead.
+    let options = Options::resolve(&args, &cfg)?;
+
+    let flags = options.capability_flags();
+    let names: Vec<&str> = flags.iter().map(|(name, _)| *name).collect();
+    for expected in [
+      "live.mempool",
+      "live.islock",
+      "live.chainlock",
+      "live.governance",
+      "live.network",
+      "live.stream",
+      "overlay.protx",
+      "overlay.chainlock",
+      "index.address",
+      "index.validator",
+      "index.metrics",
+    ] {
+      assert!(names.contains(&expected), "{expected} is not reported");
+    }
+    assert_eq!(flags.len(), names.len());
+    // The eight live/overlay flags are the ones F1 was raised about.
+    let overlays = flags
+      .iter()
+      .filter(|(name, _)| name.starts_with("live.") || name.starts_with("overlay."))
+      .count();
+    assert_eq!(overlays, 8, "the eight overlays must all be reported");
+
+    // Reporting must not crash on the all-off shape that went unnoticed.
+    options.log_capabilities();
+    Ok(())
+  }
 
   fn default_args() -> crate::init::Args {
     crate::init::Args {
@@ -413,41 +428,9 @@ mod tests {
       loglevel: 2,
       logconsole: false,
       docs_only: false,
-      rebuild_index: None,
-      rebuild_store: None,
-      verify_index: None,
-      verify_store: None,
-      compact_store: None,
-      rewind_all: None,
+      show_layout: false,
+      skip_compacting: false,
     }
-  }
-
-  #[test]
-  fn options_resolve_rebuild_index_all_mode() {
-    let args = crate::init::Args {
-      rebuild_index: Some(IndexTarget::All),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RebuildIndex(IndexTarget::All)
-    );
-  }
-
-  #[test]
-  fn options_resolve_rebuild_index_block_mode() {
-    let args = crate::init::Args {
-      rebuild_index: Some(IndexTarget::Block),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RebuildIndex(IndexTarget::Block)
-    );
   }
 
   #[test]
@@ -465,80 +448,6 @@ mod tests {
       crate::error::DaemonError::Config(message)
       if message.contains("overlays.enable_protx requires core.rpc.enabled")
     ));
-  }
-
-  #[test]
-  fn options_resolve_rebuild_store_mode() {
-    let args = crate::init::Args {
-      rebuild_store: Some(StoreTarget::All),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RebuildStore(crate::store::StoreTarget::All)
-    );
-  }
-
-  #[test]
-  fn options_resolve_verify_store_mode() {
-    let args = crate::init::Args {
-      verify_store: Some(StoreTarget::Prevout),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::VerifyStore(crate::store::StoreTarget::PrevoutLookup)
-    );
-  }
-
-  #[test]
-  fn options_resolve_compact_store_mode() {
-    let args = crate::init::Args {
-      compact_store: Some(StoreTarget::Address),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::CompactStore(crate::store::StoreTarget::AddressHistory)
-    );
-  }
-
-  #[test]
-  fn options_resolve_rewind_all_auto_detect() {
-    let args = crate::init::Args {
-      rewind_all: Some(None),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RewindAll {
-        target_height: None
-      }
-    );
-  }
-
-  #[test]
-  fn options_resolve_rewind_all_explicit_height() {
-    let args = crate::init::Args {
-      rewind_all: Some(Some(1000)),
-      ..default_args()
-    };
-    let options =
-      Options::resolve(&args, &crate::config::Config::default()).expect("options should resolve");
-    assert_eq!(
-      options.startup_mode,
-      StartupMode::RewindAll {
-        target_height: Some(1000)
-      }
-    );
   }
 
   #[test]

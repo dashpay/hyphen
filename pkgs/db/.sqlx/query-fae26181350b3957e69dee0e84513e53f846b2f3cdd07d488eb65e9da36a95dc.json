@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT current_setting('server_version') AS \"server_version!\",\n                pg_database_size(current_database())::bigint AS \"database_bytes!\",\n                pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')::bigint AS \"wal_bytes!\",\n                (SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database())::bigint\n                  AS \"connections!\",\n                current_setting('max_connections')::bigint AS \"max_connections!\",\n                (SELECT COUNT(*) FROM pg_stat_activity\n                  WHERE backend_type = 'autovacuum worker')::bigint AS \"autovacuum_running!\",\n                current_setting('shared_buffers') AS \"shared_buffers!\",\n                current_setting('work_mem') AS \"work_mem!\",\n                current_setting('effective_cache_size') AS \"effective_cache_size!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "server_version!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "database_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "wal_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "connections!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_connections!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "autovacuum_running!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "shared_buffers!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "work_mem!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "effective_cache_size!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fae26181350b3957e69dee0e84513e53f846b2f3cdd07d488eb65e9da36a95dc"
+}

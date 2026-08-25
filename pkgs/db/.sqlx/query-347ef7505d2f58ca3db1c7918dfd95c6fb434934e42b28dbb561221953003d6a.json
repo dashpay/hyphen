@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*)::bigint AS \"missing!\", MAX(g.h) AS highest_missing\n         FROM generate_series($1::int, $2::int) AS g(h)\n        WHERE NOT EXISTS (SELECT 1 FROM undo_blocks u WHERE u.height = g.h)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "missing!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "highest_missing",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "347ef7505d2f58ca3db1c7918dfd95c6fb434934e42b28dbb561221953003d6a"
+}

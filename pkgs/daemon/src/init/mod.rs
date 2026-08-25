@@ -14,7 +14,7 @@ pub mod options;
 pub use args::Args;
 pub use config::load_config;
 pub use logs::init_logs;
-pub use options::{ConfigSnapshotParams, Options, StartupMode};
+pub use options::{Options, StartupMode};
 
 /// Desired minimum soft file-descriptor limit for the daemon process.
 #[cfg(not(unix))]

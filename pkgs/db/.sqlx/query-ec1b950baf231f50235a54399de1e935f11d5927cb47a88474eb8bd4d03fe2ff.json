@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH created AS (\n           SELECT address, SUM(value)::int8 AS recv, COUNT(*)::int4 AS n_out\n             FROM tx_outputs\n            WHERE block_height = $1 AND address IS NOT NULL\n            GROUP BY address\n         ), consumed AS (\n           SELECT o.address, SUM(o.value)::int8 AS sent, COUNT(*)::int4 AS n_in\n             FROM spends s JOIN tx_outputs o ON o.outpoint = s.outpoint\n            WHERE s.spend_height = $1 AND o.address IS NOT NULL\n            GROUP BY o.address\n         ), touched AS (\n           SELECT address, txid FROM tx_outputs\n            WHERE block_height = $1 AND address IS NOT NULL\n           UNION\n           SELECT o.address, s.spending_txid\n             FROM spends s JOIN tx_outputs o ON o.outpoint = s.outpoint\n            WHERE s.spend_height = $1 AND o.address IS NOT NULL\n         ), tx_counts AS (\n           SELECT address, COUNT(*)::int4 AS n_tx FROM touched GROUP BY address\n         )\n         SELECT t.address AS \"address!\",\n                (COALESCE(c.recv, 0) - COALESCE(x.sent, 0))::int8 AS \"balance_delta!\",\n                COALESCE(c.recv, 0)::int8                         AS \"received!\",\n                t.n_tx                                            AS \"tx_delta!\",\n                (COALESCE(c.n_out, 0) - COALESCE(x.n_in, 0))::int4 AS \"utxo_delta!\"\n           FROM tx_counts t\n           LEFT JOIN created  c ON c.address = t.address\n           LEFT JOIN consumed x ON x.address = t.address",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "address!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "balance_delta!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "received!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "tx_delta!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "utxo_delta!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ec1b950baf231f50235a54399de1e935f11d5927cb47a88474eb8bd4d03fe2ff"
+}

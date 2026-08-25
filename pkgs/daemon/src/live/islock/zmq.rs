@@ -6,22 +6,22 @@
 
 //! Live InstantSend tx-lock tracking backed by node ZMQ.
 
-use crate::sql::SqlPool;
+use std::sync::Arc;
+
 use tokio::sync::broadcast;
 
 use dash_primitives::hash;
 
-use crate::error::DaemonError;
 use crate::lifecycle::Lifecycle;
+use crate::live::state::{IsLock, LiveState};
 use crate::sources::{SequenceEvent, ZmqEvent};
-use crate::sql;
 use crate::utils::{self, HashEndian};
 
-/// Persist current InstantSend tx-lock state from ZMQ until shutdown.
+/// Track current InstantSend tx-lock state in RAM from ZMQ until shutdown.
 pub async fn sync_current_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   mut rx: broadcast::Receiver<ZmqEvent>,
-  lifecycle: std::sync::Arc<Lifecycle>,
+  lifecycle: Arc<Lifecycle>,
 ) {
   let mut shutdown = lifecycle.subscribe();
   while lifecycle.running() {
@@ -29,11 +29,7 @@ pub async fn sync_current_loop(
       result = rx.recv() => Some(result),
       _ = shutdown.changed() => None,
     } {
-      Some(Ok(event)) => {
-        if let Err(err) = handle_event(&pool, event).await {
-          tracing::warn!("islock current sync failed: {err}");
-        }
-      }
+      Some(Ok(event)) => handle_event(&live_state, event),
       Some(Err(broadcast::error::RecvError::Lagged(skipped))) => {
         tracing::warn!(skipped, "islock ZMQ consumer lagged");
       }
@@ -42,47 +38,28 @@ pub async fn sync_current_loop(
   }
 }
 
-async fn handle_event(pool: &SqlPool, event: ZmqEvent) -> Result<(), DaemonError> {
+fn handle_event(live_state: &LiveState, event: ZmqEvent) {
   match event {
-    ZmqEvent::RawTxLock { tx, .. } => upsert_current(pool, tx).await,
+    // Dash `rawtxlock` publishes the locked transaction bytes, so hashing the
+    // payload yields the same txid used by `sequence` removals and
+    // `getislocks`.
+    ZmqEvent::RawTxLock { tx, .. } => {
+      let txid = utils::ser_endian(&hash::tx_hash(&tx).to_bytes(), HashEndian::Ser);
+      live_state.upsert_islock(IsLock {
+        txid,
+        raw_islock: tx,
+        seen_at: now_epoch_secs(),
+      });
+    }
     ZmqEvent::Sequence {
       event: SequenceEvent::TxRemoved { txid, .. },
       ..
-    } => delete_current(pool, txid).await,
-    _ => Ok(()),
+    } => {
+      let txid = utils::ser_endian(&txid, HashEndian::Ser);
+      live_state.remove_islock(&txid);
+    }
+    _ => {}
   }
-}
-
-async fn upsert_current(pool: &SqlPool, raw_islock: Vec<u8>) -> Result<(), DaemonError> {
-  // Dash `rawtxlock` publishes the locked transaction bytes, so hashing the
-  // payload yields the same txid used by `sequence` removals and `getislocks`.
-  let row = sql::live::islock::IslockCurrentRow {
-    txid: utils::ser_endian(&hash::tx_hash(&raw_islock).to_bytes(), HashEndian::Ser),
-    raw_islock,
-    seen_at: now_epoch_secs(),
-  };
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin islock current tx: {e}"), code: None })?;
-  sql::live::islock::upsert_current(&mut tx, &row).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit islock current tx: {e}"), code: None })?;
-  Ok(())
-}
-
-async fn delete_current(pool: &SqlPool, txid: [u8; 32]) -> Result<(), DaemonError> {
-  let txid = utils::ser_endian(&txid, HashEndian::Ser);
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin islock delete tx: {e}"), code: None })?;
-  sql::live::islock::delete_current(&mut tx, &txid).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit islock delete tx: {e}"), code: None })?;
-  Ok(())
 }
 
 fn now_epoch_secs() -> i64 {

@@ -122,6 +122,16 @@ pub fn table_header() -> Style {
     .add_modifier(Modifier::BOLD)
 }
 
+/// Format a duration in seconds compactly, for a status cell that has to stay
+/// narrow while a long-running task keeps counting (`9s`, `4m21s`, `1h04m`).
+pub fn fmt_dur_secs(secs: u64) -> String {
+  match secs {
+    s if s < 60 => format!("{s}s"),
+    s if s < 3600 => format!("{}m{:02}s", s / 60, s % 60),
+    s => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+  }
+}
+
 /// Format an integer with thousands separators (e.g. 1,234,567).
 pub fn fmt_num(n: impl std::fmt::Display) -> String {
   let s = n.to_string();
@@ -133,4 +143,25 @@ pub fn fmt_num(n: impl std::fmt::Display) -> String {
     result.push(c);
   }
   result.chars().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::fmt_dur_secs;
+
+  /// The boundaries are the whole point: the seconds and minutes fields stay
+  /// zero-padded so the status column does not shift width while an operator
+  /// watches a long build tick, and an hour-plus build stops showing seconds
+  /// rather than growing the cell.
+  #[test]
+  fn durations_stay_narrow_across_the_boundaries() {
+    assert_eq!(fmt_dur_secs(0), "0s");
+    assert_eq!(fmt_dur_secs(9), "9s");
+    assert_eq!(fmt_dur_secs(59), "59s");
+    assert_eq!(fmt_dur_secs(60), "1m00s");
+    assert_eq!(fmt_dur_secs(261), "4m21s");
+    assert_eq!(fmt_dur_secs(3599), "59m59s");
+    assert_eq!(fmt_dur_secs(3600), "1h00m");
+    assert_eq!(fmt_dur_secs(3840), "1h04m");
+  }
 }

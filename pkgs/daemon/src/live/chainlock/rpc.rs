@@ -8,24 +8,22 @@
 
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
-
 use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
+use crate::live::state::{ChainLockSnapshot, LiveState};
 use crate::live::stream::{LiveEvent, StreamHub};
 use crate::live::warn;
 use crate::policy::api::API_REFRESH_WARN_INTERVAL_SECS;
 use crate::sources::RpcSource;
-use crate::sql;
 
-/// Refresh the persisted latest ChainLock snapshot once.
+/// Refresh the in-RAM latest ChainLock snapshot once from node JSON-RPC.
 ///
 /// # Errors
 ///
-/// Returns `DaemonError::RestSource` when the RPC request fails or
-/// `DaemonError::Pg` when PostgreSQL rejects the write.
+/// Returns `DaemonError::RestSource` when the RPC request fails or the
+/// ChainLock hex fields cannot be decoded.
 pub async fn refresh_once(
-  pool: &SqlPool,
+  live_state: &LiveState,
   rpc: &dyn RpcSource,
   start_block: u32,
   stream_hub: Option<&StreamHub>,
@@ -35,38 +33,21 @@ pub async fn refresh_once(
     return Ok(());
   }
 
-  let row = sql::live::chainlock::ChainLockSnapshotRow {
-    block_hash: hex::decode(&chainlock.blockhash).map_err(|e| {
-      DaemonError::RestSource {
-        message: format!(
-          "decode chainlock block hash {}: {e}",
-          chainlock.blockhash
-        ),
-        kind: RestErrorKind::Other,
-      }
+  let snapshot = ChainLockSnapshot {
+    block_hash: hex::decode(&chainlock.blockhash).map_err(|e| DaemonError::RestSource {
+      message: format!("decode chainlock block hash {}: {e}", chainlock.blockhash),
+      kind: RestErrorKind::Other,
     })?,
     block_height: Some(chainlock.height as i32),
     core_height: Some(chainlock.height as i32),
-    raw_chainlock: hex::decode(&chainlock.hex).map_err(|e| {
-      DaemonError::RestSource {
-        message: format!(
-          "decode chainlock hex for {}: {e}",
-          chainlock.blockhash
-        ),
-        kind: RestErrorKind::Other,
-      }
+    raw_chainlock: hex::decode(&chainlock.hex).map_err(|e| DaemonError::RestSource {
+      message: format!("decode chainlock hex for {}: {e}", chainlock.blockhash),
+      kind: RestErrorKind::Other,
     })?,
     seen_at: now_epoch_secs(),
   };
 
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin chainlock snapshot tx: {e}"), code: None })?;
-  sql::live::chainlock::upsert_snapshot(&mut tx, &row).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit chainlock snapshot tx: {e}"), code: None })?;
+  live_state.set_chainlock(snapshot);
   if let Some(stream_hub) = stream_hub {
     stream_hub.publish(LiveEvent::chainlock(
       chainlock.blockhash,
@@ -79,7 +60,7 @@ pub async fn refresh_once(
 
 /// Periodically refresh ChainLock state until shutdown.
 pub async fn refresh_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<dyn RpcSource>,
   lifecycle: Arc<Lifecycle>,
   refresh_secs: u64,
@@ -87,7 +68,14 @@ pub async fn refresh_loop(
   stream_hub: Option<Arc<StreamHub>>,
 ) {
   while lifecycle.running() {
-    if let Err(err) = refresh_once(&pool, rpc.as_ref(), start_block, stream_hub.as_deref()).await {
+    if let Err(err) = refresh_once(
+      &live_state,
+      rpc.as_ref(),
+      start_block,
+      stream_hub.as_deref(),
+    )
+    .await
+    {
       warn::warn_every(
         "live_chainlock_refresh_failed",
         std::time::Duration::from_secs(API_REFRESH_WARN_INTERVAL_SECS),

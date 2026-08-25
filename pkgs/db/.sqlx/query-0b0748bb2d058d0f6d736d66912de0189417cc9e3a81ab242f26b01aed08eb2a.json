@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO undo_validators\n           (height, protx_hash, existed, collateral_hash, collateral_index, collateral_address,\n            owner_address, operator_pubkey, voting_address, addr_core_p2p, addr_platform_p2p,\n            addr_platform_https, payout_address, operator_payout_address, operator_reward,\n            validator_type, status, registered_height, last_updated_height)\n         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)\n         ON CONFLICT (height, protx_hash) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea",
+        "Bool",
+        "Bytea",
+        "Int4",
+        "Text",
+        "Text",
+        "Bytea",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Text",
+        "Text",
+        "Int4",
+        {
+          "Custom": {
+            "name": "validator_type",
+            "kind": {
+              "Enum": [
+                "regular",
+                "evonode",
+                "unknown"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b0748bb2d058d0f6d736d66912de0189417cc9e3a81ab242f26b01aed08eb2a"
+}

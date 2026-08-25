@@ -6,35 +6,94 @@
 
 //! Serve-mode runtime assembly for daemon supervisors.
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rocksdb::DB;
+use tokio::sync::broadcast;
+
+use hyphen_db::HyphenDb;
 use tracing::{info, warn};
 
 use crate::api_metrics::ApiServerMetrics;
 use crate::config;
-use crate::error::DaemonError;
+use crate::error::{DaemonError, Outcome};
 use crate::index;
-use crate::index::batch::{
-  DEFAULT_COMMIT_BATCH_BLOCKS, DEFAULT_INGESTION_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE,
-  DEFAULT_MIN_BATCH_SIZE, DEFAULT_PREFETCH_BLOCKS, DEFAULT_TARGET_BATCH_MS,
-};
-use crate::init::{ConfigSnapshotParams, Options};
-use crate::ipc;
+use crate::init::Options;
 use crate::lifecycle::Lifecycle;
-use crate::readiness::ReadinessCache;
-use crate::recovery;
 use crate::rest;
 use crate::sources::{self, RestSource};
-use crate::sql::SqlPool;
-use crate::store::manager::SecondaryStoreSet;
 
-use super::core::{CoreVisor, CoreVisorOptionsInput};
 use super::Visor;
 
-const INDEXER_IDLE_TIMEOUT_SECS: u64 = 60;
+/// How long startup keeps waiting on a storage engine whose failures are
+/// transient. Sized for the common case this exists for: daemon and Postgres
+/// restarting together, where PG answers `57P03 the database system is
+/// starting up` for a few seconds. Past the deadline the error is returned
+/// and the daemon exits, so a genuinely absent database still fails loudly.
+const STORAGE_READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// First backoff between startup attempts; doubles up to [`STORAGE_RETRY_MAX`].
+const STORAGE_RETRY_BASE: Duration = Duration::from_secs(1);
+const STORAGE_RETRY_MAX: Duration = Duration::from_secs(10);
+
+/// Run a storage-engine startup step, retrying for as long as its failures
+/// classify as transient.
+///
+/// The decision is structural: `DaemonError::Storage` defers to the storage
+/// crate's SQLSTATE classification, so "PG is still starting up" is waited on
+/// while "the URL is wrong" or "the schema failed to migrate" comes straight
+/// back as fatal. Nothing here inspects a message.
+///
+/// Each attempt is bounded by whatever is left of the readiness window, so the
+/// window bounds the call and not merely the pauses between calls. Without that
+/// a step which never returns — a connection accepted and then abandoned
+/// mid-handshake, a lock wait with nothing behind it — held startup open
+/// indefinitely, because the deadline was only consulted after a step had
+/// already come back.
+async fn await_storage<T, F, Fut>(context: &'static str, mut step: F) -> Result<T, DaemonError>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = hyphen_db::HyDbResult<T>>,
+{
+  let deadline = Instant::now() + STORAGE_READY_TIMEOUT;
+  let mut backoff = STORAGE_RETRY_BASE;
+  loop {
+    let budget = deadline.saturating_duration_since(Instant::now());
+    if budget.is_zero() {
+      return Err(DaemonError::StorageTimeout {
+        context,
+        secs: STORAGE_READY_TIMEOUT.as_secs(),
+      });
+    }
+    let error = match tokio::time::timeout(budget, step()).await {
+      Ok(Ok(value)) => return Ok(value),
+      Ok(Err(error)) => DaemonError::storage(context, error),
+      Err(_elapsed) => {
+        return Err(DaemonError::StorageTimeout {
+          context,
+          secs: STORAGE_READY_TIMEOUT.as_secs(),
+        })
+      }
+    };
+    if error.classify() != Outcome::Warning {
+      return Err(error);
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+      return Err(error);
+    }
+    let pause = backoff.min(remaining);
+    warn!(
+      context,
+      error = %error,
+      retry_in_secs = pause.as_secs(),
+      "storage engine not ready yet, waiting"
+    );
+    tokio::time::sleep(pause).await;
+    backoff = (backoff * 2).min(STORAGE_RETRY_MAX);
+  }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SourceAvailability {
@@ -69,11 +128,10 @@ fn runtime_options_with_available_sources(
 /// Owned serve-mode daemon supervisors and their shared lifecycle.
 pub(crate) struct ServeRuntime {
   lifecycle: Arc<Lifecycle>,
-  admin_pool: SqlPool,
-  core: CoreVisor,
+  ingest: crate::ingest::IngestVisor,
   live: super::live::LiveVisor,
-  ipc: super::ipc::IpcVisor,
   rest: Option<super::rest::RestVisor>,
+  ipc: super::ipc::IpcVisor,
 }
 
 impl std::fmt::Debug for ServeRuntime {
@@ -92,7 +150,6 @@ impl ServeRuntime {
   pub async fn build(
     cfg: &config::Config,
     options: &Options,
-    db: Arc<DB>,
     source: Arc<dyn RestSource>,
     datadir: &Path,
   ) -> Result<Self, DaemonError> {
@@ -145,119 +202,121 @@ impl ServeRuntime {
         zmq: zmq_source.is_some(),
       },
     );
-    let (event_tx, _) = tokio::sync::broadcast::channel::<hyphend::wire::msg::DaemonMessage>(1024);
     let lifecycle = Lifecycle::start();
 
-    info!(url = %cfg.postgres.url, "connecting to postgres");
-    let pg_pools = crate::sql::create_pools(&cfg.postgres).await?;
-    crate::sql::bootstrap::bootstrap(&pg_pools.write).await?;
-    info!("postgres ready, schema bootstrapped");
-
-    let readiness_cache = Arc::new(ReadinessCache::new(
-      options.cache.readiness_enabled,
-      options.cache.readiness_budget_bytes,
-    ));
-    let spent_cache = Arc::new(index::spent::cache::SpentQueryCache::new(
-      options.cache.address_enabled,
-      options.cache.address_budget_bytes,
-    ));
-    let secondary_stores = Arc::new(SecondaryStoreSet::open(
-      datadir,
-      &cfg.chain,
-      cfg.rocksdb.as_ref(),
-    )?);
-
-    let rocks_tip = crate::db::get_tip_height(&db)
-      .map(|height| height as i32)
-      .unwrap_or(-1);
-    let secondary_stores = recovery::RecoveryCoordinator {
-      db: &db,
-      pool: &pg_pools.write,
-      stores: secondary_stores,
-      datadir,
-      chain: &cfg.chain,
-      rocksdb_cfg: cfg.rocksdb.as_ref(),
-      index_flags: index::IndexStageFlags {
-        address: options.indices.address,
-        metrics: options.indices.metrics,
-        validator: options.indices.validator,
-      },
-      p2pkh_version: cfg.chain.p2pkh_version,
-      p2sh_version: cfg.chain.p2sh_version,
-      block_time_secs: cfg.chain.block_time_secs,
-    }
-    .run()
+    // Pass the operator's pool sizing through verbatim — what the settings
+    // page displays as effective must actually be in effect. `HyDbConfig`'s
+    // Debug impl redacts the URL's password.
+    let db_cfg = cfg.hydb_config();
+    info!(config = ?db_cfg, "connecting to storage engine");
+    let db = await_storage("connect storage engine", || {
+      HyphenDb::connect(db_cfg.clone())
+    })
     .await?;
-    let chain_progress = crate::sql::progress::chain_progress(&pg_pools.write).await?;
-    if chain_progress.canonical_tip_height < 0 && rocks_tip >= 0 {
-      info!(
-        rocks_tip,
-        "postgres is empty; rebuilding PostgreSQL state from local RocksDB"
-      );
+    info!("storage engine ready, schema migrated");
+
+    // Settings the daemon depends on but cannot set. Read back and reported
+    // once; every finding is a warning, never a refusal.
+    let pool_total = cfg.db.client.write.size
+      + cfg.db.client.query.size
+      + cfg.db.client.heavy.size
+      + cfg.db.client.admin.size;
+    let startup_tip = db
+      .status()
+      .tip()
+      .await
+      .ok()
+      .flatten()
+      .map(|tip| tip.height.get());
+    crate::policy::server_settings::review_at_startup(&db, pool_total, startup_tip).await;
+
+    // From here on the layout is whatever the *database* says it is, not
+    // whatever the config file said. They can only differ in the one direction
+    // `verify` permits — a key the operator dropped from `[db.layout]`, which
+    // falls back to the stored value — and the address encoding must follow
+    // the data, never the config.
+    let layout = hyphen_db::layout::resolved();
+    info!(
+      network = %layout.network,
+      partition_span = layout.partition_span,
+      p2pkh_version = layout.p2pkh_version,
+      p2sh_version = layout.p2sh_version,
+      rich_list_floor = layout.rich_list_floor,
+      undo_span = layout.undo_span,
+      schema_version = layout.schema_version,
+      "storage layout in effect"
+    );
+
+    // Settle what the last sync deferred, before anything is served. A sync
+    // writes its height partitions with autovacuum off, so this is where the
+    // reclaim is paid for — once, at a point where nothing is reading yet,
+    // rather than as contention against the ingest that created the debt.
+    // `--skip-compacting` trades that for starting now.
+    let open_index = startup_tip.map(|tip| tip as i32 / layout.partition_span);
+    match db.compaction_debt().await {
+      Ok(owed) if owed.is_empty() => {}
+      Ok(owed) if options.skip_compacting => info!(
+        tables = owed.len(),
+        "skipping compaction on request: {} tables keep their deferred vacuum, \
+         and autovacuum will reclaim them on its own schedule",
+        owed.len()
+      ),
+      Ok(owed) => {
+        info!(
+          tables = owed.len(),
+          "settling the vacuum a sync deferred before serving; \
+           pass --skip-compacting to start without it"
+        );
+        // The pass yields to a shutdown request between tables. Without that
+        // a `docker stop` waits out the whole thing and is answered with
+        // `SIGKILL` — the unclean exit this store is least forgiving of.
+        let keep_going = {
+          let lifecycle = Arc::clone(&lifecycle);
+          move || lifecycle.running()
+        };
+        match db.compact(open_index, &keep_going).await {
+          Ok(done) => info!(
+            compacted = done.compacted,
+            deferred = done.deferred,
+            "compaction complete"
+          ),
+          // A failed reclaim costs bloat, not correctness, so it must not
+          // stop a node from coming up.
+          Err(e) => warn!(error = %e, "compaction failed; continuing with the debt outstanding"),
+        }
+      }
+      Err(e) => warn!(error = %e, "could not read the vacuum debt; skipping compaction"),
     }
 
-    let idle_timeout = Duration::from_secs(INDEXER_IDLE_TIMEOUT_SECS);
-    let core = CoreVisor::new(CoreVisor::config_from_options(
-      CoreVisorOptionsInput {
-        db: Arc::clone(&db),
-        pool: pg_pools.write.clone(),
-        source: Arc::clone(&source),
-        secondary_stores: Some(Arc::clone(&secondary_stores)),
-        event_tx: event_tx.clone(),
-        lifecycle: Arc::clone(&lifecycle),
-        spent_cache: Arc::clone(&spent_cache),
-        idle_timeout,
-        p2pkh_version: cfg.chain.p2pkh_version,
-        p2sh_version: cfg.chain.p2sh_version,
-        block_time_secs: cfg.chain.block_time_secs,
-      },
-      &runtime_options,
-      cfg.performance.as_ref(),
-    ));
-    let core_handles = core.handles();
+    let data_src: Arc<dyn hyphen_db::HyDbDataSrc> = Arc::new(
+      crate::ingest::datasrc::HyDbBlockSource::new(layout.p2pkh_version, layout.p2sh_version),
+    );
+    let ingest_handle = await_storage("start ingest", || db.ingest(Arc::clone(&data_src))).await?;
+    let ingest = crate::ingest::IngestVisor::new(
+      db.clone(),
+      ingest_handle,
+      Arc::clone(&source),
+      rpc_client
+        .clone()
+        .map(|rpc| rpc as Arc<dyn crate::sources::RpcSource>),
+      Arc::clone(&lifecycle),
+      crate::ingest::DEFAULT_POLL_SECS,
+    );
 
-    let perf = cfg.performance.as_ref();
-    let config_snapshot = Arc::new(
-      runtime_options.config_snapshot(
-        cfg,
-        ConfigSnapshotParams {
-          ingestion_batch_size: perf
-            .map_or(DEFAULT_INGESTION_BATCH_SIZE, |p| p.ingestion_batch_size)
-            .max(1),
-          max_ingestion_lead_blocks: perf
-            .map_or(crate::ingest::DEFAULT_MAX_INGEST_LEAD_BLOCKS, |p| {
-              p.max_ingestion_lead_blocks
-            }),
-          prefetch_blocks: perf.map_or(DEFAULT_PREFETCH_BLOCKS, |p| p.prefetch_blocks),
-          commit_batch_blocks: perf.map_or(DEFAULT_COMMIT_BATCH_BLOCKS, |p| p.commit_batch_blocks),
-          min_batch_size: perf.map_or(DEFAULT_MIN_BATCH_SIZE, |p| p.min_batch_size),
-          max_batch_size: perf.map_or(DEFAULT_MAX_BATCH_SIZE, |p| p.max_batch_size),
-          target_batch_ms: perf.map_or(DEFAULT_TARGET_BATCH_MS, |p| p.target_batch_ms),
-        },
-      )?,
-    );
-    let pg_diag_base = Arc::new(
-      ipc::snapshot::pg_startup_diag(
-        &pg_pools.admin,
-        cfg.postgres.write_pool_size,
-        cfg.postgres.query_pool_size,
-        cfg.postgres.admin_pool_size,
-      )
-      .await,
-    );
     let api_metrics = Arc::new(ApiServerMetrics::default());
     let overlay_plan = index::visor::OverlayPlan::from_options(&runtime_options);
+    let overlay_capabilities = overlay_plan.capabilities;
 
     let live = super::live::LiveVisor::new(super::live::LiveVisor::config_from_options(
       super::live::LiveVisorOptionsInput {
-        pool: pg_pools.write.clone(),
+        hydb: db.clone(),
         rpc: rpc_client.clone(),
         zmq: zmq_source.clone(),
         lifecycle: Arc::clone(&lifecycle),
-        spent_cache: Arc::clone(&spent_cache),
+        ingest_status: ingest.status(),
         overlay_plan,
-        p2pkh_version: cfg.chain.p2pkh_version,
-        p2sh_version: cfg.chain.p2sh_version,
+        p2pkh_version: layout.p2pkh_version,
+        p2sh_version: layout.p2sh_version,
       },
       &runtime_options,
     ));
@@ -270,16 +329,10 @@ impl ServeRuntime {
         .clone()
         .ok_or_else(|| DaemonError::Config("api enabled without api.bind".to_owned()))?;
       Some(super::rest::RestVisor::new(super::rest::RestVisorConfig {
-        pool: pg_pools.query.clone(),
-        address_pool: pg_pools.heavy_query.clone(),
-        db: Arc::clone(&db),
-        secondary_stores: Some(Arc::clone(&secondary_stores)),
-        readiness_cache: Arc::clone(&readiness_cache),
-        spent_cache: Arc::clone(&spent_cache),
-        address_hot_cache_threshold: options.cache.address_hot_cache_threshold,
-        address_summary_catchup_lag: options.cache.address_summary_catchup_lag,
-        p2pkh_version: cfg.chain.p2pkh_version,
-        p2sh_version: cfg.chain.p2sh_version,
+        hydb: db.clone(),
+        p2pkh_version: layout.p2pkh_version,
+        p2sh_version: layout.p2sh_version,
+        block_time_secs: cfg.chain.block_time_secs,
         indices: rest::IndexCapabilities {
           address: runtime_options.indices.address,
           validator: runtime_options.indices.validator,
@@ -292,10 +345,15 @@ impl ServeRuntime {
           governance: runtime_options.live.governance,
           stream: runtime_options.live.stream,
         },
-        overlays: overlay_plan.capabilities,
+        overlays: overlay_capabilities,
         recent_mempool_txs: runtime_options.recent_mempool_txs,
         stream_hub: live_handles.stream_hub.clone(),
+        live_state: live_handles.live_state.clone(),
         stream_heartbeat_secs: runtime_options.stream_heartbeat_secs,
+        node_tip: ingest.status().network_tip_handle(),
+        sync_mode: ingest.status().sync_mode_handle(),
+        ingest_progress_epoch: ingest.status().progress_epoch_handle(),
+        ingest_status: ingest.status(),
         bind,
         cors_origin: options.api.cors_origin.clone(),
         server_metrics: Arc::clone(&api_metrics),
@@ -305,48 +363,44 @@ impl ServeRuntime {
       None
     };
 
+    let event_tx = broadcast::channel::<hyphend::wire::msg::DaemonMessage>(1024).0;
+    let config_snapshot = Arc::new(
+      runtime_options
+        .config_snapshot(cfg)
+        .map_err(|e| DaemonError::Config(format!("build config snapshot: {e}")))?,
+    );
+    let pg_diag_base = Arc::new(hyphend::wire::msg::PostgresDiag {
+      write_pool_size: Some(cfg.db.client.write.size),
+      query_pool_size: Some(cfg.db.client.query.size),
+      heavy_query_pool_size: Some(cfg.db.client.heavy.size),
+      admin_pool_size: Some(cfg.db.client.admin.size),
+      slow_query_ms: Some(cfg.db.client.slow_query_ms),
+      ..Default::default()
+    });
     let ipc = super::ipc::IpcVisor::new(super::ipc::IpcVisorConfig {
       socket_path: datadir.join("hyphen.sock"),
-      heartbeat_db_path: datadir.join("blocks.db"),
-      options: runtime_options,
-      write_pool: pg_pools.write.clone(),
-      query_pool: pg_pools.query.clone(),
-      admin_pool: pg_pools.admin.clone(),
-      db,
-      secondary_stores,
-      source,
-      rpc: rpc_client,
-      zmq: zmq_source,
+      options: runtime_options.clone(),
+      hydb: db.clone(),
+      ingest: ingest.ingest_handle(),
+      ingest_status: ingest.status(),
+      progress_rx: ingest.progress(),
+      index_build_rx: ingest.index_build(),
+      source: Arc::clone(&source),
+      rpc: rpc_client.clone(),
+      zmq: zmq_source.clone(),
       event_tx,
       lifecycle: Arc::clone(&lifecycle),
-      ingest_runtime: Arc::clone(&core_handles.ingest_runtime),
-      block_worker: Arc::clone(&core_handles.block_worker),
-      batch_registry: core_handles.batch_registry.clone(),
       config_snapshot,
       pg_diag_base,
-      api_metrics,
-      readiness_cache,
-      controls: Arc::clone(&core_handles.controls),
-      revalidate_schema: Arc::clone(&core_handles.revalidate_schema),
-      control_plane_pause_active: Arc::clone(&core_handles.control_plane_pause_active),
-      operator_pause_requested: Arc::clone(&core_handles.operator_pause_requested),
-      pausing_tx: core_handles.pausing_tx.clone(),
-      suspend_tx: core_handles.suspend_tx.clone(),
-      pausing_rx: core_handles.pausing_rx.clone(),
-      suspend_rx: core_handles.suspend_rx.clone(),
-      chain_state_lock: Arc::clone(&core_handles.chain_state_lock),
-      p2pkh_version: cfg.chain.p2pkh_version,
-      p2sh_version: cfg.chain.p2sh_version,
-      block_time_secs: cfg.chain.block_time_secs,
+      api_metrics: Arc::clone(&api_metrics),
     });
 
     Ok(Self {
       lifecycle,
-      admin_pool: pg_pools.admin.clone(),
-      core,
+      ingest,
       live,
-      ipc,
       rest,
+      ipc,
     })
   }
 
@@ -356,12 +410,12 @@ impl ServeRuntime {
   ///
   /// Returns `DaemonError` when any subsystem fails startup.
   pub async fn start_all(&mut self) -> Result<(), DaemonError> {
-    self.core.start().await?;
     self.live.start().await?;
     if let Some(rest) = self.rest.as_mut() {
       rest.start().await?;
     }
     self.ipc.start().await?;
+    self.ingest.start();
     Ok(())
   }
 
@@ -375,24 +429,12 @@ impl ServeRuntime {
     sigterm: &mut tokio::signal::unix::Signal,
     graceful_deadline: Option<tokio::time::Instant>,
   ) -> Result<(), DaemonError> {
-    match crate::sql::cancel_daemon_backends(&self.admin_pool).await {
-      Ok(cancelled) if cancelled > 0 => {
-        info!(
-          cancelled,
-          "cancelled active postgres statements for shutdown"
-        );
-      }
-      Ok(_) => {}
-      Err(error) => {
-        warn!(%error, "failed to cancel active postgres statements during shutdown");
-      }
-    }
+    self.ingest.stop().await;
     self.ipc.stop(sigterm, graceful_deadline).await?;
     if let Some(rest) = self.rest.as_mut() {
       rest.stop(sigterm, graceful_deadline).await?;
     }
     self.live.stop(sigterm, graceful_deadline).await?;
-    self.core.stop(sigterm, graceful_deadline).await?;
     Ok(())
   }
 
@@ -406,7 +448,7 @@ impl ServeRuntime {
 mod tests {
   use super::{runtime_options_with_available_sources, SourceAvailability};
   use crate::init::options::{
-    ApiOptions, CacheOptions, IndexOptions, LiveOptions, Options, OverlayOptions, StartupMode,
+    ApiOptions, IndexOptions, LiveOptions, Options, OverlayOptions, StartupMode,
   };
 
   fn test_options() -> Options {
@@ -429,17 +471,6 @@ mod tests {
         protx: true,
         chainlock: true,
       },
-      cache: CacheOptions {
-        enabled: false,
-        address_enabled: false,
-        address_budget: "1MiB".to_owned(),
-        address_budget_bytes: 1,
-        address_hot_cache_threshold: 0,
-        address_summary_catchup_lag: 0,
-        readiness_enabled: false,
-        readiness_budget: "1MiB".to_owned(),
-        readiness_budget_bytes: 1,
-      },
       api: ApiOptions {
         enabled: true,
         bind: Some("127.0.0.1:3080".to_owned()),
@@ -453,6 +484,7 @@ mod tests {
       governance_refresh_secs: 30,
       chainlock_refresh_secs: 5,
       protx_refresh_secs: 30,
+      skip_compacting: false,
     }
   }
 

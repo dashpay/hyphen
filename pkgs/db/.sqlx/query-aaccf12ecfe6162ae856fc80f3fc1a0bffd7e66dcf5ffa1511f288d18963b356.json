@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO validators\n           (protx_hash, collateral_hash, collateral_index, collateral_address, owner_address,\n            operator_pubkey, voting_address, addr_core_p2p, addr_platform_p2p,\n            addr_platform_https, payout_address, operator_payout_address, operator_reward,\n            validator_type, status, registered_height, last_updated_height)\n         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'registered',$15,$15)\n         ON CONFLICT (protx_hash) DO UPDATE SET\n           collateral_hash = EXCLUDED.collateral_hash,\n           collateral_index = EXCLUDED.collateral_index,\n           collateral_address = EXCLUDED.collateral_address,\n           owner_address = EXCLUDED.owner_address,\n           operator_pubkey = EXCLUDED.operator_pubkey,\n           voting_address = EXCLUDED.voting_address,\n           addr_core_p2p = EXCLUDED.addr_core_p2p,\n           addr_platform_p2p = EXCLUDED.addr_platform_p2p,\n           addr_platform_https = EXCLUDED.addr_platform_https,\n           payout_address = EXCLUDED.payout_address,\n           operator_payout_address = EXCLUDED.operator_payout_address,\n           operator_reward = EXCLUDED.operator_reward,\n           validator_type = EXCLUDED.validator_type,\n           last_updated_height = EXCLUDED.last_updated_height",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Int4",
+        "Text",
+        "Text",
+        "Bytea",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Text",
+        "Text",
+        "Int4",
+        {
+          "Custom": {
+            "name": "validator_type",
+            "kind": {
+              "Enum": [
+                "regular",
+                "evonode",
+                "unknown"
+              ]
+            }
+          }
+        },
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aaccf12ecfe6162ae856fc80f3fc1a0bffd7e66dcf5ffa1511f288d18963b356"
+}

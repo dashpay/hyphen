@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE supply_summary\n            SET total = $1, included_supply = $2, unspendable_value = $3\n          WHERE singleton",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71203669550360c54eaa5f82d6859c0dea828db050d75053d215d66fb175ad6d"
+}

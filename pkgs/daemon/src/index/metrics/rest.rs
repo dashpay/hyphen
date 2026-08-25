@@ -12,12 +12,17 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 
 use crate::rest::error::ApiError;
+use crate::rest::hydb::{hydb_err, hydb_height};
 use crate::rest::openapi::{BlockMetrics, ErrorResponse, MetricsChartResponse};
 use crate::rest::AppState;
 
 const DEFAULT_CHART_BLOCKS: i64 = 144;
 const DEFAULT_CHART_POINTS: i64 = 144;
 const MAX_CHART_POINTS: i64 = 500;
+/// Upper bound on the lookback window: keeps `blocks + points` arithmetic and
+/// the `bucket_blocks` u32 conversion in range, and caps the scan the heavy
+/// pool is asked for.
+const MAX_CHART_BLOCKS: i64 = 10_000_000;
 
 #[derive(Debug, Deserialize, IntoParams)]
 #[serde(default)]
@@ -42,8 +47,10 @@ impl Default for MetricsChartQuery {
 
 impl MetricsChartQuery {
   fn validate(self) -> Result<Self, ApiError> {
-    if self.blocks < 1 {
-      return Err(ApiError::bad_request("blocks must be at least 1"));
+    if !(1..=MAX_CHART_BLOCKS).contains(&self.blocks) {
+      return Err(ApiError::bad_request(format!(
+        "blocks must be between 1 and {MAX_CHART_BLOCKS}",
+      )));
     }
     if !(1..=MAX_CHART_POINTS).contains(&self.points) {
       return Err(ApiError::bad_request(format!(
@@ -78,12 +85,15 @@ pub async fn latest(State(state): State<AppState>) -> Result<Json<BlockMetrics>,
     .check_stage_typed(crate::index::Stage::Metrics)
     .await?;
 
-  let row = super::sql::latest_metrics(&state.pool)
+  let row = state
+    .hydb()?
+    .metrics()
+    .latest()
     .await
-    .map_err(|e| ApiError::internal(format!("query: {e}")))?
+    .map_err(|e| hydb_err(e, "latest metrics"))?
     .ok_or_else(|| ApiError::not_found("no metrics available"))?;
 
-  Ok(Json(row_to_metric(&row)))
+  Ok(Json(metric_to_block_metrics(&row, state.block_time_secs)))
 }
 
 /// Get block-ranged metrics chart buckets.
@@ -116,18 +126,25 @@ pub async fn chart(
     .await?;
   let query = normalize_chart_query(params.validate()?);
   let start_height = (stage.height as i64 - query.blocks + 1).max(0) as i32;
-  let rows = super::sql::metrics_bucketed_range(
-    &state.pool,
-    start_height,
-    stage.height,
-    query.bucket_blocks as i32,
-  )
-  .await
-  .map_err(|e| ApiError::internal(format!("query: {e}")))?;
+  let rows = state
+    .hydb()?
+    .metrics()
+    .range(
+      hydb_height(start_height),
+      hydb_height(stage.height),
+      u32::try_from(query.bucket_blocks)
+        .map_err(|_| ApiError::bad_request("bucket size out of range"))?,
+    )
+    .await
+    .map_err(|e| hydb_err(e, "metrics range"))?;
   if rows.is_empty() {
     return Err(ApiError::not_found("no metrics available"));
   }
-  let value = rows.iter().map(row_to_metric).collect();
+  let block_time_secs = state.block_time_secs;
+  let value = rows
+    .iter()
+    .map(|row| metric_to_block_metrics(row, block_time_secs))
+    .collect();
 
   Ok(Json(MetricsChartResponse {
     as_of_height: stage.height,
@@ -153,9 +170,21 @@ fn normalize_chart_query(query: MetricsChartQuery) -> NormalizedChartQuery {
   }
 }
 
-fn row_to_metric(row: &super::sql::MetricsRow) -> BlockMetrics {
+/// Project a stored metric point into the API DTO, deriving `hashrate` from the
+/// stored `difficulty` and the chain's target block time
+/// (`difficulty * 2^32 / block_time_secs`, matching the legacy indexer). A
+/// non-positive block time yields a hashrate of 0.
+fn metric_to_block_metrics(
+  row: &hyphen_db::query::HyDbQrMetricPoint,
+  block_time_secs: f64,
+) -> BlockMetrics {
+  let hashrate = if block_time_secs > 0.0 {
+    row.difficulty * 4_294_967_296.0 / block_time_secs
+  } else {
+    0.0
+  };
   BlockMetrics {
-    height: row.height,
+    height: row.height.get() as i32,
     tx_count: row.tx_count,
     utxos_spendable: row.utxos_spendable,
     utxos_unspendable: row.utxos_unspendable,
@@ -163,7 +192,7 @@ fn row_to_metric(row: &super::sql::MetricsRow) -> BlockMetrics {
     credit_pool_balance: row.credit_pool_balance,
     circulating_supply: row.circulating_supply,
     difficulty: row.difficulty,
-    hashrate: row.hashrate,
+    hashrate,
   }
 }
 

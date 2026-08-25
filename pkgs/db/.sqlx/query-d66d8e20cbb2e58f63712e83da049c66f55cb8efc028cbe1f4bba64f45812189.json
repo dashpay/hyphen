@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.address, a.balance, a.total_received,\n                  (a.total_received - a.balance)::bigint AS \"total_sent!\", a.tx_count\n             FROM address_rich AS r\n             JOIN address_stats AS a ON a.address = r.address\n            ORDER BY r.balance DESC, r.address ASC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "balance",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_received",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_sent!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "tx_count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "d66d8e20cbb2e58f63712e83da049c66f55cb8efc028cbe1f4bba64f45812189"
+}

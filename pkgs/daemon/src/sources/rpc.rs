@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use super::rest::rest_err;
 use super::RpcSource;
-use crate::config::{ResolvedRpcAuth, RpcAuth, RpcConfig};
+use crate::config::{ResolvedRpcAuth, RpcAuth, RpcConfig, Secret};
 use crate::error::{DaemonError, RestErrorKind};
 use crate::policy::api::API_TCP_KEEPALIVE_SECS;
 use hyphend::wire::msg::RpcDiag;
@@ -62,6 +62,21 @@ pub struct MempoolTxEntry {
 
 /// Typed response for node `getrawmempool true`.
 pub type MempoolTxMap = Vec<(String, MempoolTxEntry)>;
+
+/// The node's own count of transactions in the chain, from
+/// `getchaintxstats`.
+///
+/// This is the honest denominator for transaction-side sync progress (task
+/// F2). Extrapolating from locally observed density cannot substitute for it:
+/// mainnet density rises roughly sixfold toward the tip, so a projection made
+/// from the region just indexed is optimistic by about that factor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainTxStats {
+  /// Transactions in the chain up to `height`.
+  pub tx_count: u64,
+  /// Height the count is taken at (the node's tip, absent an argument).
+  pub height: u32,
+}
 
 /// Typed response for node `getnetworkinfo`.
 pub type NetworkInfo = Value;
@@ -128,7 +143,7 @@ pub struct CoreRpcClient {
 #[derive(Debug)]
 enum RpcTransportAuth {
   CookieFile(PathBuf),
-  UserPass { username: String, password: String },
+  UserPass { username: String, password: Secret },
 }
 
 #[derive(Debug)]
@@ -284,7 +299,10 @@ impl CoreRpcClient {
 
     let body: RpcResponse = resp.json().await.map_err(|e| {
       self.metrics.record_error("decode");
-      DaemonError::RestSource { message: format!("RPC JSON parse: {e}"), kind: RestErrorKind::Other }
+      DaemonError::RestSource {
+        message: format!("RPC JSON parse: {e}"),
+        kind: RestErrorKind::Other,
+      }
     })?;
 
     if let Some(error) = body.error {
@@ -345,6 +363,19 @@ impl CoreRpcClient {
       )
       .await?;
     decode_raw_transaction(value)
+  }
+
+  /// Read the node's chain-wide transaction count.
+  ///
+  /// # Errors
+  ///
+  /// Returns `DaemonError::RestSource` when the RPC request fails or the
+  /// response does not carry `txcount` and `window_final_block_height`.
+  pub async fn get_chain_tx_stats(&self) -> Result<ChainTxStats, DaemonError> {
+    let value = self
+      .call_value(0, "getchaintxstats", Value::Array(vec![]))
+      .await?;
+    parse_chain_tx_stats(&value)
   }
 
   /// Read the current network summary from the node.
@@ -492,13 +523,33 @@ impl CoreRpcClient {
       }
       RpcTransportAuth::UserPass { username, password } => Ok(format!(
         "Basic {}",
-        encode_basic_token(&format!("{username}:{password}"))
+        encode_basic_token(&format!("{username}:{}", password.expose()))
       )),
     }
   }
 }
 
+/// Pull the two fields transaction-side progress needs out of a
+/// `getchaintxstats` response.
+fn parse_chain_tx_stats(value: &Value) -> Result<ChainTxStats, DaemonError> {
+  let shape = |field: &str| DaemonError::RestSource {
+    message: format!("getchaintxstats: missing or non-numeric `{field}`"),
+    kind: RestErrorKind::Other,
+  };
+  let tx_count = value
+    .get("txcount")
+    .and_then(Value::as_u64)
+    .ok_or_else(|| shape("txcount"))?;
+  let height = value
+    .get("window_final_block_height")
+    .and_then(Value::as_u64)
+    .and_then(|h| u32::try_from(h).ok())
+    .ok_or_else(|| shape("window_final_block_height"))?;
+  Ok(ChainTxStats { tx_count, height })
+}
+
 #[async_trait::async_trait]
+
 impl RpcSource for CoreRpcClient {
   async fn get_mempool_info(&self) -> Result<MempoolInfo, DaemonError> {
     CoreRpcClient::get_mempool_info(self).await
@@ -510,6 +561,10 @@ impl RpcSource for CoreRpcClient {
 
   async fn get_raw_transaction(&self, txid: &str) -> Result<Vec<u8>, DaemonError> {
     CoreRpcClient::get_raw_transaction(self, txid).await
+  }
+
+  async fn get_chain_tx_stats(&self) -> Result<ChainTxStats, DaemonError> {
+    CoreRpcClient::get_chain_tx_stats(self).await
   }
 
   async fn get_network_info(&self) -> Result<NetworkInfo, DaemonError> {
@@ -574,45 +629,59 @@ fn encode_basic_token(value: &str) -> String {
 }
 
 fn decode_mempool_info(value: Value) -> Result<MempoolInfo, DaemonError> {
-  serde_json::from_value(value)
-    .map_err(|e| DaemonError::RestSource { message: format!("RPC getmempoolinfo decode: {e}"), kind: RestErrorKind::Other })
+  serde_json::from_value(value).map_err(|e| DaemonError::RestSource {
+    message: format!("RPC getmempoolinfo decode: {e}"),
+    kind: RestErrorKind::Other,
+  })
 }
 
 fn decode_raw_mempool(value: Value) -> Result<MempoolTxMap, DaemonError> {
-  let object = value.as_object().ok_or_else(|| {
-    DaemonError::RestSource { message: "RPC getrawmempool decode: expected object".to_owned(), kind: RestErrorKind::Other }
+  let object = value.as_object().ok_or_else(|| DaemonError::RestSource {
+    message: "RPC getrawmempool decode: expected object".to_owned(),
+    kind: RestErrorKind::Other,
   })?;
   object
     .iter()
     .map(|(txid, entry)| {
       serde_json::from_value(entry.clone())
         .map(|entry| (txid.clone(), entry))
-        .map_err(|e| DaemonError::RestSource { message: format!("RPC getrawmempool decode: {e}"), kind: RestErrorKind::Other })
+        .map_err(|e| DaemonError::RestSource {
+          message: format!("RPC getrawmempool decode: {e}"),
+          kind: RestErrorKind::Other,
+        })
     })
     .collect()
 }
 
 fn decode_raw_transaction(value: Value) -> Result<Vec<u8>, DaemonError> {
-  let raw_tx_hex = value.as_str().ok_or_else(|| {
-    DaemonError::RestSource { message: "RPC getrawtransaction decode: expected hex string".to_owned(), kind: RestErrorKind::Other }
+  let raw_tx_hex = value.as_str().ok_or_else(|| DaemonError::RestSource {
+    message: "RPC getrawtransaction decode: expected hex string".to_owned(),
+    kind: RestErrorKind::Other,
   })?;
-  hex::decode(raw_tx_hex)
-    .map_err(|e| DaemonError::RestSource { message: format!("RPC getrawtransaction decode: {e}"), kind: RestErrorKind::Other })
+  hex::decode(raw_tx_hex).map_err(|e| DaemonError::RestSource {
+    message: format!("RPC getrawtransaction decode: {e}"),
+    kind: RestErrorKind::Other,
+  })
 }
 
 fn decode_protx_list(value: Value) -> Result<Vec<ProTxListEntry>, DaemonError> {
-  serde_json::from_value(value)
-    .map_err(|e| DaemonError::RestSource { message: format!("RPC protx list decode: {e}"), kind: RestErrorKind::Other })
+  serde_json::from_value(value).map_err(|e| DaemonError::RestSource {
+    message: format!("RPC protx list decode: {e}"),
+    kind: RestErrorKind::Other,
+  })
 }
 
 fn decode_best_chainlock(value: Value) -> Result<BestChainLock, DaemonError> {
-  serde_json::from_value(value)
-    .map_err(|e| DaemonError::RestSource { message: format!("RPC getbestchainlock decode: {e}"), kind: RestErrorKind::Other })
+  serde_json::from_value(value).map_err(|e| DaemonError::RestSource {
+    message: format!("RPC getbestchainlock decode: {e}"),
+    kind: RestErrorKind::Other,
+  })
 }
 
 fn decode_governance_objects(value: Value) -> Result<GovernanceObjectMap, DaemonError> {
-  let object = value.as_object().ok_or_else(|| {
-    DaemonError::RestSource { message: "RPC gobject list decode: expected object".to_owned(), kind: RestErrorKind::Other }
+  let object = value.as_object().ok_or_else(|| DaemonError::RestSource {
+    message: "RPC gobject list decode: expected object".to_owned(),
+    kind: RestErrorKind::Other,
   })?;
   Ok(
     object
@@ -623,8 +692,9 @@ fn decode_governance_objects(value: Value) -> Result<GovernanceObjectMap, Daemon
 }
 
 fn decode_governance_votes(value: Value) -> Result<GovernanceVoteMap, DaemonError> {
-  let object = value.as_object().ok_or_else(|| {
-    DaemonError::RestSource { message: "RPC gobject getcurrentvotes decode: expected object".to_owned(), kind: RestErrorKind::Other }
+  let object = value.as_object().ok_or_else(|| DaemonError::RestSource {
+    message: "RPC gobject getcurrentvotes decode: expected object".to_owned(),
+    kind: RestErrorKind::Other,
   })?;
   object
     .iter()
@@ -632,8 +702,9 @@ fn decode_governance_votes(value: Value) -> Result<GovernanceVoteMap, DaemonErro
       value
         .as_str()
         .map(|vote| (hash.clone(), vote.to_owned()))
-        .ok_or_else(|| {
-          DaemonError::RestSource { message: "RPC governance vote decode: expected string vote".to_owned(), kind: RestErrorKind::Other }
+        .ok_or_else(|| DaemonError::RestSource {
+          message: "RPC governance vote decode: expected string vote".to_owned(),
+          kind: RestErrorKind::Other,
         })
     })
     .collect()
@@ -647,9 +718,44 @@ mod tests {
 
   use super::{
     decode_best_chainlock, decode_mempool_info, decode_raw_mempool, decode_raw_transaction,
-    encode_basic_token, BestChainLock, CoreRpcClient, MempoolTxEntry, RpcMetrics,
+    encode_basic_token, parse_chain_tx_stats, BestChainLock, CoreRpcClient, MempoolTxEntry,
+    RpcMetrics,
   };
   use crate::config::{RpcAuth, RpcConfig};
+
+  /// F2: the chain-wide transaction count is the only honest denominator for
+  /// transaction-side progress, so its two fields are read strictly.
+  #[test]
+  fn chain_tx_stats_reads_the_count_and_its_height() {
+    // Shape as mainnet answers it.
+    let value = serde_json::json!({
+      "time": 1_787_127_692i64,
+      "txcount": 70_556_609u64,
+      "window_final_block_height": 2_524_355u64,
+      "window_tx_count": 358_976u64,
+      "txrate": 0.131_741_902_193_998
+    });
+    let stats = parse_chain_tx_stats(&value);
+    assert!(stats.is_ok(), "well-formed getchaintxstats must parse");
+    if let Ok(stats) = stats {
+      assert_eq!(stats.tx_count, 70_556_609);
+      assert_eq!(stats.height, 2_524_355);
+    }
+
+    // A missing or wrongly-typed field is an error, not a zero: a zero would
+    // silently read as "chain has no transactions" and show 100% progress.
+    for bad in [
+      serde_json::json!({ "window_final_block_height": 1u64 }),
+      serde_json::json!({ "txcount": "70556609", "window_final_block_height": 1u64 }),
+      serde_json::json!({ "txcount": 1u64 }),
+      serde_json::json!({}),
+    ] {
+      assert!(
+        parse_chain_tx_stats(&bad).is_err(),
+        "malformed getchaintxstats must not parse: {bad}"
+      );
+    }
+  }
 
   fn unique_temp_path(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -695,7 +801,7 @@ mod tests {
   fn userpass_auth_header_encodes_basic_credentials() {
     let cfg = RpcConfig {
       username: Some("alice".to_owned()),
-      password: Some("secret".to_owned()),
+      password: Some("secret".to_owned().into()),
       ..RpcConfig::default()
     };
     let client = CoreRpcClient::new(&cfg).expect("client should build");
@@ -709,7 +815,7 @@ mod tests {
   fn rpc_diag_tracks_method_and_error_counters() {
     let metrics = RpcMetrics::new(&RpcConfig {
       username: Some("alice".to_owned()),
-      password: Some("secret".to_owned()),
+      password: Some("secret".to_owned().into()),
       ..RpcConfig::default()
     })
     .expect("metrics should build");

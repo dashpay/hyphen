@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT address AS \"address!\" FROM address_stats\n          WHERE address LIKE $1 ESCAPE '\\' LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "address!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "098638cb205e646ef87f17ea751882c9286b0a8cac94359f83400ca123125c9d"
+}

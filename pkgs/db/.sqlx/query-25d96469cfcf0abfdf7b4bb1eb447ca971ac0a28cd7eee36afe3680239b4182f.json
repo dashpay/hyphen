@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT chainwork FROM blocks WHERE height = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chainwork",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "25d96469cfcf0abfdf7b4bb1eb447ca971ac0a28cd7eee36afe3680239b4182f"
+}

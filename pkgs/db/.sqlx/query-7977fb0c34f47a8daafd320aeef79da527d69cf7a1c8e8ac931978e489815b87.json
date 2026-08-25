@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM undo_blocks WHERE height = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7977fb0c34f47a8daafd320aeef79da527d69cf7a1c8e8ac931978e489815b87"
+}

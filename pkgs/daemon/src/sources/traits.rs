@@ -10,7 +10,9 @@ use crate::error::DaemonError;
 use async_trait::async_trait;
 use hyphend::wire::msg::{CoreInfo, RestClientStats};
 
-use super::rpc::{BestChainLock, MempoolInfo, MempoolTxMap, NetworkInfo, PeerInfo, ProTxListEntry};
+use super::rpc::{
+  BestChainLock, ChainTxStats, MempoolInfo, MempoolTxMap, NetworkInfo, PeerInfo, ProTxListEntry,
+};
 use super::zmq::ZmqEvent;
 
 /// Async interface for fetching canonical block data from node REST.
@@ -57,6 +59,10 @@ pub trait RpcSource: Send + Sync + std::fmt::Debug {
 
   /// Read one raw serialized transaction from the node mempool or chain view.
   async fn get_raw_transaction(&self, txid: &str) -> Result<Vec<u8>, DaemonError>;
+
+  /// Read the node's chain-wide transaction count, the denominator for
+  /// transaction-side sync progress.
+  async fn get_chain_tx_stats(&self) -> Result<ChainTxStats, DaemonError>;
 
   /// Read the current network summary.
   async fn get_network_info(&self) -> Result<NetworkInfo, DaemonError>;

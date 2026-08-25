@@ -18,8 +18,13 @@ pub struct Args {
   pub datadir: Option<PathBuf>,
 
   /// REST API URL for the browse panel.
-  #[arg(long, default_value = "http://127.0.0.1:3080")]
-  pub api_url: String,
+  ///
+  /// Normally unnecessary: the console takes the endpoint from the daemon's
+  /// own reported configuration, which is the only source that stays right
+  /// when an operator moves the bind. Set this only to browse a daemon other
+  /// than the one whose datadir this console is reading.
+  #[arg(long)]
+  pub api_url: Option<String>,
 }
 
 impl Args {

@@ -49,7 +49,7 @@ impl OverlayPlan {
 mod tests {
   use super::OverlayPlan;
   use crate::init::options::{
-    ApiOptions, CacheOptions, IndexOptions, LiveOptions, Options, OverlayOptions, StartupMode,
+    ApiOptions, IndexOptions, LiveOptions, Options, OverlayOptions, StartupMode,
   };
 
   fn test_options() -> Options {
@@ -72,17 +72,6 @@ mod tests {
         protx: false,
         chainlock: false,
       },
-      cache: CacheOptions {
-        enabled: false,
-        address_enabled: false,
-        address_budget: "1MiB".to_owned(),
-        address_budget_bytes: 1,
-        address_hot_cache_threshold: 0,
-        address_summary_catchup_lag: 0,
-        readiness_enabled: false,
-        readiness_budget: "1MiB".to_owned(),
-        readiness_budget_bytes: 1,
-      },
       api: ApiOptions {
         enabled: false,
         bind: None,
@@ -96,6 +85,7 @@ mod tests {
       governance_refresh_secs: 1,
       chainlock_refresh_secs: 1,
       protx_refresh_secs: 1,
+      skip_compacting: false,
     }
   }
 

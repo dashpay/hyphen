@@ -4,28 +4,27 @@
 // See the accompanying file LICENSE or https://opensource.org/license/MIT
 //
 
-//! Live governance refresh backed by node JSON-RPC.
+//! Live governance refresh backed by node JSON-RPC, held in RAM.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::sql::SqlPool;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
+use crate::live::state::{GovObject, GovVote, LiveState};
 use crate::live::stream::{LiveEvent, StreamHub};
 use crate::live::warn;
 use crate::policy::api::API_REFRESH_WARN_INTERVAL_SECS;
 use crate::sources::{CoreRpcClient, ZmqEvent};
-use crate::sql;
 
 const ZMQ_REFRESH_DEBOUNCE_MS: u64 = 500;
 
-/// Refresh the persisted governance proposal and vote state once.
+/// Refresh the live governance proposal and vote state once.
 pub async fn refresh_once(
-  pool: &SqlPool,
+  live_state: &LiveState,
   rpc: &CoreRpcClient,
   stream_hub: Option<&StreamHub>,
 ) -> Result<(), DaemonError> {
@@ -33,31 +32,23 @@ pub async fn refresh_once(
   let object_rows = fetch_object_rows(rpc, now).await?;
   let vote_rows = fetch_all_vote_rows(rpc, &object_rows, now).await?;
 
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin governance snapshot tx: {e}"), code: None })?;
-  sql::live::gov::replace_objects(&mut tx, &object_rows).await?;
-  sql::live::gov::replace_votes(&mut tx, &vote_rows).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit governance snapshot tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     publish_snapshot_events(stream_hub, &object_rows, &vote_rows);
   }
+  live_state.replace_governance(object_rows, vote_rows);
   Ok(())
 }
 
 /// Periodically refresh governance state until shutdown.
 pub async fn refresh_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<CoreRpcClient>,
   lifecycle: Arc<Lifecycle>,
   refresh_secs: u64,
   stream_hub: Option<Arc<StreamHub>>,
 ) {
   while lifecycle.running() {
-    if let Err(err) = refresh_once(&pool, &rpc, stream_hub.as_deref()).await {
+    if let Err(err) = refresh_once(&live_state, &rpc, stream_hub.as_deref()).await {
       warn::warn_every(
         "live_gov_refresh_failed",
         Duration::from_secs(API_REFRESH_WARN_INTERVAL_SECS),
@@ -73,28 +64,21 @@ pub async fn refresh_loop(
 }
 
 async fn refresh_votes_once(
-  pool: &SqlPool,
+  live_state: &LiveState,
   rpc: &CoreRpcClient,
-  object_rows: &[sql::live::gov::GovernanceObjectRow],
+  object_rows: &[GovObject],
   stream_hub: Option<&StreamHub>,
 ) -> Result<(), DaemonError> {
   let vote_rows = fetch_all_vote_rows(rpc, object_rows, now_epoch_secs()).await?;
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin governance vote refresh tx: {e}"), code: None })?;
-  sql::live::gov::replace_votes(&mut tx, &vote_rows).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit governance vote refresh tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     publish_snapshot_events(stream_hub, object_rows, &vote_rows);
   }
+  live_state.replace_governance_votes(vote_rows);
   Ok(())
 }
 
 async fn refresh_votes_for_object_once(
-  pool: &SqlPool,
+  live_state: &LiveState,
   rpc: &CoreRpcClient,
   object_hash: &[u8],
   stream_hub: Option<&StreamHub>,
@@ -104,15 +88,6 @@ async fn refresh_votes_for_object_once(
   let object_value = rpc.get_governance_object(&object_hash_hex).await?;
   let object_row = build_object_row(&object_hash_hex, &object_value, updated_at)?;
   let vote_rows = fetch_vote_rows(rpc, &object_hash_hex, object_hash, updated_at).await?;
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin governance targeted vote refresh tx: {e}"), code: None })?;
-  sql::live::gov::upsert_object(&mut tx, &object_row).await?;
-  sql::live::gov::replace_votes_for_object(&mut tx, object_hash, &vote_rows).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit governance targeted vote refresh tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
     for vote in &vote_rows {
       stream_hub.publish(LiveEvent::governance_vote(
@@ -125,11 +100,13 @@ async fn refresh_votes_for_object_once(
       ));
     }
   }
+  live_state.upsert_governance_object(object_row);
+  live_state.replace_governance_votes_for_object(object_hash, vote_rows);
   Ok(())
 }
 
 async fn refresh_object_once(
-  pool: &SqlPool,
+  live_state: &LiveState,
   rpc: &CoreRpcClient,
   object_hash: &[u8],
   stream_hub: Option<&StreamHub>,
@@ -140,25 +117,18 @@ async fn refresh_object_once(
   let object_row = build_object_row(&object_hash_hex, &object_value, updated_at)?;
   let vote_rows = fetch_vote_rows(rpc, &object_hash_hex, object_hash, updated_at).await?;
 
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin governance object refresh tx: {e}"), code: None })?;
-  sql::live::gov::upsert_object(&mut tx, &object_row).await?;
-  sql::live::gov::replace_votes_for_object(&mut tx, object_hash, &vote_rows).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit governance object refresh tx: {e}"), code: None })?;
   if let Some(stream_hub) = stream_hub {
-    publish_snapshot_events(stream_hub, &[object_row], &vote_rows);
+    publish_snapshot_events(stream_hub, std::slice::from_ref(&object_row), &vote_rows);
   }
+  live_state.upsert_governance_object(object_row);
+  live_state.replace_governance_votes_for_object(object_hash, vote_rows);
   Ok(())
 }
 
 async fn fetch_object_rows(
   rpc: &CoreRpcClient,
   updated_at: i64,
-) -> Result<Vec<sql::live::gov::GovernanceObjectRow>, DaemonError> {
+) -> Result<Vec<GovObject>, DaemonError> {
   let objects = rpc.list_governance_proposals().await?;
   let mut object_rows = Vec::with_capacity(objects.len());
   for (hash_hex, value) in objects {
@@ -169,9 +139,9 @@ async fn fetch_object_rows(
 
 async fn fetch_all_vote_rows(
   rpc: &CoreRpcClient,
-  object_rows: &[sql::live::gov::GovernanceObjectRow],
+  object_rows: &[GovObject],
   updated_at: i64,
-) -> Result<Vec<sql::live::gov::GovernanceVoteRow>, DaemonError> {
+) -> Result<Vec<GovVote>, DaemonError> {
   let mut vote_rows = Vec::new();
   for object_row in object_rows {
     vote_rows.extend(
@@ -191,10 +161,12 @@ fn build_object_row(
   hash_hex: &str,
   value: &Value,
   updated_at: i64,
-) -> Result<sql::live::gov::GovernanceObjectRow, DaemonError> {
-  let object_hash = hex::decode(hash_hex)
-    .map_err(|e| DaemonError::RestSource { message: format!("decode governance hash {hash_hex}: {e}"), kind: RestErrorKind::Other })?;
-  Ok(sql::live::gov::GovernanceObjectRow {
+) -> Result<GovObject, DaemonError> {
+  let object_hash = hex::decode(hash_hex).map_err(|e| DaemonError::RestSource {
+    message: format!("decode governance hash {hash_hex}: {e}"),
+    kind: RestErrorKind::Other,
+  })?;
+  Ok(GovObject {
     object_hash,
     parent_hash: None,
     revision: None,
@@ -204,8 +176,10 @@ fn build_object_row(
       .and_then(Value::as_i64)
       .unwrap_or_default() as i32,
     data_json: Some(value.clone()),
-    raw_object: serde_json::to_vec(value)
-      .map_err(|e| DaemonError::RestSource { message: format!("encode governance object: {e}"), kind: RestErrorKind::Other })?,
+    raw_object: serde_json::to_vec(value).map_err(|e| DaemonError::RestSource {
+      message: format!("encode governance object: {e}"),
+      kind: RestErrorKind::Other,
+    })?,
     updated_at,
   })
 }
@@ -215,15 +189,16 @@ async fn fetch_vote_rows(
   hash_hex: &str,
   object_hash: &[u8],
   updated_at: i64,
-) -> Result<Vec<sql::live::gov::GovernanceVoteRow>, DaemonError> {
+) -> Result<Vec<GovVote>, DaemonError> {
   let votes = rpc.get_governance_votes(hash_hex).await?;
   let mut rows = Vec::with_capacity(votes.len());
   for (vote_hash_hex, vote_text) in votes {
-    let vote_hash = hex::decode(&vote_hash_hex).map_err(|e| {
-      DaemonError::RestSource { message: format!("decode governance vote hash {vote_hash_hex}: {e}"), kind: RestErrorKind::Other }
+    let vote_hash = hex::decode(&vote_hash_hex).map_err(|e| DaemonError::RestSource {
+      message: format!("decode governance vote hash {vote_hash_hex}: {e}"),
+      kind: RestErrorKind::Other,
     })?;
     let (signal, outcome, vote_time) = parse_vote_fields(&vote_text);
-    rows.push(sql::live::gov::GovernanceVoteRow {
+    rows.push(GovVote {
       vote_hash,
       object_hash: object_hash.to_vec(),
       signal,
@@ -238,8 +213,8 @@ async fn fetch_vote_rows(
 
 fn publish_snapshot_events(
   stream_hub: &StreamHub,
-  object_rows: &[sql::live::gov::GovernanceObjectRow],
-  vote_rows: &[sql::live::gov::GovernanceVoteRow],
+  object_rows: &[GovObject],
+  vote_rows: &[GovVote],
 ) {
   for object in object_rows {
     stream_hub.publish(LiveEvent::governance_object(
@@ -262,7 +237,7 @@ fn publish_snapshot_events(
 
 /// Trigger governance refreshes from ZMQ governance deltas until shutdown.
 pub async fn refresh_from_zmq_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<CoreRpcClient>,
   mut rx: broadcast::Receiver<ZmqEvent>,
   lifecycle: Arc<Lifecycle>,
@@ -280,11 +255,11 @@ pub async fn refresh_from_zmq_loop(
           .await;
         if let Ok(object_hash) = crate::consensus::gov_object_hash(&object) {
           if let Err(err) =
-            refresh_object_once(&pool, &rpc, &object_hash, stream_hub.as_deref()).await
+            refresh_object_once(&live_state, &rpc, &object_hash, stream_hub.as_deref()).await
           {
             tracing::warn!("governance object refresh from ZMQ delta failed: {err}");
           }
-        } else if let Err(err) = refresh_once(&pool, &rpc, stream_hub.as_deref()).await {
+        } else if let Err(err) = refresh_once(&live_state, &rpc, stream_hub.as_deref()).await {
           tracing::warn!("governance refresh from ZMQ object delta failed: {err}");
         }
       }
@@ -296,21 +271,24 @@ pub async fn refresh_from_zmq_loop(
         match object_hash {
           Some(object_hash) => {
             if let Err(err) =
-              refresh_votes_for_object_once(&pool, &rpc, &object_hash, stream_hub.as_deref()).await
+              refresh_votes_for_object_once(&live_state, &rpc, &object_hash, stream_hub.as_deref())
+                .await
             {
               tracing::warn!("governance vote refresh from ZMQ vote delta failed: {err}");
             }
           }
-          None => match sql::live::gov::all_objects(&pool).await {
-            Ok(object_rows) => {
-              if let Err(err) =
-                refresh_votes_once(&pool, &rpc, &object_rows, stream_hub.as_deref()).await
-              {
-                tracing::warn!("governance vote refresh from ZMQ vote delta failed: {err}");
-              }
+          None => {
+            let object_rows = live_state.governance_all_objects();
+            let object_rows: Vec<GovObject> = object_rows
+              .into_iter()
+              .map(|object| (*object).clone())
+              .collect();
+            if let Err(err) =
+              refresh_votes_once(&live_state, &rpc, &object_rows, stream_hub.as_deref()).await
+            {
+              tracing::warn!("governance vote refresh from ZMQ vote delta failed: {err}");
             }
-            Err(err) => tracing::warn!("load governance objects for vote refresh failed: {err}"),
-          },
+          }
         }
       }
       Some(Ok(_)) => {}
@@ -393,8 +371,8 @@ mod tests {
     raw_vote.extend_from_slice(&3i64.to_le_bytes());
     raw_vote.push(0);
 
-    let parent = crate::consensus::gov_vote_parent_hash(&raw_vote)
-      .expect("parent hash should decode");
+    let parent =
+      crate::consensus::gov_vote_parent_hash(&raw_vote).expect("parent hash should decode");
     assert_eq!(
       hex::encode(parent),
       "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -420,10 +398,24 @@ mod tests {
     raw.push(signature.len() as u8);
     raw.extend_from_slice(&signature);
 
-    let parsed = crate::consensus::gov_object_hash(&raw)
-      .expect("object hash should decode");
+    let parsed = crate::consensus::gov_object_hash(&raw).expect("object hash should decode");
     assert_eq!(
       hex::encode(parsed),
+      // Expected value produced by `dashpay/base-sdk` gov hashing, which is
+      // authoritative for this repo: we consume the library and do not
+      // second-guess its semantics.
+      //
+      // The previous value came from the retired in-tree `dash-primitives`
+      // crate and its comment claimed verification against dashd. That claim
+      // was never reproduced -- reconstructing the SER_GETHASH preimage from
+      // `gobject get` per `governance/common.h:70` failed to match Core on any
+      // of six live mainnet objects -- so it is not evidence either way. The
+      // fixture's field layout does match Core's serialization
+      // (hashParent, revision, time, collateralHash, vchData, type, outpoint),
+      // so any disagreement is in the hash computation, not the test.
+      //
+      // If base-sdk's gov hashing is ever shown to diverge from consensus,
+      // that is a base-sdk defect and this value moves with it.
       "4a37b1a47d9b1137b2af4d7d36ad757c3c80d5fcb9c24ac80807fab24d2e18e3"
     );
   }

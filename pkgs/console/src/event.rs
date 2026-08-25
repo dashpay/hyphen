@@ -43,6 +43,11 @@ impl BrowseIndex {
 #[derive(Debug)]
 pub enum RestRequest {
   Browse {
+    /// Where to send it. Carried per request rather than captured when the
+    /// worker starts, so a bind the daemon reports later is picked up without
+    /// shared mutable state, and an in-flight request cannot quietly resolve
+    /// against a host that has since changed.
+    base_url: String,
     index: BrowseIndex,
     limit: u32,
     cursor: Option<String>,

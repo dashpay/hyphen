@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT txid, tx_type AS \"tx_type: HyDbTxType\", block_height, payload\n           FROM sptx_payloads\n          WHERE protx_hash = $1\n          ORDER BY block_height ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "txid",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "tx_type: HyDbTxType",
+        "type_info": {
+          "Custom": {
+            "name": "tx_type",
+            "kind": {
+              "Enum": [
+                "normal",
+                "provider_register",
+                "provider_update_service",
+                "provider_update_registrar",
+                "provider_update_revoke",
+                "coinbase",
+                "quorum_commitment",
+                "asset_lock",
+                "asset_unlock",
+                "mnhf"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "block_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "payload",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7e613230577b095a17958c2af8056b119d77d792473fa23c28326f510b26a4ed"
+}

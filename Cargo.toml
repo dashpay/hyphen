@@ -1,5 +1,5 @@
 [workspace]
-members = ["pkgs/console", "pkgs/daemon", "pkgs/daemon/bench", "pkgs/daemon/tests"]
+members = ["pkgs/console", "pkgs/daemon", "pkgs/db"]
 resolver = "2"
 
 [profile.release]

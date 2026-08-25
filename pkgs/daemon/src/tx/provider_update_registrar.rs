@@ -20,7 +20,8 @@ pub fn to_json(p: &ProUpRegTx) -> Value {
 }
 
 pub fn to_effect(p: &ProUpRegTx, p2pkh_version: u8, p2sh_version: u8) -> ValidatorEffect {
-  let payout_addr = dash_script::derive_address(p.script_payout.as_bytes(), p2pkh_version, p2sh_version);
+  let payout_addr =
+    dash_script::derive_address(p.script_payout.as_bytes(), p2pkh_version, p2sh_version);
   let voting_addr = Some(dash_script::encode_key_id(&p.key_id_voting, p2pkh_version));
   ValidatorEffect::UpdateRegistrar {
     pro_tx_hash: p.pro_tx_hash.as_bytes().to_vec(),

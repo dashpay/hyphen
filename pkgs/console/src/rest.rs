@@ -14,20 +14,28 @@ use serde_json::Value;
 use crate::event::{AppEvent, RestRequest, RestResult};
 
 /// Spawn the blocking REST worker used for browse pages.
+///
+/// Holds no endpoint of its own: each request names where it goes, because the
+/// console only learns the daemon's bind once a heartbeat frame arrives, which
+/// is after this thread has started.
 pub fn spawn_rest_thread(
-  api_url: &str,
   tx: mpsc::Sender<AppEvent>,
   rx: mpsc::Receiver<RestRequest>,
 ) -> JoinHandle<()> {
-  let base_url = api_url.trim_end_matches('/').to_owned();
   return std::thread::spawn(move || {
     for request in rx {
       let result = match request {
         RestRequest::Browse {
+          base_url,
           index,
           limit,
           cursor,
-        } => browse_request(&base_url, index, limit, cursor.as_deref()),
+        } => browse_request(
+          base_url.trim_end_matches('/'),
+          index,
+          limit,
+          cursor.as_deref(),
+        ),
       };
 
       if tx.send(AppEvent::RestResponse(result)).is_err() {

@@ -24,7 +24,7 @@ pub(crate) async fn indexed_live(state: &AppState, txid: &[u8]) -> Result<TxLive
     None
   };
   let islock = if state.live.islock {
-    Some(is_islocked(state, txid).await?)
+    Some(is_islocked(state, txid))
   } else {
     None
   };
@@ -39,56 +39,25 @@ pub(crate) async fn live_tx_detail(
 ) -> Result<TxDetail, ApiError> {
   state.check_live_feature(LiveFeature::Mempool)?;
   let (primary_txid, secondary_txid) = txid_lookup.ordered_candidates(HashEndian::View);
-  let row = match crate::sql::live::mempool::recent_tx_by_txid(&state.pool, &primary_txid).await {
-    Ok(Some(row)) => Some(row),
-    Ok(None) => {
-      if let Some(secondary_txid) = secondary_txid.as_ref() {
-        crate::sql::live::mempool::recent_tx_by_txid(&state.pool, secondary_txid)
-          .await
-          .map_err(|e| ApiError::internal(format!("query recent mempool tx: {e}")))?
-      } else {
-        None
-      }
-    }
-    Err(e) => return Err(ApiError::internal(format!("query recent mempool tx: {e}"))),
-  }
+  let tx = state
+    .live_state
+    .mempool_tx(&primary_txid)
+    .or_else(|| {
+      secondary_txid
+        .as_ref()
+        .and_then(|txid| state.live_state.mempool_tx(txid))
+    })
+    .ok_or_else(|| ApiError::not_found("transaction not found"))?;
+  let islocked = is_islocked(state, &tx.txid);
+  let txid_hex = utils::view_hex(&tx.txid, HashEndian::View);
+
+  let mut value = crate::live::mempool::query::build_tx_value_from_persisted(
+    &state.live_state,
+    &txid_hex,
+    &tx.txid,
+    islocked,
+  )
   .ok_or_else(|| ApiError::not_found("transaction not found"))?;
-  let islocked = is_islocked(state, &row.txid).await?;
-  let txid_hex = utils::view_hex(&row.txid, HashEndian::View);
-
-  if let Some(mut value) = crate::live::mempool::query::build_tx_value_from_persisted(
-    &state.pool,
-    &txid_hex,
-    &row.txid,
-    islocked,
-  )
-  .await
-  .map_err(|e| ApiError::internal(format!("build persisted mempool tx detail: {e}")))?
-  {
-    value.live = TxLive {
-      tags: live_tags(
-        Some(true),
-        if state.live.islock {
-          Some(islocked)
-        } else {
-          None
-        },
-      ),
-    };
-    return Ok(value);
-  }
-
-  let mut value = crate::live::mempool::query::build_tx_value(
-    &state.pool,
-    &txid_hex,
-    &row.txid,
-    &row.raw_tx,
-    state.p2pkh_version,
-    state.p2sh_version,
-    islocked,
-  )
-  .await
-  .map_err(|e| ApiError::internal(format!("build mempool tx detail: {e}")))?;
   value.live = TxLive {
     tags: live_tags(
       Some(true),
@@ -108,25 +77,20 @@ pub(crate) async fn live_rawtx(
 ) -> Result<RawTxResponse, ApiError> {
   state.check_live_feature(LiveFeature::Mempool)?;
   let (primary_txid, secondary_txid) = txid_lookup.ordered_candidates(HashEndian::View);
-  let row = match crate::sql::live::mempool::recent_tx_by_txid(&state.pool, &primary_txid).await {
-    Ok(Some(row)) => Some(row),
-    Ok(None) => {
-      if let Some(secondary_txid) = secondary_txid.as_ref() {
-        crate::sql::live::mempool::recent_tx_by_txid(&state.pool, secondary_txid)
-          .await
-          .map_err(|e| ApiError::internal(format!("query recent mempool tx: {e}")))?
-      } else {
-        None
-      }
-    }
-    Err(e) => return Err(ApiError::internal(format!("query recent mempool tx: {e}"))),
-  }
-  .ok_or_else(|| ApiError::not_found("transaction not found"))?;
+  let tx = state
+    .live_state
+    .mempool_tx(&primary_txid)
+    .or_else(|| {
+      secondary_txid
+        .as_ref()
+        .and_then(|txid| state.live_state.mempool_tx(txid))
+    })
+    .ok_or_else(|| ApiError::not_found("transaction not found"))?;
 
   Ok(RawTxResponse {
     as_of_height: None,
     source: RawValueSource::Live,
-    rawtx: hex::encode(row.raw_tx),
+    rawtx: hex::encode(&tx.raw_tx),
   })
 }
 
@@ -139,20 +103,10 @@ pub(crate) async fn live_search_response(
     return Ok(None);
   }
   let (primary_txid, secondary_txid) = txid_lookup.ordered_candidates(HashEndian::View);
-  let found = match crate::sql::live::mempool::tx_detail(&state.pool, &primary_txid).await {
-    Ok(Some(_)) => true,
-    Ok(None) => {
-      if let Some(secondary_txid) = secondary_txid.as_ref() {
-        crate::sql::live::mempool::tx_detail(&state.pool, secondary_txid)
-          .await
-          .map_err(|e| ApiError::from_daemon(e, "search mempool tx detail"))?
-          .is_some()
-      } else {
-        false
-      }
-    }
-    Err(e) => return Err(ApiError::from_daemon(e, "search mempool tx detail")),
-  };
+  let found = state.live_state.mempool_tx(&primary_txid).is_some()
+    || secondary_txid
+      .as_ref()
+      .is_some_and(|txid| state.live_state.mempool_tx(txid).is_some());
   if !found {
     return Ok(None);
   }
@@ -165,11 +119,8 @@ pub(crate) async fn live_search_response(
   })))
 }
 
-async fn is_islocked(state: &AppState, txid: &[u8]) -> Result<bool, ApiError> {
-  crate::sql::live::islock::current_by_txid(&state.pool, txid)
-    .await
-    .map(|row| row.is_some())
-    .map_err(|e| ApiError::internal(format!("query current islock: {e}")))
+fn is_islocked(state: &AppState, txid: &[u8]) -> bool {
+  state.live_state.islock(txid).is_some()
 }
 
 fn live_tags(mempool: Option<bool>, islock: Option<bool>) -> Option<TxLiveTags> {

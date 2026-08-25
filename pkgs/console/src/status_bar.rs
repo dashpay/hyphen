@@ -16,20 +16,19 @@ use ratatui::{
 use crate::model::{AppState, Focus, OverviewSubFocus, Section};
 use crate::theme;
 
+/// Stepped sync deferring index builds is a mode, not an event, so it belongs
+/// in the persistent bar rather than a log line the operator has to catch.
+fn stepped_status(state: &AppState) -> Option<String> {
+  let snap = state.snapshot.as_ref()?;
+  let mode = &snap.ingestion_diag.sync_mode;
+  (mode == "stepped").then(|| "mode=stepped".to_owned())
+}
+
+/// Reorg recovery, held for a window by the daemon after it happens.
+/// `undo-replay` is routine; `rederive` means the undo coverage was not deep
+/// enough for the fork and the projection had to be rebuilt.
 fn recovery_status(state: &AppState) -> Option<String> {
   let snap = state.snapshot.as_ref()?;
-  let block = snap.stages.iter().find(|stage| stage.stage == "block")?;
-  let rocks_tip = snap.ingestion_tip.map(|height| height as i32)?;
-  if block.indexed_height < 0 && rocks_tip >= 0 {
-    return Some(format!("rebuild pg -1/{rocks_tip} from local RocksDB"));
-  }
-  if block.indexed_height < rocks_tip {
-    let remaining = rocks_tip.saturating_sub(block.indexed_height);
-    return Some(format!(
-      "rebuild pg {}/{} from local RocksDB  remaining {}",
-      block.indexed_height, rocks_tip, remaining
-    ));
-  }
   let progress = &snap.chain_progress_diag;
   if progress.recovery_state != "clean" {
     return Some(match progress.recovery_height {
@@ -103,6 +102,8 @@ fn draw_left(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     vec![Span::styled(msg.as_str(), style)]
   } else if let Some(message) = recovery_status(state) {
     vec![Span::styled(message, theme::info())]
+  } else if let Some(message) = stepped_status(state) {
+    vec![Span::styled(message, theme::info())]
   } else if let Some(prompt) = state.prompt.as_ref() {
     let hint = match prompt {
       crate::model::PromptState::Confirm(_) => "y:confirm  n/Esc:cancel",
@@ -119,7 +120,7 @@ fn draw_left(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
   } else {
     let hints = if state.focus == Focus::Main && state.section == Section::Overview {
       match state.overview_sub {
-        OverviewSubFocus::Stores => "j/k:nav  c:compact  d:disconnect  w:rewind  Tab:focus  q:quit",
+        OverviewSubFocus::Stores => "j/k:nav  d:disconnect  w:rewind  Tab:focus  q:quit",
         OverviewSubFocus::Indices => {
           "j/k:nav  Enter:browse  r:reindex  d:disconnect  w:rewind  /:filter  n/p:page  Tab:focus  q:quit"
         }

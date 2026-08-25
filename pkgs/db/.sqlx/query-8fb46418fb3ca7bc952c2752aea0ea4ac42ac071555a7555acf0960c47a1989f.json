@@ -1,0 +1,135 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT protx_hash, existed, collateral_hash, collateral_index, collateral_address,\n                owner_address, operator_pubkey, voting_address, addr_core_p2p, addr_platform_p2p,\n                addr_platform_https, payout_address, operator_payout_address, operator_reward,\n                validator_type AS \"validator_type: HyDbVlType\", status,\n                registered_height, last_updated_height\n           FROM undo_validators WHERE height = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "protx_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "existed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "collateral_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "collateral_index",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "collateral_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "owner_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "operator_pubkey",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 7,
+        "name": "voting_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "addr_core_p2p",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 9,
+        "name": "addr_platform_p2p",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "addr_platform_https",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 11,
+        "name": "payout_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "operator_payout_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "operator_reward",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "validator_type: HyDbVlType",
+        "type_info": {
+          "Custom": {
+            "name": "validator_type",
+            "kind": {
+              "Enum": [
+                "regular",
+                "evonode",
+                "unknown"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "registered_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 17,
+        "name": "last_updated_height",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8fb46418fb3ca7bc952c2752aea0ea4ac42ac071555a7555acf0960c47a1989f"
+}

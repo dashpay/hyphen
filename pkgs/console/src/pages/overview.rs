@@ -14,10 +14,11 @@ use ratatui::{
 use crate::model::AppState;
 use crate::widgets;
 
-/// Static store list: (cf_name, display_name, backend_name)
-pub const STORE_TREE: &[(&str, &str, &str)] = &[("blocks", "Blocks", "RocksDB")];
+/// Static store list: (store_key, display_name, backend_name)
+pub const STORE_TREE: &[(&str, &str, &str)] = &[("chain", "Chain Data", "PostgreSQL")];
 
-/// Static tree definition: (stage_key, display_name, depth, _has_children_below)
+/// Static tree definition: (stage_key, display_name, depth,
+/// _has_children_below)
 pub const INDEX_TREE: &[(&str, &str, usize, bool)] = &[
   ("block", "Blocks", 0, true),
   ("metrics", "Metrics", 1, false),

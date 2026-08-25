@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT status, validator_type AS \"validator_type: HyDbVlType\", total\n           FROM validator_counts ORDER BY status, validator_type",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "validator_type: HyDbVlType",
+        "type_info": {
+          "Custom": {
+            "name": "validator_type",
+            "kind": {
+              "Enum": [
+                "regular",
+                "evonode",
+                "unknown"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "total",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1838fc9e9ca7f4fb71c5141fd35903002cb8cb20cb8883790f3acb68519cb4df"
+}

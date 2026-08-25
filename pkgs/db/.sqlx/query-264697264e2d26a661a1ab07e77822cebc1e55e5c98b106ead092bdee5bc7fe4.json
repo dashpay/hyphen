@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT n AS \"n!\" FROM UNNEST($1::text[]) AS n WHERE to_regclass(n) IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "264697264e2d26a661a1ab07e77822cebc1e55e5c98b106ead092bdee5bc7fe4"
+}

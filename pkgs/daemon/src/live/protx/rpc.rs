@@ -9,24 +9,22 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::sql::SqlPool;
-
 use crate::error::{DaemonError, RestErrorKind};
 use crate::lifecycle::Lifecycle;
+use crate::live::state::{LiveState, ProTxEntry, ProtxSnapshot};
 use crate::live::warn;
 use crate::policy::api::API_REFRESH_WARN_INTERVAL_SECS;
 use crate::sources::rpc::ProTxListEntry;
 use crate::sources::RpcSource;
-use crate::sql;
 use crate::utils::{HashEndian, HashLookup};
 
-/// Refresh the persisted validator `protx` snapshot once.
+/// Refresh the in-RAM validator `protx` snapshot once from node JSON-RPC.
 ///
 /// # Errors
 ///
-/// Returns `DaemonError::RestSource` when the RPC requests fail or
-/// `DaemonError::Pg` when PostgreSQL rejects the refresh write.
-pub async fn refresh_once(pool: &SqlPool, rpc: &dyn RpcSource) -> Result<(), DaemonError> {
+/// Returns `DaemonError::RestSource` when the RPC requests fail or a
+/// pro_tx_hash cannot be decoded.
+pub async fn refresh_once(live_state: &LiveState, rpc: &dyn RpcSource) -> Result<(), DaemonError> {
   let now = now_epoch_secs();
   let registered = rpc.get_protx_list_registered().await?;
   let valid = rpc.get_protx_list_valid().await?;
@@ -34,31 +32,24 @@ pub async fn refresh_once(pool: &SqlPool, rpc: &dyn RpcSource) -> Result<(), Dae
     .iter()
     .map(|entry| entry.pro_tx_hash.as_str())
     .collect();
-  let rows: Vec<sql::live::protx::ValidatorProTxSnapshotRow> = registered
+  let entries: Vec<ProTxEntry> = registered
     .into_iter()
     .map(|entry| snapshot_row(entry, &valid_hashes, now))
     .collect::<Result<Vec<_>, _>>()?;
 
-  let mut tx = pool
-    .begin()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("begin validator protx snapshot tx: {e}"), code: None })?;
-  sql::live::protx::replace_snapshot(&mut tx, &rows).await?;
-  tx.commit()
-    .await
-    .map_err(|e| DaemonError::Pg { message: format!("commit validator protx snapshot tx: {e}"), code: None })?;
+  live_state.set_protx(ProtxSnapshot::from_entries(entries));
   Ok(())
 }
 
 /// Periodically refresh validator `protx` snapshot state until shutdown.
 pub async fn refresh_loop(
-  pool: SqlPool,
+  live_state: Arc<LiveState>,
   rpc: Arc<dyn RpcSource>,
   lifecycle: Arc<Lifecycle>,
   refresh_secs: u64,
 ) {
   while lifecycle.running() {
-    if let Err(err) = refresh_once(&pool, rpc.as_ref()).await {
+    if let Err(err) = refresh_once(&live_state, rpc.as_ref()).await {
       warn::warn_every(
         "live_protx_refresh_failed",
         std::time::Duration::from_secs(API_REFRESH_WARN_INTERVAL_SECS),
@@ -77,17 +68,13 @@ fn snapshot_row(
   entry: ProTxListEntry,
   valid_hashes: &HashSet<&str>,
   updated_at: i64,
-) -> Result<sql::live::protx::ValidatorProTxSnapshotRow, DaemonError> {
-  let pro_tx_lookup = HashLookup::from_hex(&entry.pro_tx_hash).map_err(|e| {
-    DaemonError::RestSource {
-      message: format!(
-        "decode validator protx hash {}: {e}",
-        entry.pro_tx_hash
-      ),
+) -> Result<ProTxEntry, DaemonError> {
+  let pro_tx_lookup =
+    HashLookup::from_hex(&entry.pro_tx_hash).map_err(|e| DaemonError::RestSource {
+      message: format!("decode validator protx hash {}: {e}", entry.pro_tx_hash),
       kind: RestErrorKind::Other,
-    }
-  })?;
-  Ok(sql::live::protx::ValidatorProTxSnapshotRow {
+    })?;
+  Ok(ProTxEntry {
     pro_tx_hash: pro_tx_lookup.bytes(HashEndian::Ser).to_vec(),
     validator_type: entry.validator_type.clone(),
     current_status: Some(current_status(&entry, valid_hashes)),

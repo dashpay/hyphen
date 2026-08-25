@@ -36,8 +36,7 @@ daemon = [
   "dep:rlimit",
   "dep:num-bigint",
   "dep:reqwest",
-  "dep:rocksdb",
-  "dep:sqlx",
+  "dep:hyphen-db",
   "dep:tokio",
   "dep:tokio-stream",
   "dep:time",
@@ -51,8 +50,7 @@ daemon = [
   "dep:utoipa-swagger-ui",
   "dep:zeromq",
 ]
-bench = ["daemon", "wire"]
-tests = ["daemon"]
+tests = ["daemon", "hyphen-db/tests"]
 wire = []
 
 [dependencies]
@@ -74,10 +72,9 @@ hex                = { version = "0.4", optional = true }
 lru                = { version = "0.12", optional = true }
 rlimit             = { version = "0.11", optional = true }
 reqwest            = { version = "0.12", default-features = false, features = ["json"], optional = true }
-rocksdb            = { version = "0.24", optional = true }
+hyphen-db          = { path = "../db", optional = true }
 serde              = { version = "1", features = ["derive"] }
 serde_json         = "1"
-sqlx               = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-none", "postgres", "macros", "json"], optional = true }
 tokio              = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "test-util"], optional = true }
 tokio-stream       = { version = "0.1", features = ["sync"], optional = true }
 time               = { version = "0.3", features = ["formatting"], optional = true }
@@ -90,6 +87,11 @@ tracing-appender   = { version = "0.2", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 url                = { version = "2", optional = true }
 zeromq             = { version = "0.5", default-features = false, features = ["tokio-runtime", "tcp-transport"], optional = true }
+
+[dev-dependencies]
+# Enables the storage facade's `from_parts` seam so tests can inject in-memory
+# fakes without a live Postgres.
+hyphen-db = { path = "../db", features = ["tests"] }
 
 [lints.clippy]
 expect_used = "deny"

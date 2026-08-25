@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT txid, block_height, block_pos, version, tx_type AS \"tx_type: HyDbTxType\",\n                  lock_time, size, value_out, input_count, output_count, fee\n             FROM transactions\n            ORDER BY block_height DESC, block_pos DESC, txid DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "txid",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_height",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "block_pos",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "tx_type: HyDbTxType",
+        "type_info": {
+          "Custom": {
+            "name": "tx_type",
+            "kind": {
+              "Enum": [
+                "normal",
+                "provider_register",
+                "provider_update_service",
+                "provider_update_registrar",
+                "provider_update_revoke",
+                "coinbase",
+                "quorum_commitment",
+                "asset_lock",
+                "asset_unlock",
+                "mnhf"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "lock_time",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "size",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "value_out",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "input_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "output_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "fee",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ef3baf6cfef297cf104ff993b209bd036c4ab9749a205f3828fec796f1e558b6"
+}

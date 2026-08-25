@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE walk AS (\n         SELECT s.hash, s.prev_hash, s.height, 1::int8 AS depth,\n                (b.hash IS NOT NULL) AS canonical\n           FROM ser_blocks s\n           LEFT JOIN blocks b ON b.height = s.height AND b.hash = s.hash\n          WHERE s.hash = $1\n         UNION ALL\n         SELECT s.hash, s.prev_hash, s.height, w.depth + 1,\n                (b.hash IS NOT NULL) AS canonical\n           FROM walk w\n           JOIN ser_blocks s ON s.hash = w.prev_hash\n           LEFT JOIN blocks b ON b.height = s.height AND b.hash = s.hash\n          WHERE NOT w.canonical AND w.height > 0 AND w.depth < $2\n       )\n       SELECT hash AS \"hash!\", height AS \"height!\", canonical AS \"canonical!\"\n         FROM walk ORDER BY height ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash!",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "height!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "canonical!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c15047f0ab8c4bc9c243ea120d30abf7a5edf2a7fa4f5f5b0a6014af13136203"
+}
