@@ -374,6 +374,61 @@ mod tests {
     "41ac00000000"
   );
 
+  #[test]
+  fn decode_v4_activation_block() {
+    let raw = include_bytes!("fixtures/testnet-1578000.bin");
+    let source = HyDbBlockSource::new(0x8c, 0x13);
+    let decoded = source.decode(raw).expect("activation block decodes");
+    assert_eq!(
+      hex_display(&decoded.header.hash.0),
+      "0000009c0b6cbd13862a8049d0a117a4210ae6eeb90d8022cd2276e875fe639c"
+    );
+    assert_eq!(decoded.header.size, 835);
+    assert_eq!(decoded.header.tx_count, 3);
+    assert_eq!(decoded.txs.len(), 3);
+    assert_eq!(
+      hex_display(&decoded.txs[0].txid.0),
+      "ab22dcb7082a94cbf8c11091dc3f4ac3aea5aee150177137791da2b33108bacc"
+    );
+    let coinbase = decoded.header.coinbase.expect("coinbase facts present");
+    assert_eq!(coinbase.cb_height, Some(1_578_000));
+    assert_eq!(coinbase.cb_merkle_flags, Some(4));
+    assert_eq!(coinbase.cb_credit_pool, Some(37_642_249_077_902));
+    let payload = &decoded.txs[0]
+      .payload
+      .as_ref()
+      .expect("coinbase payload present")
+      .json;
+    assert_eq!(payload["version"], 4);
+    assert_eq!(payload["height"], 1_578_000);
+  }
+
+  #[test]
+  fn decode_v3_before_activation() {
+    let raw = include_bytes!("fixtures/testnet-1577999.bin");
+    let decoded = HyDbBlockSource::new(0x8c, 0x13)
+      .decode(raw)
+      .expect("v3 block decodes");
+    assert_eq!(
+      hex_display(&decoded.header.hash.0),
+      "0000000d4ae5bbcc2ebdf5de1502b0ac3a82931e5b890cb2ad912028f56d9f33"
+    );
+    let coinbase = decoded.header.coinbase.expect("coinbase facts present");
+    assert_eq!(coinbase.cb_height, Some(1_577_999));
+    assert_eq!(coinbase.cb_merkle_flags, Some(3));
+    let payload = &decoded.txs[0]
+      .payload
+      .as_ref()
+      .expect("coinbase payload present")
+      .json;
+    assert_eq!(payload["version"], 3);
+    assert_eq!(payload["height"], 1_577_999);
+    assert_eq!(
+      payload["creditPoolBalance"],
+      coinbase.cb_credit_pool.expect("credit pool present")
+    );
+  }
+
   fn block_1() -> Vec<u8> {
     hex::decode(BLOCK_1).expect("fixture is valid hex")
   }
