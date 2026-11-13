@@ -54,7 +54,8 @@ RUN set -ex; \
     rustup component add \
         clippy \
         rustfmt \
-        rust-analyzer; \
+        rust-analyzer \
+        llvm-tools-preview; \
     rm -rf "${CARGO_HOME}/registry/cache" "${CARGO_HOME}/registry/index" "${CARGO_HOME}/git"
 
 ARG NODE_VERSION=24
@@ -62,7 +63,8 @@ ENV FNM_DIR="/opt/fnm" \
     NPM_PREFIX="/opt/npm"
 ENV PATH="${FNM_DIR}/aliases/default/bin:${NPM_PREFIX}/bin:${PATH}"
 RUN set -ex; \
-    cargo install \
+    cargo install --locked \
+    cargo-llvm-cov \
     fnm; \
     rm -rf "${CARGO_HOME}/registry/cache" "${CARGO_HOME}/registry/index" "${CARGO_HOME}/git"; \
     mkdir -p ${FNM_DIR} ${NPM_PREFIX} && chown -R ${USER_ID}:${GROUP_ID} ${FNM_DIR} ${NPM_PREFIX} && \
@@ -77,19 +79,20 @@ ENV UV_PYTHON_INSTALL_DIR="/opt/python" \
     UV_SYSTEM_PYTHON=1
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /opt/uv/
 COPY .python-version /tmp/.python-version
+COPY pyproject.toml /src/hyphen/
 ENV PATH="/opt/uv:${UV_PYTHON_INSTALL_DIR}/bin:${PATH}"
 RUN set -ex; \
     PYTHON_VERSION=$(cat /tmp/.python-version); \
     uv python install ${PYTHON_VERSION}; \
+    uv pip install --system --break-system-packages --python ${PYTHON_VERSION} "/src/hyphen[dev]"; \
     PYTHON_PATH=$(uv python find ${PYTHON_VERSION}); \
     PYTHON_DIR=$(dirname ${PYTHON_PATH}); \
     mkdir -p "${UV_PYTHON_INSTALL_DIR}/bin"; \
     for bin in ${PYTHON_DIR}/*; do \
         ln -sf "${bin}" "${UV_PYTHON_INSTALL_DIR}/bin/$(basename ${bin})"; \
-    done
-
-COPY pyproject.toml /src/hyphen/
-RUN uv pip install --system --break-system-packages "/src/hyphen[dev]"
+    done; \
+    ruff --version; \
+    semgrep --version
 
 USER moby
 
