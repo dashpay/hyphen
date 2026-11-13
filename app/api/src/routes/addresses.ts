@@ -198,7 +198,7 @@ function parseAddressTransactionSummary(value: unknown, path: string): AddressTr
   const fee = expectOptionalNumber(readOptionalField(object, "fee"), `${path}.fee`);
   const netValue = expectNumber(readField(object, "netValue", path), `${path}.netValue`);
   if (direction !== "in" && direction !== "out") {
-    throw failContract(`${path}.direction`, `expected "in" | "out", got ${JSON.stringify(direction)}`);
+    failContract(`${path}.direction`, `expected "in" | "out", got ${JSON.stringify(direction)}`);
   }
   return {
     ...(blockTime == null ? {} : { blockTime }),
