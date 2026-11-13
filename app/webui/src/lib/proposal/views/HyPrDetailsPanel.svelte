@@ -106,11 +106,7 @@
     const enabledNodes =
       (network.validators.regular.status["valid"] ?? 0) + (network.validators.evonode.status["valid"] ?? 0);
 
-    return tr(
-      "{} ({} enabled)",
-      HyUtilFormatNumber(totalNodes),
-      HyUtilFormatNumber(enabledNodes)
-    );
+    return tr("{} ({} enabled)", HyUtilFormatNumber(totalNodes), HyUtilFormatNumber(enabledNodes));
   });
 
   const totalVotesLabel = $derived.by((): string => {

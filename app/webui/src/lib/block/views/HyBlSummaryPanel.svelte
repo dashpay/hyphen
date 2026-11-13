@@ -49,150 +49,150 @@
 
     <HyScrollBody container={true}>
       <div class="summary-stack">
-      <div>
-        <div class="section-title">{tr("Hash")}</div>
-        <div class="hy-reference-hash-row">
-          <div class="hash-inline">
-            <a class="block-link mono hash-full hy-wrap-anywhere" href={formatBlockHref(block.blockHash)}>
-              {block.blockHash}
-            </a>
-            <HyCopyButton
-              copied={copiedHash === block.blockHash}
-              inline={true}
-              label={tr("Copy hash")}
-              onpress={(): void => {
-                copyToClipboard(block.blockHash);
-              }}
-              title={tr("Copy hash")}
-            />
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <div class="section-title">{tr("Tags")}</div>
-        <div class="hy-reference-tags">
-          {#if blockTags.length > 0}
-            {#each blockTags as tag (tag.label)}
-              <HyTag
-                background={tag.tone === "warning"
-                  ? "var(--hy-tag-quorum-bg)"
-                  : tag.tone === "success"
-                    ? "var(--hy-tag-assetlock-bg)"
-                    : "var(--hy-tag-default-bg)"}
-                foreground={tag.tone === "warning"
-                  ? "var(--hy-tag-quorum-fg)"
-                  : tag.tone === "success"
-                    ? "var(--hy-tag-assetlock-fg)"
-                    : "var(--hy-tag-default-fg)"}
-                label={tag.label}
-              />
-            {/each}
-          {:else}
-            <HyTag background="var(--hy-tag-default-bg)" foreground="var(--hy-tag-default-fg)" label={tr("Block")} />
-          {/if}
-        </div>
-      </div>
-
-      <div>
-        <div class="section-title">{tr("Details")}</div>
-        <div class="detail-table">
-          <div class="detail-row detail-row-wide">
-            <span class="kv-label">{tr("Prev Block")}</span>
-            <span class="kv-value">
-              <a class="block-link mono wrap" href={formatBlockHref(block.prevBlockHash)}>
-                {block.prevBlockHash}
+        <div>
+          <div class="section-title">{tr("Hash")}</div>
+          <div class="hy-reference-hash-row">
+            <div class="hash-inline">
+              <a class="block-link mono hash-full hy-wrap-anywhere" href={formatBlockHref(block.blockHash)}>
+                {block.blockHash}
               </a>
               <HyCopyButton
-                copied={copiedHash === block.prevBlockHash}
+                copied={copiedHash === block.blockHash}
                 inline={true}
-                label={tr("Copy block hash")}
+                label={tr("Copy hash")}
                 onpress={(): void => {
-                  copyToClipboard(block.prevBlockHash);
+                  copyToClipboard(block.blockHash);
                 }}
-                title={tr("Copy block hash")}
+                title={tr("Copy hash")}
               />
-            </span>
-          </div>
-
-          <div class="detail-row detail-row-wide">
-            <span class="kv-label">Merkle Root</span>
-            <span class="kv-value mono wrap">{block.merkle}</span>
-          </div>
-
-          {#if block.chainwork != null}
-            <div class="detail-row detail-row-wide">
-              <span class="kv-label">Chainwork</span>
-              <span class="kv-value mono wrap">{block.chainwork}</span>
             </div>
-          {/if}
-
-          <div class="detail-row">
-            <span class="kv-label">{tr("Block")}</span>
-            <span class="kv-value">{fmt("#{}", HyUtilFormatNumber(block.blockHeight))}</span>
-            <span class="kv-label">{tr("Time")}</span>
-            <span class="kv-value">{HyUtilFormatFullDate(block.blockTime)}</span>
-          </div>
-
-          <div class="detail-row">
-            <span class="kv-label">{tr("Size")}</span>
-            <span class="kv-value">{HyUtilFormatBytes(block.blockSize)}</span>
-          </div>
-
-          <div class="detail-row">
-            <span class="kv-label">{tr("Difficulty")}</span>
-            <span class="kv-value mono">{block.bits}</span>
-            <span class="kv-label">Nonce</span>
-            <span class="kv-value mono">{HyUtilFormatNumber(block.nonce)}</span>
-          </div>
-
-          <div class="detail-row">
-            <span class="kv-label">{tr("Version")}</span>
-            <span class="kv-value mono">{HyUtilFormatNumber(block.blockVersion)}</span>
-            <span class="kv-label">Bits</span>
-            <span class="kv-value mono">{block.bits}</span>
           </div>
         </div>
-      </div>
 
-      {#if block.cbTx != null}
         <div>
-          <div class="section-title">{tr("Payload")}</div>
-          <div class="kv-grid">
-            <span class="kv-label">{fmt("{} {}", "cbTx", tr("Height"))}</span>
-            <span class="kv-value">{HyUtilFormatNumber(block.cbTx.height)}</span>
-
-            {#if block.cbTx.merkleRootMnList != null}
-              <span class="kv-label">MN List Merkle</span>
-              <span class="kv-value mono wrap">{block.cbTx.merkleRootMnList}</span>
-            {/if}
-
-            {#if block.cbTx.merkleFlags != null}
-              <span class="kv-label">Merkle Flags</span>
-              <span class="kv-value">{HyUtilFormatNumber(block.cbTx.merkleFlags)}</span>
-            {/if}
-
-            {#if showChainlockDetails}
-              {#if block.cbTx.bestClHeight != null}
-                <span class="kv-label">{tr("Best CL Height")}</span>
-                <span class="kv-value">{HyUtilFormatNumber(block.cbTx.bestClHeight)}</span>
-              {/if}
-
-              {#if block.cbTx.bestClSignature != null}
-                <span class="kv-label">{tr("Best CL Signature")}</span>
-                <span class="kv-value mono wrap">{block.cbTx.bestClSignature}</span>
-              {/if}
-            {/if}
-
-            {#if block.cbTx.creditPoolBalance != null}
-              <span class="kv-label">{tr("Credit Pool")}</span>
-              <span class="kv-value">
-                {HyUtilFormatSelectedAmount(block.cbTx.creditPoolBalance, getWebUiConfig())}
-              </span>
+          <div class="section-title">{tr("Tags")}</div>
+          <div class="hy-reference-tags">
+            {#if blockTags.length > 0}
+              {#each blockTags as tag (tag.label)}
+                <HyTag
+                  background={tag.tone === "warning"
+                    ? "var(--hy-tag-quorum-bg)"
+                    : tag.tone === "success"
+                      ? "var(--hy-tag-assetlock-bg)"
+                      : "var(--hy-tag-default-bg)"}
+                  foreground={tag.tone === "warning"
+                    ? "var(--hy-tag-quorum-fg)"
+                    : tag.tone === "success"
+                      ? "var(--hy-tag-assetlock-fg)"
+                      : "var(--hy-tag-default-fg)"}
+                  label={tag.label}
+                />
+              {/each}
+            {:else}
+              <HyTag background="var(--hy-tag-default-bg)" foreground="var(--hy-tag-default-fg)" label={tr("Block")} />
             {/if}
           </div>
         </div>
-      {/if}
+
+        <div>
+          <div class="section-title">{tr("Details")}</div>
+          <div class="detail-table">
+            <div class="detail-row detail-row-wide">
+              <span class="kv-label">{tr("Prev Block")}</span>
+              <span class="kv-value">
+                <a class="block-link mono wrap" href={formatBlockHref(block.prevBlockHash)}>
+                  {block.prevBlockHash}
+                </a>
+                <HyCopyButton
+                  copied={copiedHash === block.prevBlockHash}
+                  inline={true}
+                  label={tr("Copy block hash")}
+                  onpress={(): void => {
+                    copyToClipboard(block.prevBlockHash);
+                  }}
+                  title={tr("Copy block hash")}
+                />
+              </span>
+            </div>
+
+            <div class="detail-row detail-row-wide">
+              <span class="kv-label">Merkle Root</span>
+              <span class="kv-value mono wrap">{block.merkle}</span>
+            </div>
+
+            {#if block.chainwork != null}
+              <div class="detail-row detail-row-wide">
+                <span class="kv-label">Chainwork</span>
+                <span class="kv-value mono wrap">{block.chainwork}</span>
+              </div>
+            {/if}
+
+            <div class="detail-row">
+              <span class="kv-label">{tr("Block")}</span>
+              <span class="kv-value">{fmt("#{}", HyUtilFormatNumber(block.blockHeight))}</span>
+              <span class="kv-label">{tr("Time")}</span>
+              <span class="kv-value">{HyUtilFormatFullDate(block.blockTime)}</span>
+            </div>
+
+            <div class="detail-row">
+              <span class="kv-label">{tr("Size")}</span>
+              <span class="kv-value">{HyUtilFormatBytes(block.blockSize)}</span>
+            </div>
+
+            <div class="detail-row">
+              <span class="kv-label">{tr("Difficulty")}</span>
+              <span class="kv-value mono">{block.bits}</span>
+              <span class="kv-label">Nonce</span>
+              <span class="kv-value mono">{HyUtilFormatNumber(block.nonce)}</span>
+            </div>
+
+            <div class="detail-row">
+              <span class="kv-label">{tr("Version")}</span>
+              <span class="kv-value mono">{HyUtilFormatNumber(block.blockVersion)}</span>
+              <span class="kv-label">Bits</span>
+              <span class="kv-value mono">{block.bits}</span>
+            </div>
+          </div>
+        </div>
+
+        {#if block.cbTx != null}
+          <div>
+            <div class="section-title">{tr("Payload")}</div>
+            <div class="kv-grid">
+              <span class="kv-label">{fmt("{} {}", "cbTx", tr("Height"))}</span>
+              <span class="kv-value">{HyUtilFormatNumber(block.cbTx.height)}</span>
+
+              {#if block.cbTx.merkleRootMnList != null}
+                <span class="kv-label">MN List Merkle</span>
+                <span class="kv-value mono wrap">{block.cbTx.merkleRootMnList}</span>
+              {/if}
+
+              {#if block.cbTx.merkleFlags != null}
+                <span class="kv-label">Merkle Flags</span>
+                <span class="kv-value">{HyUtilFormatNumber(block.cbTx.merkleFlags)}</span>
+              {/if}
+
+              {#if showChainlockDetails}
+                {#if block.cbTx.bestClHeight != null}
+                  <span class="kv-label">{tr("Best CL Height")}</span>
+                  <span class="kv-value">{HyUtilFormatNumber(block.cbTx.bestClHeight)}</span>
+                {/if}
+
+                {#if block.cbTx.bestClSignature != null}
+                  <span class="kv-label">{tr("Best CL Signature")}</span>
+                  <span class="kv-value mono wrap">{block.cbTx.bestClSignature}</span>
+                {/if}
+              {/if}
+
+              {#if block.cbTx.creditPoolBalance != null}
+                <span class="kv-label">{tr("Credit Pool")}</span>
+                <span class="kv-value">
+                  {HyUtilFormatSelectedAmount(block.cbTx.creditPoolBalance, getWebUiConfig())}
+                </span>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </div>
     </HyScrollBody>
   </VwPanel>

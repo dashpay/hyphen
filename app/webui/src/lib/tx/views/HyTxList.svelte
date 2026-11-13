@@ -27,7 +27,13 @@
     readonly ontxclick?: (txid: string) => void;
   }
 
-  const { mobileExpand = false, title = tr("Latest Transactions"), transactions, onviewall, ontxclick }: Props = $props();
+  const {
+    mobileExpand = false,
+    title = tr("Latest Transactions"),
+    transactions,
+    onviewall,
+    ontxclick,
+  }: Props = $props();
 </script>
 
 <div class:mobile-expand={mobileExpand} class="tx-panel">

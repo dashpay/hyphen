@@ -100,108 +100,108 @@
 
     <HyScrollBody container={true}>
       <div class="summary-stack">
-      <div>
-        <div class="section-title">ProTxHash</div>
-        <div class="hy-reference-hash-row">
-          <span class="mono hash-full hy-wrap-anywhere">{validator.proTxHash}</span>
-          <HyCopyButton
-            copied={copiedHash === validator.proTxHash}
-            inline={true}
-            label={tr("Copy proTxHash")}
-            onpress={(event: MouseEvent): void => {
-              copyToClipboard(validator.proTxHash, event);
-            }}
-            title={tr("Copy hash")}
-          />
+        <div>
+          <div class="section-title">ProTxHash</div>
+          <div class="hy-reference-hash-row">
+            <span class="mono hash-full hy-wrap-anywhere">{validator.proTxHash}</span>
+            <HyCopyButton
+              copied={copiedHash === validator.proTxHash}
+              inline={true}
+              label={tr("Copy proTxHash")}
+              onpress={(event: MouseEvent): void => {
+                copyToClipboard(validator.proTxHash, event);
+              }}
+              title={tr("Copy hash")}
+            />
+          </div>
         </div>
-      </div>
 
-      <div class="validator-stat-grid">
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("Status")}</span>
-          <span class="info-value">
-            <span
-              class:active={statusTag.tone === "green"}
-              class:banned={statusTag.tone === "red"}
-              class:registered={statusTag.tone === "yellow"}
-              class="status-dot"
-            ></span>
-            <span
-              class:active-text={statusTag.tone === "green"}
-              class:banned-text={statusTag.tone === "red"}
-              class:registered-text={statusTag.tone === "yellow"}
-            >
-              {statusTag.label}
+        <div class="validator-stat-grid">
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("Status")}</span>
+            <span class="info-value">
+              <span
+                class:active={statusTag.tone === "green"}
+                class:banned={statusTag.tone === "red"}
+                class:registered={statusTag.tone === "yellow"}
+                class="status-dot"
+              ></span>
+              <span
+                class:active-text={statusTag.tone === "green"}
+                class:banned-text={statusTag.tone === "red"}
+                class:registered-text={statusTag.tone === "yellow"}
+              >
+                {statusTag.label}
+              </span>
             </span>
-          </span>
+          </div>
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("Type")}</span>
+            <span class="info-value">
+              <span class:mint-type={typeTag.tone === "mint"} class="type-badge">{typeTag.label}</span>
+            </span>
+          </div>
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("PoSe Score")}</span>
+            <span class="hy-reference-stat-value mono">{poseScoreLabel}</span>
+          </div>
         </div>
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("Type")}</span>
-          <span class="info-value">
-            <span class:mint-type={typeTag.tone === "mint"} class="type-badge">{typeTag.label}</span>
-          </span>
-        </div>
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("PoSe Score")}</span>
-          <span class="hy-reference-stat-value mono">{poseScoreLabel}</span>
-        </div>
-      </div>
 
-      <div>
-        <div class="section-title">{tr("Network")}</div>
-        <div class:three-cols={networkColumns.length === 3} class="network-grid">
-          {#each networkColumns as column (column.label)}
-            <div class="network-cell">
-              <span class="kv-label">{column.label}</span>
-              <span class="kv-value mono">{column.value}</span>
+        <div>
+          <div class="section-title">{tr("Network")}</div>
+          <div class:three-cols={networkColumns.length === 3} class="network-grid">
+            {#each networkColumns as column (column.label)}
+              <div class="network-cell">
+                <span class="kv-label">{column.label}</span>
+                <span class="kv-value mono">{column.value}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div>
+          <div class="section-title">{tr("Addresses")}</div>
+          {#each addressRows as row (row.label)}
+            <div class="kv-row">
+              <span class="kv-label">{row.label}</span>
+              {#if row.value != null}
+                <div class="kv-value-hash">
+                  {#if row.clickable}
+                    <a class="address-link mono hy-wrap-anywhere" href={"/address?id=" + encodeURIComponent(row.value)}>
+                      {row.value}
+                    </a>
+                  {:else}
+                    <span class="mono hy-wrap-anywhere">{row.value}</span>
+                  {/if}
+                  {#if row.clickable}
+                    <HyCopyButton
+                      copied={copiedHash === row.value}
+                      inline={true}
+                      label={tr("Copy value")}
+                      onpress={(event: MouseEvent): void => {
+                        copyToClipboard(row.value ?? "", event);
+                      }}
+                      title={tr("Copy")}
+                    />
+                  {/if}
+                </div>
+              {:else}
+                <span class="kv-value mono">—</span>
+              {/if}
             </div>
           {/each}
         </div>
-      </div>
 
-      <div>
-        <div class="section-title">{tr("Addresses")}</div>
-        {#each addressRows as row (row.label)}
-          <div class="kv-row">
-            <span class="kv-label">{row.label}</span>
-            {#if row.value != null}
-              <div class="kv-value-hash">
-                {#if row.clickable}
-                  <a class="address-link mono hy-wrap-anywhere" href={"/address?id=" + encodeURIComponent(row.value)}>
-                    {row.value}
-                  </a>
-                {:else}
-                  <span class="mono hy-wrap-anywhere">{row.value}</span>
-                {/if}
-                {#if row.clickable}
-                  <HyCopyButton
-                    copied={copiedHash === row.value}
-                    inline={true}
-                    label={tr("Copy value")}
-                    onpress={(event: MouseEvent): void => {
-                      copyToClipboard(row.value ?? "", event);
-                    }}
-                    title={tr("Copy")}
-                  />
-                {/if}
-              </div>
-            {:else}
-              <span class="kv-value mono">—</span>
-            {/if}
+        <div class="validator-stat-grid validator-stat-grid--two">
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("Registered")}</span>
+            <span class="hy-reference-stat-value mono">{registeredValue}</span>
           </div>
-        {/each}
-      </div>
-
-      <div class="validator-stat-grid validator-stat-grid--two">
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("Registered")}</span>
-          <span class="hy-reference-stat-value mono">{registeredValue}</span>
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("Last Paid")}</span>
+            <span class="hy-reference-stat-value mono">{lastPaidValue ?? "—"}</span>
+          </div>
         </div>
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("Last Paid")}</span>
-          <span class="hy-reference-stat-value mono">{lastPaidValue ?? "—"}</span>
-        </div>
-      </div>
       </div>
     </HyScrollBody>
   </VwPanel>

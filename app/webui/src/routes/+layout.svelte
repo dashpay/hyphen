@@ -489,6 +489,7 @@
 
 <HyShellBackground />
 
+<!-- nosemgrep: contrib.r2c.svelte-routes-no-style-blocks -->
 <style lang="scss">
   @use "_views-mixins.scss" as view;
 

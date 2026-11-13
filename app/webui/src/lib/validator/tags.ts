@@ -36,10 +36,7 @@ function isBannedStatus(status: string | null | undefined): boolean {
 }
 
 /** Maps validator statuses to the shared tag label and tone. */
-export function getValidatorStatusTag(
-  indexedStatus: string,
-  liveStatus?: string | null
-): ValidatorTag {
+export function getValidatorStatusTag(indexedStatus: string, liveStatus?: string | null): ValidatorTag {
   if (liveStatus?.toLowerCase() === "valid") {
     return {
       label: tr("Active"),

@@ -16,14 +16,7 @@
     readonly missingMessage?: string;
   }
 
-  const {
-    children,
-    errorMessage = null,
-    errorStatus = null,
-    loading,
-    missing,
-    missingLabel,
-  }: Props = $props();
+  const { children, errorMessage = null, errorStatus = null, loading, missing, missingLabel }: Props = $props();
 </script>
 
 {#if loading}

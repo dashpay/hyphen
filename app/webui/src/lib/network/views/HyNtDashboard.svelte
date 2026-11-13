@@ -6,12 +6,7 @@
 
   import { getMetricsHistory, getWebUiConfig } from "$lib";
   import { HyUtilFormatBytes, HyUtilFormatNumber, HyUtilFormatSelectedAmount } from "$lib/HyUtil";
-  import type {
-    ApiMetrics,
-    ApiMempoolSummary,
-    ApiNetworkPeerInfo,
-    ApiNetworkResponse,
-  } from "$lib/api";
+  import type { ApiMetrics, ApiMempoolSummary, ApiNetworkPeerInfo, ApiNetworkResponse } from "$lib/api";
   import type { ChartPoint } from "$lib/data/chart";
   import { getTimeRangeSeconds, type TimeRange } from "$lib/data/hashrate";
   import type { HyDonutPreset } from "$lib/views";
@@ -71,9 +66,7 @@
   const creditPoolPoints = $derived.by((): readonly ChartPoint[] => {
     return metricsHistory
       .filter((metric): boolean => metric.height >= creditPoolStartHeight)
-      .map(
-      (metric): ChartPoint => ({ timestamp: metric.height, value: metric.creditPoolBalance ?? 0 })
-      );
+      .map((metric): ChartPoint => ({ timestamp: metric.height, value: metric.creditPoolBalance ?? 0 }));
   });
 
   const circulatingLabel = $derived.by((): string => {
@@ -307,9 +300,8 @@
   async function loadCreditPoolRange(
     range: TimeRange
   ): Promise<{ readonly bucketBlocks: number; readonly points: readonly ChartPoint[] }> {
-    const result = await loadMetricRange(
-      range,
-      (metric): number => (metric.height >= creditPoolStartHeight ? (metric.creditPoolBalance ?? 0) : 0)
+    const result = await loadMetricRange(range, (metric): number =>
+      metric.height >= creditPoolStartHeight ? (metric.creditPoolBalance ?? 0) : 0
     );
 
     return {
