@@ -191,6 +191,7 @@ pub async fn list_validators(
   let before = decode_validator_cursor_key(cursor.as_ref())?;
 
   let before_cursor = before.as_ref().map(|(registered_height, pro_tx_hash)| {
+    // nosemgrep: contrib.r2c.daemon-public-hash-boundaries-must-use-utils -- hyphen-db cursor key, not a displayed hash
     hyphen_db::HyDbCursor(format!("{registered_height}:{}", hex::encode(pro_tx_hash)))
   });
   let vl_type = params

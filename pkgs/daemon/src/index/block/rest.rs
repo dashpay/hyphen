@@ -333,6 +333,7 @@ pub async fn get_block_txs(
   let after = decode_block_tx_cursor_key(cursor.as_ref())?;
   let after_cursor = after
     .as_ref()
+    // nosemgrep: contrib.r2c.daemon-public-hash-boundaries-must-use-utils -- hyphen-db cursor key, not a displayed hash
     .map(|(block_pos, txid)| hyphen_db::HyDbCursor(format!("{block_pos}:{}", hex::encode(txid))));
 
   let blocks = state.hydb()?.blocks();
