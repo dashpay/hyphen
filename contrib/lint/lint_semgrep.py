@@ -13,12 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_CONFIGS: tuple[str, ...] = (
-  "rust_general.yml",
-  "svelte_general.yml",
-  "ts_general.yml",
-)
-
 
 def find_repo_root(start: Path) -> Path:
   """Walk upward from *start* until a pyproject.toml file is found."""
@@ -80,11 +74,19 @@ def main() -> int:
   script_path = Path(__file__).resolve()
   repo_root = find_repo_root(script_path.parent)
   config_dir = args.config_dir or (repo_root / "contrib" / "r2c")
-  configs = tuple(args.configs) if args.configs else DEFAULT_CONFIGS
+  configs = (
+    tuple(args.configs)
+    if args.configs
+    else tuple(sorted(path.name for path in config_dir.glob("*.yml")))
+  )
   semgrep_bin = shutil.which("semgrep")
 
   if semgrep_bin is None:
     print("error: semgrep binary not found in PATH", file=sys.stderr)
+    return 2
+
+  if not configs:
+    print(f"error: no semgrep rule packs in {config_dir}", file=sys.stderr)
     return 2
 
   missing_configs = [
