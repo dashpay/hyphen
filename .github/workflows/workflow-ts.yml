@@ -32,6 +32,7 @@ jobs:
         with:
           name: tested-sha
           path: tested-sha
+          overwrite: true
 
       - name: Resolve container image
         id: vars

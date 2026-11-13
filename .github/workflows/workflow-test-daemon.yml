@@ -32,7 +32,9 @@ jobs:
 
       - name: Read tested commit
         id: sha
-        run: echo "sha=$(cat tested-sha)" >> "$GITHUB_OUTPUT"
+        run: |
+          grep -Eqx '[0-9a-f]{40}' tested-sha
+          echo "sha=$(cat tested-sha)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@v6
