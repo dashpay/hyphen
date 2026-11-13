@@ -11,6 +11,10 @@ on:
         description: "Path to container"
         required: true
         type: string
+      ref:
+        description: "Commit to test"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -34,7 +38,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - name: Initial setup

@@ -24,6 +24,15 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Record tested commit
+        run: echo "${{ github.event.workflow_run.head_sha }}" > tested-sha
+
+      - name: Upload tested commit
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-sha
+          path: tested-sha
+
       - name: Resolve container image
         id: vars
         run: |
