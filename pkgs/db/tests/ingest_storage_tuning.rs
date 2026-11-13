@@ -40,7 +40,8 @@ async fn reloptions(pool: &sqlx::PgPool, table: &str) -> Vec<String> {
   opts
 }
 
-/// A default configuration emits no DDL, so the storage parameters on a
+/// A default configuration only restates the committed values (and clears the
+/// one key the schema never declared), so the storage parameters on a
 /// freshly-connected database are precisely the committed ones.
 #[tokio::test]
 async fn default_config_leaves_the_committed_storage_parameters_untouched() -> TestResult {
@@ -53,29 +54,37 @@ async fn default_config_leaves_the_committed_storage_parameters_untouched() -> T
 async fn untouched(db: &TempDb) -> TestResult {
   let _facade = db.open().await?;
   let pool = db.seed_pool().await?;
+  assert_committed(&pool, "a default connect").await;
 
+  // The steady plan is not empty: it restates the keys the sync profile can
+  // write, so that leaving sync puts them back. Restating must change nothing.
+  for change in storage_plan(&HyDbIngestCfg::default(), false) {
+    pool.execute(change.sql.as_str()).await?;
+  }
+  assert_committed(&pool, "re-applying the default plan").await;
+
+  pool.close().await;
+  Ok(())
+}
+
+/// The committed storage parameters from `0001_schema.sql`, asserted on both
+/// tuned tables.
+async fn assert_committed(pool: &sqlx::PgPool, after: &str) {
   assert_eq!(
-    reloptions(&pool, "address_stats").await,
+    reloptions(pool, "address_stats").await,
     vec!["fillfactor=80".to_owned()],
-    "A1/B5's measured fillfactor must survive a default connect"
+    "A1/B5's measured fillfactor must survive {after}"
   );
   assert_eq!(
-    reloptions(&pool, "utxo_set").await,
+    reloptions(pool, "utxo_set").await,
     vec![
       "autovacuum_vacuum_cost_delay=2".to_owned(),
       "autovacuum_vacuum_cost_limit=2000".to_owned(),
       "autovacuum_vacuum_scale_factor=0.02".to_owned(),
       "fillfactor=70".to_owned(),
     ],
-    "B3's measured autovacuum tuning must survive a default connect"
+    "B3's measured autovacuum tuning must survive {after}"
   );
-  assert!(
-    storage_plan(&HyDbIngestCfg::default(), false).is_empty(),
-    "and the plan that produced that must be empty, not merely idempotent"
-  );
-
-  pool.close().await;
-  Ok(())
 }
 
 /// An override is real DDL that the server accepts and that changes exactly
@@ -104,13 +113,13 @@ async fn override_lands(db: &TempDb) -> TestResult {
   assert_eq!(
     reloptions(&pool, "utxo_set").await,
     vec![
-      "autovacuum_analyze_scale_factor=0.05".to_owned(),
+      "autovacuum_analyze_scale_factor=0.5".to_owned(),
       "autovacuum_vacuum_cost_delay=2".to_owned(),
       "autovacuum_vacuum_cost_limit=2000".to_owned(),
-      "autovacuum_vacuum_scale_factor=0.2".to_owned(),
+      "autovacuum_vacuum_scale_factor=0.5".to_owned(),
       "fillfactor=70".to_owned(),
     ],
-    "the sync profile relaxes the vacuum factor and keeps analyze running, \
+    "the sync profile relaxes the vacuum and analyze factors together, \
      leaving the cost pacing and the fillfactor alone"
   );
   assert_eq!(
@@ -118,6 +127,13 @@ async fn override_lands(db: &TempDb) -> TestResult {
     vec!["fillfactor=80".to_owned()],
     "a table the schema gives no autovacuum parameters must not acquire any"
   );
+
+  // Leaving sync must put the committed values back, not leave the relaxed
+  // factors on disk.
+  for change in storage_plan(&HyDbIngestCfg::default(), false) {
+    pool.execute(change.sql.as_str()).await?;
+  }
+  assert_committed(&pool, "leaving the sync profile").await;
 
   pool.close().await;
   Ok(())

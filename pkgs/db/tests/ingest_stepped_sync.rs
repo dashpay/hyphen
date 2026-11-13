@@ -651,7 +651,10 @@ async fn a_duplicate_is_refused_per_row_once_the_index_is_back() -> Res {
 
   create_partitions(&pool, 0).await?;
   let sync = SteppedSync::with_params(pool.clone(), true, 25_000);
-  // Realtime from the start: p0 is the open partition and still gets the set.
+  // Realtime at the tip: p0 is the open partition and still gets the set. The
+  // observation is what makes the mode a measurement; before one, the open
+  // partition is left alone.
+  assert!(sync.observe(Some(10), 10).is_none());
   sync.ensure_settled(10).await?;
   assert_deferred_present(&pool, 0, true).await?;
 
