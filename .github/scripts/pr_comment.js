@@ -16,6 +16,7 @@ const WORKFLOW_CHAIN = [
   { name: "Rust" },
   { name: "TypeScript" },
   { name: "Test hyphen-daemon" },
+  { name: "Test hyphen-db" },
   { name: "Test @repo/hyphen-webui" },
 ];
 

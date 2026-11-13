@@ -15,6 +15,11 @@ on:
         description: "Commit to test"
         required: true
         type: string
+      postgres:
+        description: "Start a PostgreSQL 18 service for the tests"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +36,23 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      # Shares the server's socket directory, so tests can connect over it.
+      volumes:
+        - pg_socket:/var/run/postgresql
+
+    services:
+      postgres:
+        # An empty image skips the service.
+        image: ${{ inputs.postgres && 'postgres:18' || '' }}
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        volumes:
+          - pg_socket:/var/run/postgresql
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
 
     steps:
       - name: Checkout
@@ -60,6 +82,8 @@ jobs:
 
       - name: Test crate with coverage
         run: cargo llvm-cov --package ${{ inputs.crate }} --lcov --output-path lcov.info
+        env:
+          HYPHEN_TEST_DATABASE_URL: ${{ inputs.postgres && 'postgresql://postgres@postgres:5432/postgres' || '' }}
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

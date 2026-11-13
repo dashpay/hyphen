@@ -10,6 +10,7 @@ on:
       - "Rust"
       - "TypeScript"
       - "Test hyphen-daemon"
+      - "Test hyphen-db"
       - "Test @repo/hyphen-webui"
     types: [completed]
 
