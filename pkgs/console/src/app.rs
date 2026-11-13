@@ -365,7 +365,7 @@ fn handle_rest(state: &mut AppState, result: RestResult) {
 }
 
 fn spawn_terminal_thread(tx: mpsc::Sender<AppEvent>, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
-  return std::thread::spawn(move || loop {
+  std::thread::spawn(move || loop {
     if shutdown.load(Ordering::Relaxed) {
       return;
     }
@@ -387,11 +387,11 @@ fn spawn_terminal_thread(tx: mpsc::Sender<AppEvent>, shutdown: Arc<AtomicBool>) 
         return;
       }
     }
-  });
+  })
 }
 
 fn spawn_tick_thread(tx: mpsc::Sender<AppEvent>, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
-  return std::thread::spawn(move || loop {
+  std::thread::spawn(move || loop {
     std::thread::sleep(Duration::from_secs(1));
     if shutdown.load(Ordering::Relaxed) {
       return;
@@ -399,7 +399,7 @@ fn spawn_tick_thread(tx: mpsc::Sender<AppEvent>, shutdown: Arc<AtomicBool>) -> J
     if tx.send(AppEvent::Tick).is_err() {
       return;
     }
-  });
+  })
 }
 
 fn join_thread(context: &'static str, handle: JoinHandle<()>) -> Result<(), TuiError> {
@@ -801,7 +801,7 @@ fn issue_control_action(state: &mut AppState, action: ControlAction) {
   let command_id = state.next_cmd_id;
   match action {
     ControlAction::Reindex { stage, name } => {
-      if !issue_daemon_command(
+      let _ = issue_daemon_command(
         state,
         command_id,
         DaemonCommand::ForceReindex {
@@ -810,9 +810,7 @@ fn issue_control_action(state: &mut AppState, action: ControlAction) {
         },
         format!("reindexing {name}"),
         format!("Reindexing {name}..."),
-      ) {
-        return;
-      }
+      );
     }
     ControlAction::DisconnectTip => {
       let _ = issue_daemon_command(
