@@ -138,10 +138,9 @@
               detail,
             };
           })
-        )
-          .then((detailedTransactions): void => {
-            transactions = detailedTransactions;
-          });
+        ).then((detailedTransactions): void => {
+          transactions = detailedTransactions;
+        });
       } else {
         transactions = [];
       }
@@ -205,11 +204,7 @@
       </div>
 
       <div class="overview-section mobile-only overview-mobile-summary">
-        <HyPlainCounter
-          icon={IconBlock}
-          label={tr("Block Height")}
-          value={HyUtilFormatNumber(explorer.blockHeight)}
-        />
+        <HyPlainCounter icon={IconBlock} label={tr("Block Height")} value={HyUtilFormatNumber(explorer.blockHeight)} />
       </div>
 
       <div class="overview-section mobile-only overview-mobile-blocks">
@@ -325,6 +320,7 @@
   </HyDashboardLayout>
 </HyPageFrame>
 
+<!-- nosemgrep: contrib.r2c.svelte-routes-no-style-blocks -->
 <style lang="scss">
   @use "_views-mixins.scss" as view;
 

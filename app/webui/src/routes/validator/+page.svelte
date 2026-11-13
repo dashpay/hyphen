@@ -72,7 +72,9 @@
     {tr(
       "{} | {}",
       HyUtilWebUiName,
-      page.url.searchParams.get("hash") == null ? tr("Validator") : tr("Validator {}", page.url.searchParams.get("hash") ?? "")
+      page.url.searchParams.get("hash") == null
+        ? tr("Validator")
+        : tr("Validator {}", page.url.searchParams.get("hash") ?? "")
     )}
   </title>
 </svelte:head>
@@ -98,6 +100,7 @@
   </HyDetailRouteState>
 </HyPageFrame>
 
+<!-- nosemgrep: contrib.r2c.svelte-routes-no-style-blocks -->
 <style lang="scss">
   @use "_views-mixins.scss" as view;
 

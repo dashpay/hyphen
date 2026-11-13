@@ -7,7 +7,7 @@ on:
     branches-ignore: []
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id }}
   cancel-in-progress: true
 
 jobs:
@@ -16,13 +16,30 @@ jobs:
     runs-on: ubuntu-24.04-arm
     if: >-
       github.event.workflow_run.conclusion == 'success'
+    permissions:
+      actions: read
+      contents: read
     outputs:
       image: ${{ steps.vars.outputs.image }}
+      sha: ${{ steps.sha.outputs.sha }}
     steps:
+      - name: Download tested commit
+        uses: actions/download-artifact@v4
+        with:
+          name: tested-sha
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Read tested commit
+        id: sha
+        run: |
+          grep -Eqx '[0-9a-f]{40}' tested-sha
+          echo "sha=$(cat tested-sha)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ steps.sha.outputs.sha }}
 
       - name: Resolve container image
         id: vars
@@ -42,3 +59,4 @@ jobs:
     with:
       package: "@repo/hyphen-webui"
       path: ${{ needs.gate.outputs.image }}
+      ref: ${{ needs.gate.outputs.sha }}

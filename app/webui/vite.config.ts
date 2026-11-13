@@ -5,7 +5,8 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import Icons from "unplugin-icons/vite";
 import { defineConfig } from "vite";
 
-const rawApiBaseUrl = process.env["API_BASE_URL"]?.trim() || "http://127.0.0.1:3080";
+const envApiBaseUrl = process.env["API_BASE_URL"]?.trim() ?? "";
+const rawApiBaseUrl = envApiBaseUrl === "" ? "http://127.0.0.1:3080" : envApiBaseUrl;
 const apiBaseUrl = new URL(rawApiBaseUrl);
 const apiProxyPrefix = apiBaseUrl.pathname.replace(/\/$/u, "");
 

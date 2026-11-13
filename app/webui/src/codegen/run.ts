@@ -47,21 +47,11 @@ function renderThemeCss(bundle: WebUiTokenBundle): string {
   ];
 
   if (Object.keys(bundle.yellow).length > 0) {
-    parts.push(
-      ":root.theme-yellow {",
-      renderCssVariables(bundle.yellow),
-      "}",
-      "",
-    );
+    parts.push(":root.theme-yellow {", renderCssVariables(bundle.yellow), "}", "");
   }
 
   if (Object.keys(bundle.yellowLight).length > 0) {
-    parts.push(
-      ":root.theme-yellow.theme-light {",
-      renderCssVariables(bundle.yellowLight),
-      "}",
-      "",
-    );
+    parts.push(":root.theme-yellow.theme-light {", renderCssVariables(bundle.yellowLight), "}", "");
   }
 
   return parts.join("\n");

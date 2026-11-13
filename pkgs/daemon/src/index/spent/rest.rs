@@ -161,6 +161,7 @@ pub async fn get_address_txs(
     .map_or(stage.height, |cursor| cursor.as_of_height);
   let before = decode_address_tx_cursor_key(cursor.as_ref())?;
   let before_cursor = before.as_ref().map(|(height, pos, txid)| {
+    // nosemgrep: contrib.r2c.daemon-public-hash-boundaries-must-use-utils -- hyphen-db cursor key, not a displayed hash
     hyphen_db::HyDbCursor(format!("{height}:{pos}:{}", hex::encode(txid)))
   });
 

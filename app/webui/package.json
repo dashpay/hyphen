@@ -26,6 +26,7 @@
     "play": "node --experimental-strip-types ./tests/play.ts",
     "prepare": "svelte-kit sync || echo ''",
     "preview": "vite preview",
+    "test": "pnpm test:unit",
     "test:playwright": "playwright test",
     "test:unit": "node --experimental-strip-types --test ./tests/unit/*.test.ts",
     "verify:tokens": "tsx ./src/codegen/verify.ts"

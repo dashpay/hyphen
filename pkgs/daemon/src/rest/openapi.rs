@@ -763,13 +763,16 @@ pub struct ValidatorPose {
 /// Nullable live overlay for validator routes.
 #[derive(Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+// nosemgrep: contrib.r2c.daemon-rest-openapi-validator-live-must-not-duplicate-status -- existing API field, served to the web UI
 pub struct ValidatorLive {
   #[serde(rename = "type")]
   #[serde(skip_serializing_if = "Option::is_none")]
+  // nosemgrep: contrib.r2c.daemon-validator-live-must-not-duplicate-indexed-fields -- live RPC value, served to the web UI
   pub validator_type: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub valid: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  // nosemgrep: contrib.r2c.daemon-validator-live-must-not-duplicate-indexed-fields -- live RPC value, served to the web UI
   pub status: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub last_paid_height: Option<i32>,

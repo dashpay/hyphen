@@ -22,7 +22,7 @@ pub fn spawn_rest_thread(
   tx: mpsc::Sender<AppEvent>,
   rx: mpsc::Receiver<RestRequest>,
 ) -> JoinHandle<()> {
-  return std::thread::spawn(move || {
+  std::thread::spawn(move || {
     for request in rx {
       let result = match request {
         RestRequest::Browse {
@@ -42,7 +42,7 @@ pub fn spawn_rest_thread(
         break;
       }
     }
-  });
+  })
 }
 
 /// Execute one browse request against the daemon REST API.

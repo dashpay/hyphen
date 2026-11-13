@@ -333,6 +333,7 @@ mod tests {
   #[tokio::test]
   async fn refresh_summary_once_rebuilds_sparse_recent_snapshot(
   ) -> Result<(), Box<dyn std::error::Error>> {
+    // nosemgrep: contrib.r2c.daemon-live-state-must-not-depend-on-rest -- test fixture
     let db = crate::rest::hydb_fake::MemDb::new().into_hydb();
 
     let live_state = LiveState::new();
@@ -397,6 +398,7 @@ mod tests {
   #[tokio::test]
   async fn refresh_summary_once_persists_special_transactions(
   ) -> Result<(), Box<dyn std::error::Error>> {
+    // nosemgrep: contrib.r2c.daemon-live-state-must-not-depend-on-rest -- test fixture
     let db = crate::rest::hydb_fake::MemDb::new().into_hydb();
 
     let txid = "11".repeat(32);

@@ -25,7 +25,7 @@ pub fn spawn_ipc_thread(
   shutdown: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
   let path = socket_path.to_owned();
-  return std::thread::spawn(move || loop {
+  std::thread::spawn(move || loop {
     if shutdown.load(Ordering::Relaxed) {
       return;
     }
@@ -65,7 +65,7 @@ pub fn spawn_ipc_thread(
       }
       std::thread::sleep(Duration::from_millis(250));
     }
-  });
+  })
 }
 
 /// Dedicated thread for sending IPC commands to the daemon.
@@ -76,7 +76,7 @@ pub fn spawn_ipc_cmd_thread(
   tx: mpsc::Sender<AppEvent>,
 ) -> JoinHandle<()> {
   let path = socket_path.to_owned();
-  return std::thread::spawn(move || {
+  std::thread::spawn(move || {
     let mut client: Option<IpcClient> = None;
     for cmd in cmd_rx {
       let mut delivered = false;
@@ -128,7 +128,7 @@ pub fn spawn_ipc_cmd_thread(
         );
       }
     }
-  });
+  })
 }
 
 fn command_id(cmd: &DaemonCommand) -> u64 {

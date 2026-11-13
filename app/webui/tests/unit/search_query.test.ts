@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  HySearchIsHeightQuery,
-  HySearchShouldUseExactLookup,
-} from "../../src/lib/views/HySearchBoxUtil.ts";
+import { HySearchIsHeightQuery, HySearchShouldUseExactLookup } from "../../src/lib/views/HySearchBoxUtil.ts";
 
 void test("a decimal block height is sent to the exact-lookup endpoint", (): void => {
   // The regression: digits are a subset of the hex alphabet, so testing hex

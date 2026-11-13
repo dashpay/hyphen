@@ -57,46 +57,46 @@
 
     <HyScrollBody container={true}>
       <div class="hy-reference-stack tx-summary-stack">
-      <div>
-        <div class="section-title">{tr("Hash")}</div>
-        <div class="hy-reference-hash-row">
-          <span class="mono hash-full hy-wrap-anywhere">{transactionHash}</span>
-          <HyCopyButton
-            copied={copiedHash === transactionHash}
-            inline={true}
-            label={tr("Copy transaction ID")}
-            onpress={(): void => {
-              copyToClipboard(transactionHash);
-            }}
-            title={tr("Copy txid")}
-          />
+        <div>
+          <div class="section-title">{tr("Hash")}</div>
+          <div class="hy-reference-hash-row">
+            <span class="mono hash-full hy-wrap-anywhere">{transactionHash}</span>
+            <HyCopyButton
+              copied={copiedHash === transactionHash}
+              inline={true}
+              label={tr("Copy transaction ID")}
+              onpress={(): void => {
+                copyToClipboard(transactionHash);
+              }}
+              title={tr("Copy txid")}
+            />
+          </div>
         </div>
-      </div>
 
-      <div>
-        <div class="section-title">{tr("Tags")}</div>
-        <div class="hy-reference-tags">
-          <HyTxTag label={transactionLabel} tone={txDisplay.tone} />
-          {#if transaction.live.tags?.islock === true}
-            <HyTxTag label="ISLock" tone="proupserv" />
-          {/if}
+        <div>
+          <div class="section-title">{tr("Tags")}</div>
+          <div class="hy-reference-tags">
+            <HyTxTag label={transactionLabel} tone={txDisplay.tone} />
+            {#if transaction.live.tags?.islock === true}
+              <HyTxTag label="ISLock" tone="proupserv" />
+            {/if}
+          </div>
         </div>
-      </div>
 
-      <div class="hy-reference-stat-grid">
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("Amount")}</span>
-          <span class="hy-reference-stat-value">
-            <HyAmountText value={HyUtilFormatSelectedAmount(transaction.valueOut, getWebUiConfig())} />
-          </span>
+        <div class="hy-reference-stat-grid">
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("Amount")}</span>
+            <span class="hy-reference-stat-value">
+              <HyAmountText value={HyUtilFormatSelectedAmount(transaction.valueOut, getWebUiConfig())} />
+            </span>
+          </div>
+          <div class="hy-reference-stat-card">
+            <span class="hy-reference-stat-label">{tr("Fee")}</span>
+            <span class="hy-reference-stat-value">
+              <HyAmountText value={HyUtilFormatSelectedAmount(transaction.fee ?? 0, getWebUiConfig())} />
+            </span>
+          </div>
         </div>
-        <div class="hy-reference-stat-card">
-          <span class="hy-reference-stat-label">{tr("Fee")}</span>
-          <span class="hy-reference-stat-value">
-            <HyAmountText value={HyUtilFormatSelectedAmount(transaction.fee ?? 0, getWebUiConfig())} />
-          </span>
-        </div>
-      </div>
       </div>
     </HyScrollBody>
   </VwPanel>

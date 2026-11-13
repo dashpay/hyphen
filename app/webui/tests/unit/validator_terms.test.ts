@@ -9,8 +9,7 @@ const language: I18nMetaLanguage = {
   dict: {
     masternode: "masternode",
     masternodes: "masternodes",
-    masternodes_active_count:
-      "{totalCount, plural, one {# masternode} other {# masternodes}} ({enabledCount} active)",
+    masternodes_active_count: "{totalCount, plural, one {# masternode} other {# masternodes}} ({enabledCount} active)",
     masternodes_count: "{count, plural, one {# masternode} other {# masternodes}}",
     masternodes_voted: "Masternodes Voted",
   },
