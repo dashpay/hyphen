@@ -8,6 +8,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use dash_types::codec::BaseCodec;
 use serde::{Deserialize, Serialize};
 
 use crate::rest::error::ApiError;
@@ -226,16 +227,19 @@ pub async fn get_rawtx(
       .map_err(|e| hydb_err(e, "raw block"))?
       .ok_or_else(|| ApiError::not_found("raw block not in store"))?;
 
-    let ranges = dash_primitives::block::tx_byte_ranges(&raw_block)
-      .map_err(|e| ApiError::internal(format!("tx ranges: {e}")))?;
-    let (start, end) = ranges
+    let block: dash_primitives::Block = crate::consensus::decode(&raw_block)
+      .map_err(|e| ApiError::internal(format!("decode block: {e}")))?;
+    let transaction = block
+      .transactions()
       .get(detail.block_pos as usize)
       .ok_or_else(|| ApiError::internal("tx position out of range"))?;
+    let mut rawtx = Vec::with_capacity(dash_types::codec::encoded_size(transaction));
+    transaction.encode(&mut rawtx);
 
     return Ok(Json(RawTxResponse {
       as_of_height: Some(stage.height),
       source: crate::rest::openapi::RawValueSource::Indexed,
-      rawtx: hex::encode(&raw_block[*start..*end]),
+      rawtx: hex::encode(rawtx),
     }));
   }
 

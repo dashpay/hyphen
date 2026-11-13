@@ -369,7 +369,8 @@ mod tests {
     raw_vote.extend_from_slice(&1i32.to_le_bytes());
     raw_vote.extend_from_slice(&2i32.to_le_bytes());
     raw_vote.extend_from_slice(&3i64.to_le_bytes());
-    raw_vote.push(0);
+    raw_vote.push(0x41);
+    raw_vote.extend_from_slice(&[0; 65]);
 
     let parent =
       crate::consensus::gov_vote_parent_hash(&raw_vote).expect("parent hash should decode");

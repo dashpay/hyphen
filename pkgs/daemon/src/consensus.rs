@@ -7,6 +7,9 @@
 //! Local consensus helpers wrapping Base SDK primitives.
 
 use dash_primitives::BlockHash;
+use dash_types::codec::BaseCodec;
+use dash_types::CompactSize;
+use dash_types::Hashable;
 
 use crate::error::DaemonError;
 
@@ -18,17 +21,73 @@ pub fn block_hash(raw: &[u8]) -> Result<BlockHash, DaemonError> {
       raw.len()
     )));
   }
-  let hash = dash_pow::hash(&raw[..80]);
-  Ok(BlockHash::from(hash))
+  let header: dash_primitives::BlockHeader = decode(&raw[..80])?;
+  Ok(header.hash())
+}
+
+pub fn decode<T: BaseCodec>(raw: &[u8]) -> Result<T, DaemonError> {
+  let mut cursor = raw;
+  let value =
+    T::decode(&mut cursor).map_err(|e| DaemonError::Index(format!("consensus decode: {e}")))?;
+  if !cursor.is_empty() {
+    return Err(DaemonError::Index(format!(
+      "consensus decode: {} trailing bytes",
+      cursor.len()
+    )));
+  }
+  Ok(value)
+}
+
+pub fn txid(raw: &[u8]) -> Result<[u8; 32], DaemonError> {
+  let tx: dash_primitives::Transaction = decode(raw)?;
+  Ok(*tx.hash().as_bytes())
+}
+
+pub fn tx_ranges(
+  raw: &[u8],
+  txs: &[dash_primitives::Transaction],
+) -> Result<Vec<(usize, usize)>, String> {
+  if raw.len() < 80 {
+    return Err("block is under 80 bytes".to_owned());
+  }
+  let mut count_bytes = Vec::new();
+  CompactSize::from(txs.len()).encode(&mut count_bytes);
+  let mut offset = 80 + count_bytes.len();
+  if raw.get(80..offset) != Some(count_bytes.as_slice()) {
+    return Err("non-canonical transaction count".to_owned());
+  }
+  let mut ranges = Vec::with_capacity(txs.len());
+  for tx in txs {
+    let size = dash_types::codec::encoded_size(tx);
+    let end = offset
+      .checked_add(size)
+      .ok_or_else(|| "tx range overflow".to_owned())?;
+    if end > raw.len() {
+      return Err("transaction extends past block".to_owned());
+    }
+    let mut encoded = Vec::new();
+    tx.encode(&mut encoded);
+    if raw[offset..end] != encoded {
+      return Err(format!("non-canonical transaction bytes at {offset}"));
+    }
+    ranges.push((offset, end));
+    offset = end;
+  }
+  if offset != raw.len() {
+    return Err(format!("{} trailing block bytes", raw.len() - offset));
+  }
+  Ok(ranges)
 }
 
 /// Read the parent object hash from a raw governance vote.
 ///
 /// Returns display-order bytes suitable for RPC.
 pub fn gov_vote_parent_hash(raw_vote: &[u8]) -> Result<[u8; 32], DaemonError> {
-  let vote = dash_primitives::gov::GovVote::decode(raw_vote)
-    .map_err(|e| DaemonError::Index(format!("governance vote decode: {e}")))?;
-  let mut hash = vote.parent_hash.to_bytes();
+  let vote: dash_primitives::GovVote = decode(raw_vote)?;
+  let mut hash = match vote {
+    dash_primitives::GovVote::Bls(vote) => *vote.parent_hash().as_bytes(),
+    dash_primitives::GovVote::Ecdsa(vote) => *vote.parent_hash().as_bytes(),
+  };
   hash.reverse();
   Ok(hash)
 }
@@ -40,9 +99,8 @@ pub fn gov_vote_parent_hash(raw_vote: &[u8]) -> Result<[u8; 32], DaemonError> {
 /// Delegates to `GovObject::hash()` which includes the full outpoint
 /// serialization, then reverses to display order.
 pub fn gov_object_hash(raw_object: &[u8]) -> Result<[u8; 32], DaemonError> {
-  let obj = dash_primitives::gov::GovObject::decode(raw_object)
-    .map_err(|e| DaemonError::Index(format!("governance object decode: {e}")))?;
-  let mut hash = obj.hash().to_bytes();
+  let obj: dash_primitives::GovObject = decode(raw_object)?;
+  let mut hash = obj.hash().as_bytes().to_owned();
   hash.reverse();
   Ok(hash)
 }
@@ -82,5 +140,22 @@ mod tests {
   #[test]
   fn bits_to_difficulty_handles_zero_mantissa() {
     assert_eq!(bits_to_difficulty(0x1d000000), 0.0);
+  }
+  #[test]
+  fn v2_asset_unlock_uses_stable_txid_hash() {
+    let raw = hex::decode("03000900000190cff40500000000232102472c66bc4fd71f30167ac9b8888944ca749dcb0a130329ab95380be0a43c25b0ac000000009102210300000000000070110100c80300002a3631100ae30009d1bf863e5db641069985121ad4ab37dfda0800a65cc1116088250d04fb32aef4219a552f35627d46a9f448a742564cb9e7c4b107325e1f875f64a0c90d517b137cb44d359e401dce015a077ec33ba4c078e4b74f252181943daa2cc30eb90b693e3aee521016f22ddecc52b0e4c79781b76c8def1c66db46").expect("vector");
+    let tx: dash_primitives::Transaction = decode(&raw).expect("transaction");
+    assert_ne!(tx.hash().as_bytes(), tx.instance_hash().as_bytes());
+    assert_eq!(
+      hex::encode(
+        crate::consensus::txid(&raw)
+          .expect("transaction txid")
+          .iter()
+          .rev()
+          .copied()
+          .collect::<Vec<_>>()
+      ),
+      "0f9db35643e5ebca413fe5be12144185adb7236f051dbcb872162c14cea2523a"
+    );
   }
 }

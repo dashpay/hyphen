@@ -10,8 +10,6 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use dash_primitives::hash;
-
 use crate::lifecycle::Lifecycle;
 use crate::live::state::{IsLock, LiveState};
 use crate::sources::{SequenceEvent, ZmqEvent};
@@ -29,7 +27,11 @@ pub async fn sync_current_loop(
       result = rx.recv() => Some(result),
       _ = shutdown.changed() => None,
     } {
-      Some(Ok(event)) => handle_event(&live_state, event),
+      Some(Ok(event)) => {
+        if let Err(error) = handle_event(&live_state, event) {
+          tracing::warn!(%error, "islock ZMQ event rejected");
+        }
+      }
       Some(Err(broadcast::error::RecvError::Lagged(skipped))) => {
         tracing::warn!(skipped, "islock ZMQ consumer lagged");
       }
@@ -38,13 +40,13 @@ pub async fn sync_current_loop(
   }
 }
 
-fn handle_event(live_state: &LiveState, event: ZmqEvent) {
+fn handle_event(live_state: &LiveState, event: ZmqEvent) -> Result<(), crate::error::DaemonError> {
   match event {
     // Dash `rawtxlock` publishes the locked transaction bytes, so hashing the
     // payload yields the same txid used by `sequence` removals and
     // `getislocks`.
     ZmqEvent::RawTxLock { tx, .. } => {
-      let txid = utils::ser_endian(&hash::tx_hash(&tx).to_bytes(), HashEndian::Ser);
+      let txid = utils::ser_endian(&crate::consensus::txid(&tx)?, HashEndian::Ser);
       live_state.upsert_islock(IsLock {
         txid,
         raw_islock: tx,
@@ -60,6 +62,7 @@ fn handle_event(live_state: &LiveState, event: ZmqEvent) {
     }
     _ => {}
   }
+  Ok(())
 }
 
 fn now_epoch_secs() -> i64 {

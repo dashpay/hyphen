@@ -38,17 +38,17 @@ pub async fn normalize_tx(
 ) -> Result<MempoolTx, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(db, &tx).await?;
-  let value_out = total_duffs(tx.outputs.iter().map(|output| output.value.to_sat()))?;
-  let tx_type = crate::tx::tx_type_str(tx.tx_type).to_owned();
-  let payload = decode_payload(&tx, txid_bytes);
+  let value_out = total_duffs(tx.outputs().iter().map(|output| output.value().to_sat()))?;
+  let tx_type = crate::tx::tx_type_str(tx.tx_type()).to_owned();
+  let payload = decode_payload(&tx, txid_bytes, p2pkh_version, p2sh_version);
   let fee = tx
-    .inputs
+    .inputs()
     .iter()
-    .filter(|input| !input.prevout.hash.is_null())
+    .filter(|input| !input.prevout().txid().is_null())
     .try_fold(0i64, |sum, input| {
       let key = (
-        input.prevout.hash.as_bytes().to_vec(),
-        input.prevout.index as i32,
+        input.prevout().txid().as_bytes().to_vec(),
+        input.prevout().index() as i32,
       );
       prevout_map
         .get(&key)
@@ -60,23 +60,23 @@ pub async fn normalize_tx(
     .map(|value_in| value_in - value_out);
 
   let inputs = tx
-    .inputs
+    .inputs()
     .iter()
     .enumerate()
     .map(|(index, input)| {
-      let is_coinbase = input.prevout.hash.is_null();
+      let is_coinbase = input.prevout().txid().is_null();
       let key = (
-        input.prevout.hash.as_bytes().to_vec(),
-        input.prevout.index as i32,
+        input.prevout().txid().as_bytes().to_vec(),
+        input.prevout().index() as i32,
       );
       let prev = prevout_map.get(&key);
       MempoolTxInput {
         vin_index: index as i32,
-        sequence: i64::from(input.sequence),
-        prev_txid: (!is_coinbase).then(|| input.prevout.hash.as_bytes().to_vec()),
-        prev_vout: (!is_coinbase).then_some(input.prevout.index as i32),
-        coinbase: is_coinbase.then(|| input.script_sig.0.clone()),
-        script_sig: input.script_sig.0.clone(),
+        sequence: i64::from(input.sequence()),
+        prev_txid: (!is_coinbase).then(|| input.prevout().txid().as_bytes().to_vec()),
+        prev_vout: (!is_coinbase).then_some(input.prevout().index() as i32),
+        coinbase: is_coinbase.then(|| input.script_sig().as_bytes().to_vec()),
+        script_sig: input.script_sig().as_bytes().to_vec(),
         prev_address: prev.and_then(|entry| entry.address.clone()),
         prev_value: prev.and_then(|entry| entry.value),
       }
@@ -84,16 +84,16 @@ pub async fn normalize_tx(
     .collect::<Vec<_>>();
 
   let outputs = tx
-    .outputs
+    .outputs()
     .iter()
     .enumerate()
     .map(|(index, output)| {
       Ok(MempoolTxOutput {
         vout_index: index as i32,
-        value: duffs(output.value.to_sat())?,
-        script_pubkey: output.script_pubkey.as_bytes().to_vec(),
-        address: dash_script::derive_address(
-          output.script_pubkey.as_bytes(),
+        value: duffs(output.value().to_sat())?,
+        script_pubkey: output.script_pubkey().as_bytes().to_vec(),
+        address: crate::tx::script_address(
+          output.script_pubkey().as_bytes(),
           p2pkh_version,
           p2sh_version,
         ),
@@ -104,13 +104,13 @@ pub async fn normalize_tx(
   Ok(MempoolTx {
     txid: txid_bytes.to_vec(),
     raw_tx: raw_tx.to_vec(),
-    version: tx.version,
+    version: tx.version(),
     tx_type,
-    lock_time: i64::from(tx.lock_time),
+    lock_time: i64::from(tx.lock_time()),
     size: raw_tx.len() as i32,
     value_out,
-    input_count: tx.inputs.len() as i32,
-    output_count: tx.outputs.len() as i32,
+    input_count: tx.inputs().len() as i32,
+    output_count: tx.outputs().len() as i32,
     fee,
     payload: (!payload.is_null()).then_some(payload),
     inputs,
@@ -138,37 +138,37 @@ pub async fn build_tx_value(
 ) -> Result<TxDetail, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(db, &tx).await?;
-  let value_out = total_duffs(tx.outputs.iter().map(|output| output.value.to_sat()))?;
-  let stored_tx_type = crate::tx::tx_type_str(tx.tx_type);
+  let value_out = total_duffs(tx.outputs().iter().map(|output| output.value().to_sat()))?;
+  let stored_tx_type = crate::tx::tx_type_str(tx.tx_type());
   let public_tx_type = crate::tx::public_tx_type(
     stored_tx_type,
-    tx.outputs
+    tx.outputs()
       .iter()
-      .map(|output| output.script_pubkey.as_bytes()),
+      .map(|output| output.script_pubkey().as_bytes()),
   );
-  let payload = decode_payload(&tx, txid_bytes);
+  let payload = decode_payload(&tx, txid_bytes, p2pkh_version, p2sh_version);
 
   let vin = tx
-    .inputs
+    .inputs()
     .iter()
     .enumerate()
     .map(|(index, input)| {
       let key = (
-        input.prevout.hash.as_bytes().to_vec(),
-        input.prevout.index as i32,
+        input.prevout().txid().as_bytes().to_vec(),
+        input.prevout().index() as i32,
       );
       let prev = prevout_map.get(&key);
       TxInput {
         n: index as i32,
         script_sig: TxScriptSig {
-          hex: hex::encode(&input.script_sig.0),
+          hex: hex::encode(input.script_sig().as_bytes()),
         },
-        sequence: i64::from(input.sequence),
+        sequence: i64::from(input.sequence()),
         txid: Some(utils::view_hex(
-          input.prevout.hash.as_bytes(),
+          input.prevout().txid().as_bytes(),
           HashEndian::Ser,
         )),
-        vout: Some(input.prevout.index as i32),
+        vout: Some(input.prevout().index() as i32),
         coinbase: None,
         address: prev.and_then(|entry| entry.address.clone()),
         value: prev.and_then(|entry| entry.value),
@@ -176,18 +176,18 @@ pub async fn build_tx_value(
     })
     .collect::<Vec<TxInput>>();
   let vout = tx
-    .outputs
+    .outputs()
     .iter()
     .enumerate()
     .map(|(index, output)| {
       Ok(TxOutput {
         n: index as i32,
-        value: duffs(output.value.to_sat())?,
+        value: duffs(output.value().to_sat())?,
         script_pub_key: TxScriptPubKey {
-          hex: hex::encode(&output.script_pubkey.0),
+          hex: hex::encode(output.script_pubkey().as_bytes()),
         },
-        address: dash_script::derive_address(
-          output.script_pubkey.as_bytes(),
+        address: crate::tx::script_address(
+          output.script_pubkey().as_bytes(),
           p2pkh_version,
           p2sh_version,
         ),
@@ -201,13 +201,13 @@ pub async fn build_tx_value(
     txid: txid_hex.to_owned(),
     block_height: None,
     block_pos: None,
-    version: tx.version,
+    version: tx.version(),
     tx_type: public_tx_type.to_owned(),
-    lock_time: i64::from(tx.lock_time),
+    lock_time: i64::from(tx.lock_time()),
     size: raw_tx.len() as i32,
     value_out,
-    input_count: tx.inputs.len() as i32,
-    output_count: tx.outputs.len() as i32,
+    input_count: tx.inputs().len() as i32,
+    output_count: tx.outputs().len() as i32,
     fee: None,
     tags: TxTags {
       mined: false,
@@ -302,15 +302,13 @@ struct PrevOutput {
 }
 
 fn decode_tx(raw_tx: &[u8]) -> Result<DecodedTransaction, DaemonError> {
-  bitcoin_consensus_encoding::decode_from_slice::<DecodedTransaction>(raw_tx).map_err(|e| {
-    DaemonError::RestSource {
-      message: format!("decode mempool tx: {e}"),
-      kind: RestErrorKind::Other,
-    }
+  crate::consensus::decode(raw_tx).map_err(|e| DaemonError::RestSource {
+    message: format!("decode mempool tx: {e}"),
+    kind: RestErrorKind::Other,
   })
 }
 
-/// A satoshi count as the signed width the API renders amounts at.
+/// Validate a satoshi count for API arithmetic.
 ///
 /// Checked rather than cast. The release profile turns off overflow checks, so
 /// `as i64` on a malformed value above `i64::MAX` yields a negative amount that
@@ -320,11 +318,14 @@ fn decode_tx(raw_tx: &[u8]) -> Result<DecodedTransaction, DaemonError> {
 ///
 /// `RestSource` when the value cannot be represented, which is the same class
 /// as the decode failure it sits beside — the node sent something unusable.
-fn duffs(sats: u64) -> Result<i64, DaemonError> {
-  i64::try_from(sats).map_err(|_| DaemonError::RestSource {
-    message: format!("transaction claims {sats} duffs, beyond the representable range"),
-    kind: RestErrorKind::Other,
-  })
+fn duffs(sats: i64) -> Result<i64, DaemonError> {
+  if sats < 0 {
+    return Err(DaemonError::RestSource {
+      message: format!("transaction claims negative {sats} duffs"),
+      kind: RestErrorKind::Other,
+    });
+  }
+  Ok(sats)
 }
 
 /// Sum satoshi counts, refusing an overflow rather than wrapping.
@@ -332,7 +333,7 @@ fn duffs(sats: u64) -> Result<i64, DaemonError> {
 /// # Errors
 ///
 /// `RestSource` when a value or the running total cannot be represented.
-fn total_duffs(sats: impl IntoIterator<Item = u64>) -> Result<i64, DaemonError> {
+fn total_duffs(sats: impl IntoIterator<Item = i64>) -> Result<i64, DaemonError> {
   let mut total: i64 = 0;
   for value in sats {
     total = total
@@ -345,18 +346,32 @@ fn total_duffs(sats: impl IntoIterator<Item = u64>) -> Result<i64, DaemonError> 
   Ok(total)
 }
 
-fn decode_payload(tx: &DecodedTransaction, txid_bytes: &[u8]) -> Value {
+fn decode_payload(
+  tx: &DecodedTransaction,
+  txid_bytes: &[u8],
+  p2pkh_version: u8,
+  p2sh_version: u8,
+) -> Value {
   if matches!(
-    tx.tx_type,
-    dash_primitives::TxType::Spend | dash_primitives::TxType::Unknown(_)
+    tx.tx_type(),
+    dash_primitives::TxType::Spend
+      | dash_primitives::TxType::Unknown(_)
+      | dash_primitives::TxType::ProviderDissolve
+      | dash_primitives::TxType::ProviderUpdateShare
+      | dash_primitives::TxType::ProviderUpdateSharedRegistrar
   ) {
     return Value::Null;
   }
 
-  match dash_primitives::payload::SpecialPayload::decode(tx.tx_type, &tx.extra_payload) {
+  let payload_result = {
+    let mut data = tx.extra_payload().as_slice();
+    dash_primitives::SpecialPayload::decode(tx.tx_type(), &mut data)
+  };
+  match payload_result {
     Ok(payload) => {
-      let (_, payload_json) = crate::tx::payload_for_storage(&payload, txid_bytes);
-      crate::tx::enrich_api(crate::tx::tx_type_str(tx.tx_type), &payload_json)
+      let (_, payload_json) =
+        crate::tx::payload_for_storage(&payload, txid_bytes, p2pkh_version, p2sh_version);
+      crate::tx::enrich_api(crate::tx::tx_type_str(tx.tx_type()), &payload_json)
     }
     Err(_) => Value::Null,
   }
@@ -407,20 +422,21 @@ struct PrevoutPlan {
 /// Separated from the I/O so the two properties that matter — one lookup per
 /// distinct parent, and nothing at all past the cap — are testable without a
 /// database.
-fn plan_prevout_lookups<'a, I>(outpoints: I) -> PrevoutPlan
+fn plan_prevout_lookups<I, H>(outpoints: I) -> PrevoutPlan
 where
-  I: IntoIterator<Item = (&'a [u8], u32)>,
+  I: IntoIterator<Item = (H, u32)>,
+  H: AsRef<[u8]>,
 {
   let mut grouped: HashMap<Vec<u8>, Vec<i32>> = HashMap::new();
   let mut spending_inputs = 0usize;
   for (prev_txid, vout) in outpoints {
     // A coinbase input names no previous output; nothing to resolve.
-    if prev_txid.iter().all(|byte| *byte == 0) {
+    if prev_txid.as_ref().iter().all(|byte| *byte == 0) {
       continue;
     }
     spending_inputs += 1;
     grouped
-      .entry(prev_txid.to_vec())
+      .entry(prev_txid.as_ref().to_vec())
       .or_default()
       .push(vout as i32);
   }
@@ -451,11 +467,12 @@ async fn load_prevouts(
   tx: &DecodedTransaction,
 ) -> Result<HashMap<(Vec<u8>, i32), PrevOutput>, DaemonError> {
   let mut out = HashMap::new();
-  let plan = plan_prevout_lookups(
-    tx.inputs
-      .iter()
-      .map(|input| (&input.prevout.hash.as_bytes()[..], input.prevout.index)),
-  );
+  let plan = plan_prevout_lookups(tx.inputs().iter().map(|input| {
+    (
+      input.prevout().txid().as_bytes().to_owned(),
+      input.prevout().index(),
+    )
+  }));
 
   if plan.over_cap {
     tracing::warn!(

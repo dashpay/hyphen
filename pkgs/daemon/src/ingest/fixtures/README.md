@@ -16,13 +16,9 @@ SHA-256 checksums:
 5afcc7818b461c96f4a8d40eeaaadd8f20deb95490f4e00d10bb3adaebd500e3  testnet-1578000.bin
 ```
 
-At Hyphen revision `157c849`, both blocks decode into the storage engine's
-`HyDbBlock` facts through `HyDbBlockSource::decode`. This includes the v4
-coinbase's height, version and credit pool balance. These tests cover the
-production decoder, not a database connect or replay of testnet history.
+With base-sdk revision `90952f89`, both blocks decode into the storage
+engine's `HyDbBlock` facts through `HyDbBlockSource::decode`. This includes
+the v4 coinbase's height, version and credit pool balance.
 
-The pinned SDK (`2026-05-05`, `0238912b`) reads the v3 fields of the v4
-payload and silently leaves its trailing 32-byte asset-unlock root unread.
-Hyphen therefore omits `merkleRootAssetUnlocks` from stored payload JSON.
-This confirms a missing field, but does not reproduce a block decode failure
-or establish the cause of the deployed testnet stall.
+The v4 payload includes the 32-byte `merkleRootAssetUnlocks` field, and the
+stored payload JSON exposes it as `merkleRootAssetUnlocks`.
