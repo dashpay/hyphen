@@ -40,5 +40,5 @@ jobs:
       packages: read
     secrets: inherit
     with:
-      crate: hyphen-daemon
+      crate: hyphend
       path: ${{ needs.gate.outputs.image }}
