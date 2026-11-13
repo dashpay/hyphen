@@ -7,10 +7,10 @@
 //! `[db.ingest]`'s storage-parameter overrides against a live server.
 //!
 //! Two claims, and the first is the one that matters most: a daemon that was
-//! never configured for tuning must leave the schema exactly as the migration
-//! created it. The numbers in `0001_schema.sql` were measured (A1, B3, B5) and
-//! a configuration surface that quietly re-states them is a configuration
-//! surface that can quietly get them wrong.
+//! never configured for tuning must end with the storage parameters the
+//! migration committed. The numbers in `0001_schema.sql` were measured (A1, B3,
+//! B5); the steady plan restates them so a store left on sync values is put
+//! back.
 
 mod common;
 
