@@ -56,9 +56,15 @@ pub async fn fanout_loop(
     } {
       Some(Ok(event)) => match event {
         ZmqEvent::RawTx { tx, sequence } => {
-          let txid = dash_primitives::hash::tx_hash(&tx).to_bytes();
+          let txid = match crate::consensus::txid(&tx) {
+            Ok(txid) => txid,
+            Err(error) => {
+              tracing::debug!(%error, "dropping undecodable raw mempool transaction");
+              continue;
+            }
+          };
           if pending_adds.remove(&txid) {
-            hub.publish(LiveEvent::mempool_tx(tx, sequence));
+            hub.publish(LiveEvent::mempool_tx(txid, tx, sequence));
           } else {
             pending_raw.insert(txid, (tx, sequence));
           }
@@ -68,7 +74,7 @@ pub async fn fanout_loop(
           ..
         } => {
           if let Some((tx, sequence)) = pending_raw.remove(&txid) {
-            hub.publish(LiveEvent::mempool_tx(tx, sequence));
+            hub.publish(LiveEvent::mempool_tx(txid, tx, sequence));
           } else {
             pending_adds.insert(txid);
           }
@@ -196,8 +202,23 @@ mod tests {
     let mut out = hub.subscribe();
 
     let task = tokio::spawn(super::fanout_loop(rx, hub, lifecycle.clone()));
+    let raw_tx = hex::decode(concat!(
+      "01000000",
+      "01",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "ffffffff",
+      "0a510101062f503253482f",
+      "ffffffff",
+      "01",
+      "00743ba40b000000",
+      "23",
+      "2103a69850243c993c0645a6e8b38c774174174cc766cd3ec2140afd24d831b84c41ac",
+      "00000000"
+    ))
+    .expect("valid transaction fixture");
+    let txid = crate::consensus::txid(&raw_tx).expect("transaction txid");
     tx.send(ZmqEvent::RawTx {
-      tx: vec![1, 2, 3],
+      tx: raw_tx,
       sequence: 7,
     })
     .expect("raw tx should send");
@@ -209,7 +230,7 @@ mod tests {
 
     tx.send(ZmqEvent::Sequence {
       event: SequenceEvent::TxAdded {
-        txid: dash_primitives::hash::tx_hash(&[1u8, 2, 3]).to_bytes(),
+        txid,
         mempool_sequence: 9,
       },
       sequence: 8,

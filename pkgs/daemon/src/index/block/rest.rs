@@ -256,27 +256,28 @@ fn orphan_block_detail(
   let ctx = crate::index::block_ctx::BlockCtx::from_raw(topo.height.get(), raw.to_vec())
     .map_err(|e| ApiError::internal(format!("decode orphan block: {e}")))?;
   let block = ctx.block();
-  let header = &block.header;
+  let header = &block.header();
   let cb =
-    crate::index::block::util::extract_cbtx_fields(block.transactions.first(), topo.height.get());
+    crate::index::block::util::extract_cbtx_fields(block.transactions().first(), topo.height.get());
   let hash = ctx.block_hash();
-  let bits = i32::try_from(header.bits).map_err(|_| ApiError::internal("block bits exceed i32"))?;
+  let bits =
+    i32::try_from(header.bits()).map_err(|_| ApiError::internal("block bits exceed i32"))?;
   let time =
-    i32::try_from(header.time).map_err(|_| ApiError::internal("block time exceeds i32"))?;
+    i32::try_from(header.time()).map_err(|_| ApiError::internal("block time exceeds i32"))?;
   let chainlock_snapshot = super::overlay::fetch_chainlock_snapshot(state);
   let live = super::overlay::block_live_from_snapshot(chainlock_snapshot.as_deref(), &hash)?;
   Ok(BlockDetail {
     as_of_height,
     height: topo.height.get() as i32,
     hash: utils::view_hex(&hash, HashEndian::Ser),
-    previousblockhash: utils::view_hex(&header.prev_hash.to_bytes(), HashEndian::Ser),
-    merkleroot: utils::view_hex(&header.merkle_root.to_bytes(), HashEndian::Ser),
+    previousblockhash: utils::view_hex(header.prev_hash().as_bytes(), HashEndian::Ser),
+    merkleroot: utils::view_hex(header.merkle_root().as_bytes(), HashEndian::Ser),
     time: rfc3339_time(i64::from(time))?,
     bits: format!("{:08x}", bits as u32),
-    nonce: i64::from(header.nonce),
-    version: header.version,
+    nonce: i64::from(header.nonce()),
+    version: header.version(),
     size: raw.len() as i32,
-    tx_count: block.transactions.len() as i32,
+    tx_count: block.transactions().len() as i32,
     status: "orphan".to_string(),
     tags: block_tags(true),
     live,

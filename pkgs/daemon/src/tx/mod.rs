@@ -21,8 +21,9 @@ pub mod provider_update_revoke;
 pub mod provider_update_service;
 pub mod quorum;
 
-use dash_primitives::payload::SpecialPayload;
-use dash_script::{classify, ScriptKind};
+use dash_primitives::{PayoutShare, SpecialPayload};
+use dash_script::Recipient;
+use dash_types::Hashable;
 use serde_json::Value;
 
 /// Side-effect a provider-tx has on the `validators` table.
@@ -72,27 +73,41 @@ pub struct ValidatorInsert {
 
 /// Return the `(pro_tx_hash, payload_json)` pair for `special_tx_payloads`.
 /// `txid` is the txid of the transaction (used as pro_tx_hash for ProRegTx).
-pub fn payload_for_storage(payload: &SpecialPayload, txid: &[u8]) -> (Option<Vec<u8>>, Value) {
+pub fn payload_for_storage(
+  payload: &SpecialPayload,
+  txid: &[u8],
+  p2pkh_version: u8,
+  p2sh_version: u8,
+) -> (Option<Vec<u8>>, Value) {
   match payload {
     SpecialPayload::CoinbaseCommitment(p) => (None, coinbase::to_json(p)),
-    SpecialPayload::ProviderRegister(p) => (Some(txid.to_vec()), provider_register::to_json(p)),
+    SpecialPayload::ProviderRegister(p) => (
+      Some(txid.to_vec()),
+      provider_register::to_json(p, p2pkh_version, p2sh_version),
+    ),
     SpecialPayload::ProviderUpdateService(p) => {
-      let pth = p.pro_tx_hash.as_bytes().to_vec();
+      let pth = p.pro_tx_hash().as_bytes().to_vec();
       (Some(pth), provider_update_service::to_json(p))
     }
     SpecialPayload::ProviderUpdateRegistrar(p) => {
-      let pth = p.pro_tx_hash.as_bytes().to_vec();
-      (Some(pth), provider_update_registrar::to_json(p))
+      let pth = p.pro_tx_hash().as_bytes().to_vec();
+      (
+        Some(pth),
+        provider_update_registrar::to_json(p, p2pkh_version, p2sh_version),
+      )
     }
     SpecialPayload::ProviderUpdateRevoke(p) => {
-      let pth = p.pro_tx_hash.as_bytes().to_vec();
+      let pth = p.pro_tx_hash().as_bytes().to_vec();
       (Some(pth), provider_update_revoke::to_json(p))
     }
     SpecialPayload::QuorumCommitment(p) => (None, quorum::to_json(p)),
     SpecialPayload::MnhfSignal(p) => (None, mnhf::to_json(p)),
     SpecialPayload::AssetLock(p) => (None, asset_lock::to_json(p)),
     SpecialPayload::AssetUnlock(p) => (None, asset_unlock::to_json(p)),
-    SpecialPayload::Unknown { .. } => (None, serde_json::json!({})),
+    SpecialPayload::Unknown { .. }
+    | SpecialPayload::ProviderDissolve(_)
+    | SpecialPayload::ProviderUpdateShare(_)
+    | SpecialPayload::ProviderUpdateSharedRegistrar(_) => (None, serde_json::json!({})),
   }
 }
 
@@ -155,6 +170,9 @@ pub fn tx_type_str(t: dash_primitives::TxType) -> &'static str {
     TxType::AssetLock => "asset_lock",
     TxType::AssetUnlock => "asset_unlock",
     TxType::MnhfSignal => "mnhf",
+    TxType::ProviderDissolve
+    | TxType::ProviderUpdateShare
+    | TxType::ProviderUpdateSharedRegistrar => "normal",
     TxType::Unknown(_) => "normal",
   }
 }
@@ -166,9 +184,12 @@ where
   I::Item: AsRef<[u8]>,
 {
   if stored_tx_type == "normal"
-    && output_scripts
-      .into_iter()
-      .any(|script| matches!(classify(script.as_ref()), ScriptKind::OpReturn))
+    && output_scripts.into_iter().any(|script| {
+      matches!(
+        Recipient::from_script(script.as_ref()),
+        Some(Recipient::Unspendable)
+      )
+    })
   {
     "data"
   } else {
@@ -178,33 +199,96 @@ where
 
 // ── Address helpers (shared by provider tx modules) ──────────────────────────
 
+pub(crate) fn script_address(script: &[u8], p2pkh_version: u8, p2sh_version: u8) -> Option<String> {
+  match Recipient::from_script(script)? {
+    Recipient::PubKeyHash(hash) => Some(hash.to_base58c(p2pkh_version)),
+    Recipient::ScriptHash(hash) => Some(hash.to_base58c(p2sh_version)),
+    Recipient::PubKey(key) => Some(key.hash().to_base58c(p2pkh_version)),
+    Recipient::Unspendable => None,
+  }
+}
+
+pub(crate) fn payouts_json(
+  payouts: &[PayoutShare],
+  p2pkh_version: u8,
+  p2sh_version: u8,
+) -> Vec<Value> {
+  payouts
+    .iter()
+    .map(|share| {
+      serde_json::json!({
+        "address": script_address(
+          share.script_payout().as_bytes(),
+          p2pkh_version,
+          p2sh_version,
+        )
+        .unwrap_or_else(|| hex::encode(share.script_payout().as_bytes())),
+        "reward": share.reward(),
+      })
+    })
+    .collect()
+}
+
+pub(crate) fn payout_address(
+  script: &[u8],
+  payouts: &[PayoutShare],
+  p2pkh_version: u8,
+  p2sh_version: u8,
+) -> Option<String> {
+  if !script.is_empty() {
+    return script_address(script, p2pkh_version, p2sh_version);
+  }
+  payouts
+    .iter()
+    .reduce(|best, share| {
+      if share.reward() > best.reward() {
+        share
+      } else {
+        best
+      }
+    })
+    .and_then(|share| {
+      script_address(
+        share.script_payout().as_bytes(),
+        p2pkh_version,
+        p2sh_version,
+      )
+    })
+}
+
 pub(crate) fn net_info_to_addrs(
-  net_info: &dash_primitives::payload::NetInfo,
+  net_info: &dash_primitives::NetInfo,
 ) -> (Vec<String>, Vec<String>, Vec<String>) {
-  use dash_primitives::payload::NetInfo;
-  use dash_primitives::{NetInfoEntry, NetInfoPurpose};
+  use dash_primitives::NetInfo;
+  use dash_primitives::{NIEntry, NIPurpose};
   match net_info {
-    NetInfo::Legacy(svc) => (vec![format_service(svc)], vec![], vec![]),
+    NetInfo::Legacy(svc) => (
+      vec![format_service(&dash_primitives::ServiceV2::from(
+        svc.service(),
+      ))],
+      vec![],
+      vec![],
+    ),
     NetInfo::Extended(ext) => {
       let mut core = vec![];
       let mut plat_p2p = vec![];
       let mut plat_https = vec![];
-      for (purpose, entries) in &ext.entries {
+      for (purpose, entries) in ext.groups() {
         let target = match purpose {
-          NetInfoPurpose::CoreP2p => &mut core,
-          NetInfoPurpose::PlatformP2p => &mut plat_p2p,
-          NetInfoPurpose::PlatformHttps => &mut plat_https,
-          NetInfoPurpose::Unknown(_) => continue,
+          NIPurpose::CoreP2p => &mut core,
+          NIPurpose::PlatformP2p => &mut plat_p2p,
+          NIPurpose::PlatformHttps => &mut plat_https,
+          NIPurpose::Unknown(_) => continue,
         };
         for entry in entries {
           match entry {
-            NetInfoEntry::Service(svc) => target.push(format_service(svc)),
-            NetInfoEntry::Domain { name, port } => {
+            NIEntry::Service(svc) => target.push(format_service(svc)),
+            NIEntry::Domain { name, port } => {
               if let Ok(s) = std::str::from_utf8(name) {
                 target.push(format!("{s}:{port}"));
               }
             }
-            NetInfoEntry::Invalid => {}
+            NIEntry::Invalid => {}
           }
         }
       }
@@ -213,25 +297,27 @@ pub(crate) fn net_info_to_addrs(
   }
 }
 
-fn format_service(svc: &dash_primitives::CService) -> String {
-  format!("{}:{}", format_addr(&svc.addr), svc.port)
-}
-
-fn format_addr(addr: &[u8]) -> String {
-  match addr.len() {
-    4 => format!("{}.{}.{}.{}", addr[0], addr[1], addr[2], addr[3]),
-    16 => {
-      // IPv4-mapped IPv6: ::ffff:a.b.c.d — display as plain IPv4.
-      if addr[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
-        return format!("{}.{}.{}.{}", addr[12], addr[13], addr[14], addr[15]);
-      }
-      let mut parts = Vec::new();
-      for chunk in addr.chunks(2) {
-        parts.push(format!("{:02x}{:02x}", chunk[0], chunk[1]));
-      }
-      parts.join(":")
+fn format_service(svc: &dash_primitives::ServiceV2) -> String {
+  match svc.addr() {
+    dash_primitives::AddrV2::Ipv4(addr) => {
+      format!(
+        "{}.{}.{}.{}:{}",
+        addr[0],
+        addr[1],
+        addr[2],
+        addr[3],
+        svc.port()
+      )
     }
-    _ => hex::encode(addr),
+    dash_primitives::AddrV2::Ipv6(addr) => {
+      let address = addr
+        .chunks_exact(2)
+        .map(|chunk| format!("{:02x}{:02x}", chunk[0], chunk[1]))
+        .collect::<Vec<_>>()
+        .join(":");
+      format!("{address}:{}", svc.port())
+    }
+    _ => svc.to_string(),
   }
 }
 
@@ -262,31 +348,31 @@ mod tests {
   }
 
   #[test]
-  fn format_addr_ipv4() {
-    assert_eq!(super::format_addr(&[1, 2, 3, 4]), "1.2.3.4");
+  fn format_service_ipv4() {
+    let service =
+      dash_primitives::ServiceV2::new(dash_primitives::AddrV2::Ipv4([1, 2, 3, 4]), 9999);
+    assert_eq!(super::format_service(&service), "1.2.3.4:9999");
   }
 
   #[test]
-  fn format_addr_ipv4_mapped_ipv6() {
-    let mut addr = [0u8; 16];
-    addr[10] = 0xff;
-    addr[11] = 0xff;
-    addr[12] = 192;
-    addr[13] = 168;
-    addr[14] = 1;
-    addr[15] = 100;
-    assert_eq!(super::format_addr(&addr), "192.168.1.100");
-  }
-
-  #[test]
-  fn format_addr_real_ipv6() {
-    let addr: [u8; 16] = [
-      0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x01,
-    ];
-    assert_eq!(
-      super::format_addr(&addr),
-      "2001:0db8:0000:0000:0000:0000:0000:0001"
+  fn format_service_ipv6() {
+    let service = dash_primitives::ServiceV2::new(
+      dash_primitives::AddrV2::Ipv6([
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01,
+      ]),
+      9999,
     );
+    assert_eq!(
+      super::format_service(&service),
+      "2001:0db8:0000:0000:0000:0000:0000:0001:9999"
+    );
+  }
+
+  #[test]
+  fn format_service_legacy_ipv4_mapped() {
+    let legacy = dash_primitives::ServiceV1::new("192.168.1.100".parse().expect("IPv4"), 9999);
+    let service = dash_primitives::ServiceV2::from(legacy);
+    assert_eq!(super::format_service(&service), "192.168.1.100:9999");
   }
 }

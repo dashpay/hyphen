@@ -11,8 +11,9 @@
 //! **pure** with respect to the bytes — no I/O, no node calls — so the crate
 //! can replay it during reorg re-derivation and get identical facts.
 
-use dash_primitives::payload::SpecialPayload;
+use dash_primitives::SpecialPayload;
 use dash_primitives::{Transaction, TxType};
+use dash_types::Hashable;
 
 use hyphen_db::{
   HyDbAddrType, HyDbAddress, HyDbAmount, HyDbBlock, HyDbBlockId, HyDbCbFields, HyDbError, HyDbHash,
@@ -45,14 +46,12 @@ impl HyDbBlockSource {
   /// walks every input and output and heap-allocates a vector per script,
   /// which for [`Self::identify`] — a `prev_hash` lookup — was the entire cost
   /// of the call.
-  fn decode_header(raw: &[u8]) -> HyDbResult<dash_primitives::block_header::BlockHeader> {
+  fn decode_header(raw: &[u8]) -> HyDbResult<dash_primitives::BlockHeader> {
     let head = raw
       .get(..80)
       .ok_or_else(|| HyDbError::Derive("decode header: block is under 80 bytes".to_owned()))?;
-    bitcoin_consensus_encoding::decode_from_slice::<dash_primitives::block_header::BlockHeader>(
-      head,
-    )
-    .map_err(|e| HyDbError::Derive(format!("decode header: {e}")))
+    bitcoin_consensus_encoding::decode_from_slice::<dash_primitives::BlockHeader>(head)
+      .map_err(|e| HyDbError::Derive(format!("decode header: {e}")))
   }
 
   fn decode_block(raw: &[u8]) -> HyDbResult<dash_primitives::Block> {
@@ -62,7 +61,7 @@ impl HyDbBlockSource {
 
   fn block_hash(raw: &[u8]) -> HyDbResult<HyDbHash> {
     crate::consensus::block_hash(raw)
-      .map(|h| HyDbHash(h.to_bytes()))
+      .map(|h| HyDbHash(*h.as_bytes()))
       .map_err(|e| HyDbError::Derive(format!("hash block: {e}")))
   }
 }
@@ -74,42 +73,34 @@ impl hyphen_db::HyDbDataSrc for HyDbBlockSource {
     let header = Self::decode_header(raw)?;
     Ok(HyDbBlockId {
       hash: Self::block_hash(raw)?,
-      prev_hash: HyDbHash(header.prev_hash.to_bytes()),
+      prev_hash: HyDbHash(*header.prev_hash().as_bytes()),
     })
   }
 
   fn decode(&self, raw: &[u8]) -> HyDbResult<HyDbBlock> {
-    // Still two passes over the transactions: `decode_block` decodes them, and
-    // `tx_byte_ranges` decodes them again to record where each one ends. One
-    // pass could yield both, but only from inside `dash-primitives` — the
-    // daemon is barred from wire-level parsing by
-    // `architecture::runtime_primitive_work_stays_inside_primitives`, and that
-    // boundary is worth more than the pass. It needs a primitives-side
-    // `tx_byte_ranges` that returns the decoded transactions alongside the
-    // spans it already computes.
     let block = Self::decode_block(raw)?;
-    let ranges = dash_primitives::block::tx_byte_ranges(raw)
+    let ranges = crate::consensus::tx_ranges(raw, block.transactions())
       .map_err(|e| HyDbError::Derive(format!("scan txs: {e}")))?;
-    if ranges.len() != block.transactions.len() {
+    if ranges.len() != block.transactions().len() {
       return Err(HyDbError::Derive(format!(
         "tx range count {} != decoded tx count {}",
         ranges.len(),
-        block.transactions.len()
+        block.transactions().len()
       )));
     }
 
-    let cb = crate::index::block::util::extract_cbtx_fields(block.transactions.first(), 0);
+    let cb = crate::index::block::util::extract_cbtx_fields(block.transactions().first(), 0);
     let header = HyDbHeader {
       hash: Self::block_hash(raw)?,
-      prev_hash: HyDbHash(block.header.prev_hash.to_bytes()),
-      merkle_root: HyDbHash(block.header.merkle_root.to_bytes()),
-      time: block.header.time,
-      bits: block.header.bits,
-      difficulty: crate::consensus::bits_to_difficulty(block.header.bits),
-      nonce: block.header.nonce,
-      version: block.header.version,
+      prev_hash: HyDbHash(*block.header().prev_hash().as_bytes()),
+      merkle_root: HyDbHash(*block.header().merkle_root().as_bytes()),
+      time: block.header().time(),
+      bits: block.header().bits(),
+      difficulty: crate::consensus::bits_to_difficulty(block.header().bits()),
+      nonce: block.header().nonce(),
+      version: block.header().version(),
       size: raw.len() as u32,
-      tx_count: block.transactions.len() as u32,
+      tx_count: block.transactions().len() as u32,
       // Cumulative chainwork is not derivable from a single block in
       // isolation; the storage pipeline accumulates it from the parent row's
       // stored chainwork plus this block's `bits` at connect time.
@@ -124,10 +115,10 @@ impl hyphen_db::HyDbDataSrc for HyDbBlockSource {
       }),
     };
 
-    let mut txs = Vec::with_capacity(block.transactions.len());
-    for (pos, transaction) in block.transactions.iter().enumerate() {
+    let mut txs = Vec::with_capacity(block.transactions().len());
+    for (pos, transaction) in block.transactions().iter().enumerate() {
       let (start, end) = ranges[pos];
-      let txid = dash_primitives::hash::tx_hash(&raw[start..end]).to_bytes();
+      let txid = *transaction.hash().as_bytes();
       txs.push(self.decode_tx(transaction, HyDbHash(txid), pos, (end - start) as u32)?);
     }
 
@@ -144,38 +135,43 @@ impl HyDbBlockSource {
     size: u32,
   ) -> HyDbResult<HyDbTx> {
     let inputs = transaction
-      .inputs
+      .inputs()
       .iter()
       .enumerate()
       .map(|(vin_index, input)| {
-        let coinbase = input.prevout.hash.is_null();
+        let coinbase = input.prevout().txid().is_null();
         HyDbTxIn {
           vin_index: vin_index as u32,
           prev_outpoint: (!coinbase).then(|| HyDbOutpoint {
-            txid: HyDbHash(input.prevout.hash.to_bytes()),
-            vout: input.prevout.index,
+            txid: HyDbHash(*input.prevout().txid().as_bytes()),
+            vout: input.prevout().index(),
           }),
           coinbase,
-          script_sig: input.script_sig.as_bytes().to_vec(),
-          sequence: input.sequence,
+          script_sig: input.script_sig().as_bytes().to_vec(),
+          sequence: input.sequence(),
         }
       })
       .collect::<Vec<_>>();
 
     let outputs = transaction
-      .outputs
+      .outputs()
       .iter()
       .enumerate()
       .map(|(vout, output)| {
-        let script = output.script_pubkey.as_bytes();
+        let script = output.script_pubkey().as_bytes();
         Ok(HyDbTxOut {
           vout: vout as u32,
           // Checked, not cast: a malformed transaction claiming more than
           // `i64::MAX` duffs would otherwise arrive as a negative value and be
           // summed into the supply and every address balance that touches it.
-          value: HyDbAmount::from_sat(output.value.to_sat())?,
+          value: HyDbAmount::from_sat(output.value().to_sat().try_into().map_err(|_| {
+            HyDbError::Derive(format!(
+              "negative output for txid {} vout {vout}",
+              hex_display(&txid.0)
+            ))
+          })?)?,
           script_pubkey: script.to_vec(),
-          address: dash_script::derive_address(script, self.p2pkh_version, self.p2sh_version)
+          address: crate::tx::script_address(script, self.p2pkh_version, self.p2sh_version)
             .map(HyDbAddress),
           address_type: addr_type(script),
         })
@@ -188,9 +184,9 @@ impl HyDbBlockSource {
     Ok(HyDbTx {
       txid,
       block_pos: block_pos as u32,
-      version: i32::from(transaction.version),
-      tx_type: tx_type(transaction.tx_type),
-      lock_time: transaction.lock_time,
+      version: i32::from(transaction.version()),
+      tx_type: tx_type(transaction.tx_type()),
+      lock_time: transaction.lock_time(),
       size,
       value_out: HyDbAmount(value_out),
       inputs,
@@ -207,17 +203,28 @@ impl HyDbBlockSource {
     transaction: &Transaction,
     txid: [u8; 32],
   ) -> (Option<HyDbPayload>, Vec<HyDbVlEvent>) {
-    if matches!(transaction.tx_type, TxType::Spend | TxType::Unknown(_)) {
+    if matches!(
+      transaction.tx_type(),
+      TxType::Spend
+        | TxType::Unknown(_)
+        | TxType::ProviderDissolve
+        | TxType::ProviderUpdateShare
+        | TxType::ProviderUpdateSharedRegistrar
+    ) {
       return (None, Vec::new());
     }
-    let payload = match SpecialPayload::decode(transaction.tx_type, &transaction.extra_payload) {
+    let payload_result = {
+      let mut data = transaction.extra_payload().as_slice();
+      SpecialPayload::decode(transaction.tx_type(), &mut data)
+    };
+    let payload = match payload_result {
       Ok(payload) => payload,
       Err(e) => {
         // Dropping the payload is data loss; name the transaction so the
         // gap is diagnosable rather than silent.
         tracing::warn!(
           txid = %hex_display(&txid),
-          tx_type = ?transaction.tx_type,
+          tx_type = ?transaction.tx_type(),
           error = %e,
           "special-tx payload failed to decode; storing transaction without it"
         );
@@ -225,7 +232,8 @@ impl HyDbBlockSource {
       }
     };
 
-    let (protx_hash, json) = crate::tx::payload_for_storage(&payload, &txid);
+    let (protx_hash, json) =
+      crate::tx::payload_for_storage(&payload, &txid, self.p2pkh_version, self.p2sh_version);
     let hy_payload = Some(HyDbPayload {
       protx_hash: protx_hash.and_then(|h| HyDbHash::from_slice(&h).ok()),
       json,
@@ -271,16 +279,19 @@ fn tx_type(tx_type: TxType) -> HyDbTxType {
     TxType::AssetLock => HyDbTxType::AssetLock,
     TxType::AssetUnlock => HyDbTxType::AssetUnlock,
     TxType::MnhfSignal => HyDbTxType::Mnhf,
+    TxType::ProviderDissolve
+    | TxType::ProviderUpdateShare
+    | TxType::ProviderUpdateSharedRegistrar => HyDbTxType::Normal,
   }
 }
 
 /// Classify an output script into the storage-layer address kind.
 fn addr_type(script: &[u8]) -> HyDbAddrType {
-  use dash_script::{classify as classify_script, ScriptKind};
-  match classify_script(script) {
-    ScriptKind::P2pkh => HyDbAddrType::P2pkh,
-    ScriptKind::P2sh => HyDbAddrType::P2sh,
-    ScriptKind::P2pk => HyDbAddrType::P2pk,
+  use dash_script::Recipient;
+  match Recipient::from_script(script) {
+    Some(Recipient::PubKeyHash(_)) => HyDbAddrType::P2pkh,
+    Some(Recipient::ScriptHash(_)) => HyDbAddrType::P2sh,
+    Some(Recipient::PubKey(_)) => HyDbAddrType::P2pk,
     _ => HyDbAddrType::Unknown,
   }
 }
@@ -374,6 +385,62 @@ mod tests {
     "41ac00000000"
   );
 
+  #[test]
+  fn decode_v4_activation_block() {
+    let raw = include_bytes!("fixtures/testnet-1578000.bin");
+    let source = HyDbBlockSource::new(0x8c, 0x13);
+    let decoded = source.decode(raw).expect("activation block decodes");
+    assert_eq!(
+      hex_display(&decoded.header.hash.0),
+      "0000009c0b6cbd13862a8049d0a117a4210ae6eeb90d8022cd2276e875fe639c"
+    );
+    assert_eq!(decoded.header.size, 835);
+    assert_eq!(decoded.header.tx_count, 3);
+    assert_eq!(decoded.txs.len(), 3);
+    assert_eq!(
+      hex_display(&decoded.txs[0].txid.0),
+      "ab22dcb7082a94cbf8c11091dc3f4ac3aea5aee150177137791da2b33108bacc"
+    );
+    let coinbase = decoded.header.coinbase.expect("coinbase facts present");
+    assert_eq!(coinbase.cb_height, Some(1_578_000));
+    assert_eq!(coinbase.cb_merkle_flags, Some(4));
+    assert_eq!(coinbase.cb_credit_pool, Some(37_642_249_077_902));
+    let payload = &decoded.txs[0]
+      .payload
+      .as_ref()
+      .expect("coinbase payload present")
+      .json;
+    assert_eq!(payload["version"], 4);
+    assert_eq!(payload["height"], 1_578_000);
+    assert_eq!(payload["merkleRootAssetUnlocks"], "0".repeat(64));
+  }
+
+  #[test]
+  fn decode_v3_before_activation() {
+    let raw = include_bytes!("fixtures/testnet-1577999.bin");
+    let decoded = HyDbBlockSource::new(0x8c, 0x13)
+      .decode(raw)
+      .expect("v3 block decodes");
+    assert_eq!(
+      hex_display(&decoded.header.hash.0),
+      "0000000d4ae5bbcc2ebdf5de1502b0ac3a82931e5b890cb2ad912028f56d9f33"
+    );
+    let coinbase = decoded.header.coinbase.expect("coinbase facts present");
+    assert_eq!(coinbase.cb_height, Some(1_577_999));
+    assert_eq!(coinbase.cb_merkle_flags, Some(3));
+    let payload = &decoded.txs[0]
+      .payload
+      .as_ref()
+      .expect("coinbase payload present")
+      .json;
+    assert_eq!(payload["version"], 3);
+    assert_eq!(payload["height"], 1_577_999);
+    assert_eq!(
+      payload["creditPoolBalance"],
+      coinbase.cb_credit_pool.expect("credit pool present")
+    );
+  }
+
   fn block_1() -> Vec<u8> {
     hex::decode(BLOCK_1).expect("fixture is valid hex")
   }
@@ -394,17 +461,17 @@ mod tests {
     let block = HyDbBlockSource::decode_block(&raw).expect("block decodes");
 
     assert_eq!(
-      header.prev_hash.to_bytes(),
-      block.header.prev_hash.to_bytes()
+      header.prev_hash().as_bytes(),
+      block.header().prev_hash().as_bytes()
     );
     assert_eq!(
-      header.merkle_root.to_bytes(),
-      block.header.merkle_root.to_bytes()
+      header.merkle_root().as_bytes(),
+      block.header().merkle_root().as_bytes()
     );
-    assert_eq!(header.time, block.header.time);
-    assert_eq!(header.bits, block.header.bits);
-    assert_eq!(header.nonce, block.header.nonce);
-    assert_eq!(header.version, block.header.version);
+    assert_eq!(header.time(), block.header().time());
+    assert_eq!(header.bits(), block.header().bits());
+    assert_eq!(header.nonce(), block.header().nonce());
+    assert_eq!(header.version(), block.header().version());
   }
 
   /// `identify` must name this block's parent as genesis. Asserted against the

@@ -1181,7 +1181,7 @@ async fn absorb_with_ancestors(
 fn block_hash(raw: &[u8]) -> Result<HyDbHash, DaemonError> {
   // The inner error is already a `DaemonError`; re-formatting it into a new
   // one would flatten a typed failure into a sentence for no gain.
-  crate::consensus::block_hash(raw).map(|h| HyDbHash(h.to_bytes()))
+  crate::consensus::block_hash(raw).map(|h| HyDbHash(*h.as_bytes()))
 }
 
 #[cfg(test)]

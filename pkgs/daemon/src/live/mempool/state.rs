@@ -9,7 +9,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use dash_primitives::hash;
 use hyphen_db::HyphenDb;
 use tokio::sync::broadcast;
 
@@ -97,11 +96,12 @@ async fn handle_raw_tx(
   pending_raw: &mut PendingRawTxs,
   pending_adds: &mut PendingTxAdds,
 ) -> Result<(), DaemonError> {
-  let txid = hash::tx_hash(&raw_tx).to_bytes();
+  let txid = crate::consensus::txid(&raw_tx)?;
   if pending_adds.remove(&txid) {
     let inserted = upsert_recent_tx(
       ctx.db,
       ctx.live_state,
+      txid,
       raw_tx,
       ctx.p2pkh_version,
       ctx.p2sh_version,
@@ -124,6 +124,7 @@ async fn handle_tx_added(
     let inserted = upsert_recent_tx(
       ctx.db,
       ctx.live_state,
+      txid,
       raw_tx,
       ctx.p2pkh_version,
       ctx.p2sh_version,
@@ -139,12 +140,13 @@ async fn handle_tx_added(
 async fn upsert_recent_tx(
   db: &HyphenDb,
   live_state: &LiveState,
+  txid: [u8; 32],
   raw_tx: Vec<u8>,
   p2pkh_version: u8,
   p2sh_version: u8,
 ) -> Result<(), DaemonError> {
   let now = now_epoch_secs();
-  let txid = hash::tx_hash(&raw_tx).to_bytes().to_vec();
+  let txid = txid.to_vec();
   // The 15s RPC snapshot re-bounds the set to `keep`; the incremental path just
   // inserts, so a brief over-`keep` window between snapshots is acceptable.
   let tx = crate::live::mempool::query::normalize_tx(
