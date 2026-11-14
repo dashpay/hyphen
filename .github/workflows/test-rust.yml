@@ -20,6 +20,9 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -81,8 +84,9 @@ jobs:
           restore-keys: cargo-build-${{ runner.arch }}-
 
       - name: Test crate with coverage
-        run: cargo llvm-cov --package ${{ inputs.crate }} --lcov --output-path lcov.info
+        run: cargo llvm-cov --package "${CRATE}" --lcov --output-path lcov.info
         env:
+          CRATE: ${{ inputs.crate }}
           HYPHEN_TEST_DATABASE_URL: ${{ inputs.postgres && 'postgresql://postgres@postgres:5432/postgres' || '' }}
 
       - name: Upload coverage to Codecov

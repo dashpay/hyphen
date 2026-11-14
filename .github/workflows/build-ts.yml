@@ -40,14 +40,15 @@ jobs:
           echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Restore dependency cache
-        uses: actions/cache@v5
+        id: deps-cache
+        uses: actions/cache/restore@v5
         with:
           path: ${{ steps.setup.outputs.store }}
           key: pnpm-deps-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-deps-${{ runner.arch }}-
 
-      - name: Manage build cache
-        uses: actions/cache@v5
+      - name: Restore build cache
+        uses: actions/cache/restore@v5
         with:
           path: node_modules
           key: pnpm-build-${{ runner.arch }}-${{ github.sha }}
@@ -64,3 +65,17 @@ jobs:
 
       - name: Format workspace
         run: pnpm format:check
+
+      - name: Save dependency cache
+        if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == github.event.repository.default_branch && steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.setup.outputs.store }}
+          key: pnpm-deps-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Save build cache
+        if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == github.event.repository.default_branch
+        uses: actions/cache/save@v5
+        with:
+          path: node_modules
+          key: pnpm-build-${{ runner.arch }}-${{ github.sha }}
