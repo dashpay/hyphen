@@ -44,7 +44,7 @@ jobs:
       - name: Resolve container image
         id: vars
         run: |
-          HASH=$(echo -n "${{ hashFiles('contrib/docker/ci.Dockerfile', 'pyproject.toml') }}" | cut -c1-12)
+          HASH=$(echo -n "${{ hashFiles('contrib/docker/ci.Dockerfile', 'pyproject.toml', '.python-version') }}" | cut -c1-12)
           IMAGE="ghcr.io/${{ github.repository }}/hyphen-ci:${HASH}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
@@ -55,7 +55,8 @@ jobs:
     permissions:
       contents: read
       packages: read
-    secrets: inherit
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
       crate: hyphen-db
       path: ${{ needs.gate.outputs.image }}

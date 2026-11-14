@@ -19,7 +19,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
     with:
       context: .
       file: contrib/docker/ci.Dockerfile

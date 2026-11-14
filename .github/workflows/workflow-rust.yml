@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     if: >-
       github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: read
     outputs:
       image: ${{ steps.vars.outputs.image }}
     steps:
@@ -37,7 +39,7 @@ jobs:
       - name: Resolve container image
         id: vars
         run: |
-          HASH=$(echo -n "${{ hashFiles('contrib/docker/ci.Dockerfile', 'pyproject.toml') }}" | cut -c1-12)
+          HASH=$(echo -n "${{ hashFiles('contrib/docker/ci.Dockerfile', 'pyproject.toml', '.python-version') }}" | cut -c1-12)
           IMAGE="ghcr.io/${{ github.repository }}/hyphen-ci:${HASH}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
@@ -48,6 +50,5 @@ jobs:
     permissions:
       contents: read
       packages: read
-    secrets: inherit
     with:
       path: ${{ needs.gate.outputs.image }}
