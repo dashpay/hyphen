@@ -1,0 +1,110 @@
+services:
+  dashd:
+    image: dashpay/dashd:24.0.1
+    restart: unless-stopped
+    command: ["dashd", "-printtoconsole"]
+    volumes:
+      - dash-data:/home/dash/.dashcore
+      - ./dash.conf:/home/dash/.dashcore/dash.conf:ro
+    networks:
+      - net-p2p
+      - net-dash
+
+  postgres:
+    image: postgres:18.7
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hyphen
+      POSTGRES_USER: hyphen
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hyphen}
+    shm_size: 1g
+    # The defaults suit a small machine. For a full mainnet sync, size
+    # PostgreSQL to the host, for example:
+    # command: ["postgres", "-c", "shared_buffers=8GB", "-c", "effective_cache_size=24GB",
+    #           "-c", "maintenance_work_mem=2GB", "-c", "max_wal_size=8GB"]
+    volumes:
+      - pg-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hyphen -d hyphen"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - net-db
+
+  hyphend:
+    build:
+      context: ../..
+      dockerfile: contrib/deploy/Dockerfile.hyphend
+    restart: unless-stopped
+    stop_grace_period: 2m
+    depends_on:
+      dashd:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    volumes:
+      - hyphen-data:/data
+      - ./hyphen.conf:/data/hyphen.conf:ro
+    networks:
+      - net-dash
+      - net-db
+      - net-api
+
+  webui:
+    build:
+      context: ../..
+      dockerfile: contrib/deploy/Dockerfile.webui
+    restart: unless-stopped
+    depends_on:
+      - hyphend
+    volumes:
+      - ./nginx/static.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./webui/${HYPHEN_NETWORK:-mainnet}.conf:/etc/hyphen/webui.conf:ro
+    networks:
+      - net-web
+
+  nginx:
+    image: linuxserver/swag:5.10.0
+    restart: unless-stopped
+    depends_on:
+      - hyphend
+      - webui
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - URL=${HYPHEN_DOMAIN}
+      - VALIDATION=http
+      - EMAIL=${HYPHEN_EMAIL}
+    volumes:
+      - swag-config:/config
+      - ./nginx/:/etc/nginx/hyphen/:ro
+      - ./nginx/tls.conf:/config/nginx/site-confs/default.conf:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - net-edge
+      - net-api
+      - net-web
+
+networks:
+  net-edge:
+  net-p2p:
+  net-dash:
+    internal: true
+  net-db:
+    internal: true
+  net-api:
+    internal: true
+  net-web:
+    internal: true
+
+volumes:
+  dash-data:
+  pg-data:
+  hyphen-data:
+  swag-config:

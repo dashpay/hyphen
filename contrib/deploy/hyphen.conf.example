@@ -1,0 +1,79 @@
+# Bind-mounted into the hyphend container at /data/hyphen.conf.
+# Container hostnames (dashd, postgres) resolve through Docker DNS.
+# Credentials must match those in dash.conf and docker-compose.yml.
+
+[core]
+url              = "http://dashd:9998"
+rest_concurrency = 8
+
+[core.rpc]
+enabled  = true
+url      = "http://dashd:9998"
+username = "hyphen"
+password = "hyphen"
+
+timeout_secs            = 10
+network_refresh_secs    = 15
+governance_refresh_secs = 60
+chainlock_refresh_secs  = 5
+protx_refresh_secs      = 30
+
+[core.zmq]
+enabled   = true
+connect   = ["tcp://dashd:28332"]
+subscribe = [
+  "raw_tx",
+  "sequence",
+  "raw_tx_lock",
+  "raw_chain_lock",
+  "raw_governance_object",
+  "raw_governance_vote",
+]
+
+[api]
+bind = "0.0.0.0:3080"
+
+[indices]
+address   = true
+validator = true
+metrics   = true
+
+[live]
+enable_mempool        = true
+enable_islock         = true
+enable_chainlock      = true
+chainlock_start_block = 1088640
+enable_governance     = true
+enable_network        = true
+enable_stream         = true
+recent_mempool_txs    = 250
+stream_client_buffer  = 256
+stream_heartbeat_secs = 15
+
+[overlays]
+enable_protx     = true
+enable_chainlock = true
+
+# Recorded in the database on first start and checked on every start after.
+# For testnet use network = "testnet", p2pkh_version = 0x8c,
+# p2sh_version = 0x13, and chainlock_start_block = 78800 under [live].
+[db.layout]
+network       = "mainnet"
+p2pkh_version = 0x4c
+p2sh_version  = 0x10
+
+[db.client]
+url           = "postgresql://hyphen:hyphen@postgres:5432/hyphen"
+slow_query_ms = 500
+
+[db.client.write]
+size = 20
+
+[db.client.query]
+size = 8
+
+[db.client.heavy]
+size = 4
+
+[db.client.admin]
+size = 4

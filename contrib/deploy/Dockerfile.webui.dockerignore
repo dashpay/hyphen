@@ -1,0 +1,8 @@
+.git
+**/node_modules
+target
+app/*/public
+app/*/.svelte-kit
+contrib/deploy/.env
+contrib/deploy/dash.conf
+contrib/deploy/hyphen.conf
