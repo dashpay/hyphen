@@ -10,7 +10,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY pkgs/ pkgs/
 
-RUN cargo build --release -p hyphend
+RUN cargo build --release --locked -p hyphend
 
 FROM debian:bookworm-slim
 
@@ -29,4 +29,4 @@ VOLUME /data
 EXPOSE 3080
 
 ENTRYPOINT ["hyphend"]
-CMD ["--datadir", "/data"]
+CMD ["--datadir", "/data", "--logconsole"]

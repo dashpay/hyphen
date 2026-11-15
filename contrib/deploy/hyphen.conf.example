@@ -1,6 +1,6 @@
 # Bind-mounted into the hyphend container at /data/hyphen.conf.
 # Container hostnames (dashd, postgres) resolve through Docker DNS.
-# Credentials must match those in dash.conf.
+# Credentials must match those in dash.conf and docker-compose.yml.
 
 [core]
 url              = "http://dashd:9998"
@@ -30,14 +30,6 @@ subscribe = [
   "raw_governance_vote",
 ]
 
-[postgres]
-url                   = "postgresql://hyphen:hyphen@postgres:5432/hyphen"
-write_pool_size       = 20
-query_pool_size       = 8
-heavy_query_pool_size = 4
-admin_pool_size       = 4
-slow_query_ms         = 500
-
 [api]
 bind = "0.0.0.0:3080"
 
@@ -45,15 +37,6 @@ bind = "0.0.0.0:3080"
 address   = true
 validator = true
 metrics   = true
-
-[rocksdb]
-write_buffer_size_mb = 64
-max_background_jobs  = 4
-
-[performance]
-ingestion_batch_size      = 256
-max_ingestion_lead_blocks = 512
-prefetch_blocks           = 64
 
 [live]
 enable_mempool        = true
@@ -71,13 +54,26 @@ stream_heartbeat_secs = 15
 enable_protx     = true
 enable_chainlock = true
 
-[cache]
-enabled = true
+# Recorded in the database on first start and checked on every start after.
+# For testnet use network = "testnet", p2pkh_version = 0x8c,
+# p2sh_version = 0x13, and chainlock_start_block = 78800 under [live].
+[db.layout]
+network       = "mainnet"
+p2pkh_version = 0x4c
+p2sh_version  = 0x10
 
-[cache.address]
-enabled = true
-budget  = "256M"
+[db.client]
+url           = "postgresql://hyphen:hyphen@postgres:5432/hyphen"
+slow_query_ms = 500
 
-[cache.readiness]
-enabled = true
-budget  = "16K"
+[db.client.write]
+size = 20
+
+[db.client.query]
+size = 8
+
+[db.client.heavy]
+size = 4
+
+[db.client.admin]
+size = 4
