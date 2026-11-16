@@ -713,7 +713,7 @@ dependencies = [
 [[package]]
 name = "dash-num"
 version = "0.3.0-beta"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "ambassador",
  "bitcoin-consensus-encoding",
@@ -726,7 +726,7 @@ dependencies = [
 [[package]]
 name = "dash-params"
 version = "0.1.0-beta"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "bitcoin-units",
  "bitcoin_hashes",
@@ -738,7 +738,7 @@ dependencies = [
 [[package]]
 name = "dash-pkc"
 version = "0.3.0-beta"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "aes",
  "base58ck",
@@ -761,7 +761,7 @@ dependencies = [
 [[package]]
 name = "dash-pow"
 version = "0.1.1-beta"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "digest 0.11.3",
  "wide",
@@ -770,7 +770,7 @@ dependencies = [
 [[package]]
 name = "dash-primitives"
 version = "0.0.0"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "bitcoin-consensus-encoding",
  "bitcoin-primitives",
@@ -792,7 +792,7 @@ dependencies = [
 [[package]]
 name = "dash-script"
 version = "0.0.0"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "base58ck",
  "bitcoin-consensus-encoding",
@@ -805,7 +805,7 @@ dependencies = [
 [[package]]
 name = "dash-types"
 version = "0.3.0-beta"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "base58ck",
  "bitcoin-consensus-encoding",
@@ -822,7 +822,7 @@ dependencies = [
 [[package]]
 name = "dash-types-marker"
 version = "0.1.0-beta"
-source = "git+https://github.com/dashpay/base-sdk?rev=a4ea791e64e67d4053c6b328b43fe49df6f7f99d#a4ea791e64e67d4053c6b328b43fe49df6f7f99d"
+source = "git+https://github.com/dashpay/base-sdk?rev=a1d09d4d729ccc977dd5e06ab7004bee533f9014#a1d09d4d729ccc977dd5e06ab7004bee533f9014"
 dependencies = [
  "quote",
  "syn 2.0.117",
