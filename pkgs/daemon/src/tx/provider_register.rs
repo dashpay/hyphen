@@ -17,7 +17,7 @@ pub fn to_json(p: &ProRegTx, p2pkh_version: u8, p2sh_version: u8) -> Value {
     "collateralHash": utils::view_hex(p.collateral_hash().as_bytes(), HashEndian::Ser),
     "collateralIndex": p.collateral_index(),
     "ownerKeyId": hex::encode(p.key_id_owner().as_bytes()),
-    "operatorPubKey": hex::encode(p.pub_key_operator().as_bytes()),
+    "operatorPubKey": hex::encode(p.pub_key_operator().as_bytes().as_bytes()),
     "votingKeyId": hex::encode(p.key_id_voting().as_bytes()),
     "operatorReward": p.operator_reward(),
   });
@@ -47,7 +47,7 @@ pub fn to_effect(
     collateral_hash: p.collateral_hash().as_bytes().to_vec(),
     collateral_index: p.collateral_index() as i32,
     collateral_address: None,
-    operator_pubkey: p.pub_key_operator().as_bytes().to_vec(),
+    operator_pubkey: p.pub_key_operator().as_bytes().as_bytes().to_vec(),
     owner_address,
     voting_address,
     operator_reward: p.operator_reward() as i32,

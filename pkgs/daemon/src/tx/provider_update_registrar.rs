@@ -14,7 +14,7 @@ pub fn to_json(p: &ProUpRegTx, p2pkh_version: u8, p2sh_version: u8) -> Value {
   let mut value = json!({
     "version": p.version().to_base(),
     "proTxHash": utils::view_hex(p.pro_tx_hash().as_bytes(), HashEndian::Ser),
-    "operatorPubKey": hex::encode(p.pub_key_operator().as_bytes()),
+    "operatorPubKey": hex::encode(p.pub_key_operator().as_bytes().as_bytes()),
     "votingKeyId": hex::encode(p.key_id_voting().as_bytes()),
   });
   if !p.payouts().is_empty() {
@@ -33,7 +33,7 @@ pub fn to_effect(p: &ProUpRegTx, p2pkh_version: u8, p2sh_version: u8) -> Validat
   let voting_addr = Some(p.key_id_voting().to_base58c(p2pkh_version));
   ValidatorEffect::UpdateRegistrar {
     pro_tx_hash: p.pro_tx_hash().as_bytes().to_vec(),
-    operator_pubkey: p.pub_key_operator().as_bytes().to_vec(),
+    operator_pubkey: p.pub_key_operator().as_bytes().as_bytes().to_vec(),
     payout_addr,
     voting_addr,
   }
