@@ -11,10 +11,6 @@ on:
         description: "Path to container"
         required: true
         type: string
-      ref:
-        description: "Commit to test"
-        required: true
-        type: string
       postgres:
         description: "Start a PostgreSQL 18 service for the tests"
         required: false
@@ -61,7 +57,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - name: Initial setup
