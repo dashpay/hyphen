@@ -16,4 +16,4 @@ mod state;
 pub(crate) mod zmq;
 
 pub(crate) use rpc::{refresh_summary_loop, MempoolRefresh};
-pub use zmq::sync_recent_loop;
+pub(crate) use zmq::{sync_recent_loop, RecentSync};

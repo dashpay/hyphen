@@ -601,6 +601,13 @@ impl IngestStatus {
     u32::try_from(self.local_tip.load(Ordering::Relaxed)).ok()
   }
 
+  /// Set both tips, for tests of the live subsystems that wait on them.
+  #[cfg(test)]
+  pub(crate) fn set_tips_for_test(&self, local: u32, node: u32) {
+    self.local_tip.store(i64::from(local), Ordering::Relaxed);
+    self.network_tip.store(i64::from(node), Ordering::Relaxed);
+  }
+
   /// Whether the projection is close enough to the node for the live
   /// subsystems that read it to get sensible answers.
   ///

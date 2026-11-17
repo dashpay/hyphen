@@ -119,13 +119,15 @@ pub(crate) struct StreamWorkerTaskConfig {
   pub lifecycle: Arc<Lifecycle>,
 }
 
-/// Inputs needed to construct a mempool-recent worker task.
-#[derive(Debug)]
+/// Inputs needed to construct a mempool-recent worker task. Each worker
+/// subscribes to `events` when it is built.
+#[derive(Clone, Debug)]
 pub(crate) struct MempoolRecentWorkerTaskConfig {
   pub db: hyphen_db::HyphenDb,
   pub live_state: Arc<state::LiveState>,
-  pub rx: broadcast::Receiver<ZmqEvent>,
+  pub events: broadcast::Sender<ZmqEvent>,
   pub lifecycle: Arc<Lifecycle>,
+  pub ingest_status: Arc<crate::ingest::IngestStatus>,
   pub keep: usize,
   pub p2pkh_version: u8,
   pub p2sh_version: u8,
@@ -459,16 +461,18 @@ pub(crate) fn stream_supervised_task(
 }
 
 fn mempool_recent_worker_task(cfg: MempoolRecentWorkerTaskConfig) -> WorkerTask<LiveWorker> {
+  let rx = cfg.events.subscribe();
   lifecycle_worker_task("mempool_recent", Arc::clone(&cfg.lifecycle), async move {
-    mempool::sync_recent_loop(
-      cfg.db,
-      cfg.live_state,
-      cfg.rx,
-      cfg.lifecycle,
-      cfg.keep,
-      cfg.p2pkh_version,
-      cfg.p2sh_version,
-    )
+    mempool::sync_recent_loop(mempool::RecentSync {
+      db: cfg.db,
+      live_state: cfg.live_state,
+      rx,
+      lifecycle: cfg.lifecycle,
+      ingest_status: cfg.ingest_status,
+      keep: cfg.keep,
+      p2pkh_version: cfg.p2pkh_version,
+      p2sh_version: cfg.p2sh_version,
+    })
     .await;
     Ok(())
   })
@@ -476,35 +480,14 @@ fn mempool_recent_worker_task(cfg: MempoolRecentWorkerTaskConfig) -> WorkerTask<
 
 #[must_use]
 pub(crate) fn mempool_recent_supervised_task(
-  rx: broadcast::Sender<ZmqEvent>,
-  db: hyphen_db::HyphenDb,
-  live_state: Arc<state::LiveState>,
-  lifecycle: Arc<Lifecycle>,
-  keep: usize,
-  p2pkh_version: u8,
-  p2sh_version: u8,
+  mut cfg: MempoolRecentWorkerTaskConfig,
 ) -> SupervisedTaskSpec<LiveWorker> {
-  let keep = keep.max(MIN_RECENT_MEMPOOL_TXS_FOR_API);
-  let initial = mempool_recent_worker_task(MempoolRecentWorkerTaskConfig {
-    db: db.clone(),
-    live_state: Arc::clone(&live_state),
-    rx: rx.subscribe(),
-    lifecycle: Arc::clone(&lifecycle),
-    keep,
-    p2pkh_version,
-    p2sh_version,
-  });
-  SupervisedTaskSpec::new("mempool recent", initial, move || {
-    Ok(mempool_recent_worker_task(MempoolRecentWorkerTaskConfig {
-      db: db.clone(),
-      live_state: Arc::clone(&live_state),
-      rx: rx.subscribe(),
-      lifecycle: Arc::clone(&lifecycle),
-      keep,
-      p2pkh_version,
-      p2sh_version,
-    }))
-  })
+  cfg.keep = cfg.keep.max(MIN_RECENT_MEMPOOL_TXS_FOR_API);
+  SupervisedTaskSpec::new(
+    "mempool recent",
+    mempool_recent_worker_task(cfg.clone()),
+    move || Ok(mempool_recent_worker_task(cfg.clone())),
+  )
 }
 
 fn islock_worker_task(cfg: IslockWorkerTaskConfig) -> WorkerTask<LiveWorker> {

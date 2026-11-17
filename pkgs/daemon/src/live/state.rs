@@ -150,6 +150,28 @@ impl LiveState {
     guard.insert(tx);
   }
 
+  /// Insert one row, then evict the oldest (by `last_seen_at`, then txid)
+  /// until at most `cap` remain.
+  pub fn insert_mempool_tx_capped(&self, tx: MempoolTx, cap: usize) {
+    let mut guard = self.mempool.write();
+    guard.insert(tx);
+    while guard.txs.len() > cap {
+      let Some(oldest) = guard
+        .txs
+        .values()
+        .min_by(|a, b| {
+          a.last_seen_at
+            .cmp(&b.last_seen_at)
+            .then_with(|| a.txid.cmp(&b.txid))
+        })
+        .map(|tx| tx.txid.clone())
+      else {
+        break;
+      };
+      guard.remove(&oldest);
+    }
+  }
+
   pub fn remove_mempool_tx(&self, txid: &[u8]) {
     let mut guard = self.mempool.write();
     guard.remove(txid);
@@ -840,5 +862,37 @@ mod tests {
       seen_at: 1001,
     });
     assert_eq!(live.chainlock().map(|c| c.block_height), Some(Some(43)));
+  }
+
+  #[test]
+  fn capped_mempool_insert_evicts_the_least_recently_seen_rows() {
+    let live = LiveState::new();
+    let row = |byte: u8, last_seen_at: i64| MempoolTx {
+      txid: vec![byte; 32],
+      raw_tx: Vec::new(),
+      version: 1,
+      tx_type: "normal".to_owned(),
+      lock_time: 0,
+      size: 1,
+      value_out: 0,
+      input_count: 0,
+      output_count: 0,
+      fee: None,
+      payload: None,
+      inputs: Vec::new(),
+      outputs: Vec::new(),
+      first_seen_at: last_seen_at,
+      last_seen_at,
+    };
+    for (byte, seen) in [(1, 30), (2, 10), (3, 20), (4, 40)] {
+      live.insert_mempool_tx_capped(row(byte, seen), 3);
+    }
+    assert_eq!(live.mempool_len(), 3);
+    assert!(live.mempool_tx(&[2; 32]).is_none(), "oldest row goes first");
+    live.insert_mempool_tx_capped(row(5, 50), 3);
+    assert!(live.mempool_tx(&[3; 32]).is_none());
+    for byte in [1, 4, 5] {
+      assert!(live.mempool_tx(&[byte; 32]).is_some());
+    }
   }
 }
