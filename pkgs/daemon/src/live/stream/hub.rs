@@ -181,7 +181,8 @@ mod tests {
   use super::StreamHub;
   use crate::lifecycle::Lifecycle;
   use crate::live::stream::LiveEvent;
-  use crate::sources::{SequenceEvent, ZmqEvent};
+  use crate::sources::zmq::test_wire;
+  use crate::sources::ZmqEvent;
   use std::sync::Arc;
   use tokio::sync::broadcast;
 
@@ -195,30 +196,15 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn fanout_only_streams_raw_tx_after_sequence_add() {
+  async fn fanout_pairs_raw_tx_with_the_wire_sequence_add() {
     let (tx, rx) = broadcast::channel(8);
     let hub = Arc::new(StreamHub::new(8));
     let lifecycle = Lifecycle::start();
     let mut out = hub.subscribe();
 
     let task = tokio::spawn(super::fanout_loop(rx, hub, lifecycle.clone()));
-    let raw_tx = hex::decode(concat!(
-      "01000000",
-      "01",
-      "0000000000000000000000000000000000000000000000000000000000000000",
-      "ffffffff",
-      "0a510101062f503253482f",
-      "ffffffff",
-      "01",
-      "00743ba40b000000",
-      "23",
-      "2103a69850243c993c0645a6e8b38c774174174cc766cd3ec2140afd24d831b84c41ac",
-      "00000000"
-    ))
-    .expect("valid transaction fixture");
-    let txid = crate::consensus::txid(&raw_tx).expect("transaction txid");
     tx.send(ZmqEvent::RawTx {
-      tx: raw_tx,
+      tx: test_wire::raw_tx(),
       sequence: 7,
     })
     .expect("raw tx should send");
@@ -228,17 +214,51 @@ mod tests {
         .is_err()
     );
 
-    tx.send(ZmqEvent::Sequence {
-      event: SequenceEvent::TxAdded {
-        txid,
-        mempool_sequence: 9,
-      },
-      sequence: 8,
-    })
+    tx.send(test_wire::sequence(
+      test_wire::RAW_TX_DISPLAY_TXID,
+      b'A',
+      Some(9),
+      8,
+    ))
     .expect("sequence should send");
-    let event = out.recv().await.expect("mempool tx should publish");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), out.recv())
+      .await
+      .expect("mempool tx should publish")
+      .expect("hub should stay open");
     let json = serde_json::to_value(event).expect("event should serialize");
     assert_eq!(json["type"], "mempool_tx");
+    assert_eq!(json["payload"]["txid"], test_wire::RAW_TX_DISPLAY_TXID);
+    assert_eq!(json["payload"]["sequence"], 7);
+    drop(tx);
+    lifecycle.stop();
+    task.await.expect("fanout loop should stop");
+  }
+
+  #[tokio::test]
+  async fn fanout_pairs_a_wire_sequence_add_that_arrives_first() {
+    let (tx, rx) = broadcast::channel(8);
+    let hub = Arc::new(StreamHub::new(8));
+    let lifecycle = Lifecycle::start();
+    let mut out = hub.subscribe();
+    let task = tokio::spawn(super::fanout_loop(rx, hub, lifecycle.clone()));
+    tx.send(test_wire::sequence(
+      test_wire::RAW_TX_DISPLAY_TXID,
+      b'A',
+      Some(9),
+      8,
+    ))
+    .expect("sequence should send");
+    tx.send(ZmqEvent::RawTx {
+      tx: test_wire::raw_tx(),
+      sequence: 7,
+    })
+    .expect("raw tx should send");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), out.recv())
+      .await
+      .expect("mempool tx should publish")
+      .expect("hub should stay open");
+    let json = serde_json::to_value(event).expect("event should serialize");
+    assert_eq!(json["payload"]["txid"], test_wire::RAW_TX_DISPLAY_TXID);
     drop(tx);
     lifecycle.stop();
     task.await.expect("fanout loop should stop");

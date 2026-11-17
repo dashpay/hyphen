@@ -71,3 +71,32 @@ fn now_epoch_secs() -> i64 {
     .unwrap_or_default()
     .as_secs() as i64
 }
+
+#[cfg(test)]
+mod tests {
+  use crate::live::state::LiveState;
+  use crate::sources::zmq::test_wire;
+  use crate::sources::ZmqEvent;
+
+  #[test]
+  fn a_wire_sequence_removal_matches_the_lock_key() {
+    let state = LiveState::new();
+    let raw = test_wire::raw_tx();
+    let txid = crate::consensus::txid(&raw).expect("transaction txid");
+    super::handle_event(
+      &state,
+      ZmqEvent::RawTxLock {
+        tx: raw,
+        sequence: 1,
+      },
+    )
+    .expect("lock should apply");
+    assert!(state.islock(&txid).is_some());
+    super::handle_event(
+      &state,
+      test_wire::sequence(test_wire::RAW_TX_DISPLAY_TXID, b'R', Some(2), 2),
+    )
+    .expect("removal should apply");
+    assert!(state.islock(&txid).is_none());
+  }
+}

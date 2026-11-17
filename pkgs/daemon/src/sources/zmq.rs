@@ -41,6 +41,10 @@ pub enum ZmqEvent {
 }
 
 /// Typed interpretation of the node `sequence` ZMQ topic.
+///
+/// Hashes are in serialized byte order, the same order as `consensus::txid`,
+/// block transaction hashes and RPC-derived keys. The node publishes them in
+/// display order on the wire; `decode_sequence_event` reverses them once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SequenceEvent {
   BlockConnected {
@@ -392,12 +396,14 @@ fn decode_sequence_event(payload: &[u8]) -> Result<SequenceEvent, DaemonError> {
     });
   }
 
-  let hash: [u8; 32] = payload[..32]
+  let mut hash: [u8; 32] = payload[..32]
     .try_into()
     .map_err(|_| DaemonError::RestSource {
       message: "sequence hash must be 32 bytes".to_owned(),
       kind: RestErrorKind::Other,
     })?;
+  // The node writes sequence hashes reversed (display order); every other key is serialized order.
+  hash.reverse();
   let kind = payload[32];
   match kind {
     b'C' => {
@@ -456,6 +462,56 @@ fn parse_u64_le(bytes: &[u8], field: &str) -> Result<u64, DaemonError> {
     kind: RestErrorKind::Other,
   })?;
   Ok(u64::from_le_bytes(raw))
+}
+
+/// Wire-format fixtures for the `sequence` topic, shared by consumer tests.
+#[cfg(test)]
+pub(crate) mod test_wire {
+  use super::{decode_event, RawZmqMessage, ZmqEvent};
+
+  /// Display-order txid of [`raw_tx`], as RPC prints it and the node sends it on `sequence`.
+  pub(crate) const RAW_TX_DISPLAY_TXID: &str =
+    "ef3ee42b51e2a19c4820ef182844a36db1201c61eb0dec5b42f84be4ad1a1ca7";
+
+  pub(crate) fn raw_tx() -> Vec<u8> {
+    hex::decode(concat!(
+      "01000000",
+      "01",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "ffffffff",
+      "0a510101062f503253482f",
+      "ffffffff",
+      "01",
+      "00743ba40b000000",
+      "23",
+      "2103a69850243c993c0645a6e8b38c774174174cc766cd3ec2140afd24d831b84c41ac",
+      "00000000"
+    ))
+    .expect("valid transaction fixture")
+  }
+
+  /// Decode one `sequence` message laid out like the node's `SendSequenceMsg`:
+  /// the hash reversed into display order, a label, then an optional mempool sequence.
+  pub(crate) fn sequence(
+    display_hash: &str,
+    label: u8,
+    mempool_sequence: Option<u64>,
+    sequence: u32,
+  ) -> ZmqEvent {
+    let mut payload = hex::decode(display_hash).expect("display hash hex");
+    payload.push(label);
+    if let Some(mempool_sequence) = mempool_sequence {
+      payload.extend_from_slice(&mempool_sequence.to_le_bytes());
+    }
+    decode_event(&RawZmqMessage {
+      frames: vec![
+        b"sequence".to_vec(),
+        payload,
+        sequence.to_le_bytes().to_vec(),
+      ],
+    })
+    .expect("sequence message should decode")
+  }
 }
 
 #[cfg(test)]
@@ -528,6 +584,71 @@ mod tests {
         mempool_sequence: 42,
       }
     );
+  }
+
+  #[test]
+  fn sequence_txids_decode_to_the_serialized_order_of_the_raw_transaction() {
+    let raw = super::test_wire::raw_tx();
+    let txid = crate::consensus::txid(&raw).expect("transaction txid");
+    assert_ne!(
+      hex::encode(txid),
+      super::test_wire::RAW_TX_DISPLAY_TXID,
+      "fixture must be asymmetric"
+    );
+    for (label, expected) in [
+      (
+        b'A',
+        SequenceEvent::TxAdded {
+          txid,
+          mempool_sequence: 42,
+        },
+      ),
+      (
+        b'R',
+        SequenceEvent::TxRemoved {
+          txid,
+          mempool_sequence: 42,
+        },
+      ),
+    ] {
+      assert_eq!(
+        super::test_wire::sequence(super::test_wire::RAW_TX_DISPLAY_TXID, label, Some(42), 3),
+        ZmqEvent::Sequence {
+          event: expected,
+          sequence: 3,
+        }
+      );
+    }
+  }
+
+  #[test]
+  fn sequence_block_hashes_decode_to_serialized_order_and_format_back_to_display() {
+    // Mainnet genesis block, as `getblockhash 0` prints it.
+    let display = "00000ffd590b1485b3caadc19b22e6379c733355108f107a430458cdf3407ab6";
+    let mut serialized: [u8; 32] = hex::decode(display)
+      .expect("display hash")
+      .try_into()
+      .expect("32 bytes");
+    serialized.reverse();
+    for (label, expected) in [
+      (b'C', SequenceEvent::BlockConnected { hash: serialized }),
+      (b'D', SequenceEvent::BlockDisconnected { hash: serialized }),
+    ] {
+      let ZmqEvent::Sequence { event, .. } = super::test_wire::sequence(display, label, None, 1)
+      else {
+        panic!("sequence event expected");
+      };
+      assert_eq!(event, expected);
+      let (SequenceEvent::BlockConnected { hash } | SequenceEvent::BlockDisconnected { hash }) =
+        event
+      else {
+        panic!("block event expected");
+      };
+      assert_eq!(
+        crate::utils::view_hex(&hash, crate::utils::HashEndian::Ser),
+        display
+      );
+    }
   }
 
   #[test]

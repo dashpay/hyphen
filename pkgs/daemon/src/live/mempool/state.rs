@@ -406,4 +406,55 @@ mod tests {
     }
     assert_eq!(live_state.mempool_len(), 4);
   }
+
+  #[tokio::test]
+  async fn raw_tx_and_wire_sequence_events_pair_and_remove_the_same_row() {
+    use crate::sources::zmq::test_wire;
+    // nosemgrep: contrib.r2c.daemon-live-state-must-not-depend-on-rest -- test fixture
+    let db = crate::rest::hydb_fake::MemDb::new().into_hydb();
+    let live_state = crate::live::state::LiveState::new();
+    let ingest_status = crate::ingest::IngestStatus::new();
+    ingest_status.set_tips_for_test(2_000, 2_000);
+    let ctx = super::RecentSyncCtx {
+      db: &db,
+      live_state: &live_state,
+      ingest_status: &ingest_status,
+      cap: 8,
+      p2pkh_version: 76,
+      p2sh_version: 16,
+    };
+    let raw = test_wire::raw_tx();
+    let txid = crate::consensus::txid(&raw).expect("transaction txid");
+    let mut pending_raw = PendingRawTxs::new(4);
+    let mut pending_adds = PendingTxAdds::new(4);
+    super::handle_event(
+      &ctx,
+      ZmqEvent::RawTx {
+        tx: raw,
+        sequence: 1,
+      },
+      &mut pending_raw,
+      &mut pending_adds,
+    )
+    .await
+    .expect("raw tx should apply");
+    super::handle_event(
+      &ctx,
+      test_wire::sequence(test_wire::RAW_TX_DISPLAY_TXID, b'A', Some(1), 1),
+      &mut pending_raw,
+      &mut pending_adds,
+    )
+    .await
+    .expect("sequence add should apply");
+    assert!(live_state.mempool_tx(&txid).is_some());
+    super::handle_event(
+      &ctx,
+      test_wire::sequence(test_wire::RAW_TX_DISPLAY_TXID, b'R', Some(2), 2),
+      &mut pending_raw,
+      &mut pending_adds,
+    )
+    .await
+    .expect("sequence removal should apply");
+    assert!(live_state.mempool_tx(&txid).is_none());
+  }
 }
