@@ -49,7 +49,7 @@ pub(crate) async fn live_tx_detail(
     })
     .ok_or_else(|| ApiError::not_found("transaction not found"))?;
   let islocked = is_islocked(state, &tx.txid);
-  let txid_hex = utils::view_hex(&tx.txid, HashEndian::View);
+  let txid_hex = utils::view_hex(&tx.txid, HashEndian::Ser);
 
   let mut value = crate::live::mempool::query::build_tx_value_from_persisted(
     &state.live_state,
@@ -103,15 +103,16 @@ pub(crate) async fn live_search_response(
     return Ok(None);
   }
   let (primary_txid, secondary_txid) = txid_lookup.ordered_candidates(HashEndian::View);
-  let found = state.live_state.mempool_tx(&primary_txid).is_some()
-    || secondary_txid
+  let tx = state.live_state.mempool_tx(&primary_txid).or_else(|| {
+    secondary_txid
       .as_ref()
-      .is_some_and(|txid| state.live_state.mempool_tx(txid).is_some());
-  if !found {
+      .and_then(|txid| state.live_state.mempool_tx(txid))
+  });
+  let Some(tx) = tx else {
     return Ok(None);
-  }
+  };
   Ok(Some(SearchResponse::Tx(SearchTxResult {
-    tx_hash: utils::view_hex(&primary_txid, HashEndian::View),
+    tx_hash: utils::view_hex(&tx.txid, HashEndian::Ser),
     tx_tags: TxTags {
       mined: false,
       coinbase: false,

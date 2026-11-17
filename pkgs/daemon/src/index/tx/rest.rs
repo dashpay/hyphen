@@ -491,6 +491,37 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn pending_detail_and_search_return_the_display_txid_for_either_query_order() {
+    // Serialized order, as every live mempool key is stored.
+    let txid: Vec<u8> = (0..32).collect();
+    let display = utils::view_hex(&txid, HashEndian::Ser);
+    assert_ne!(display, hex::encode(&txid));
+    for query in [display.clone(), hex::encode(&txid)] {
+      let mut state = crate::tests::app_state();
+      state.live.mempool = true;
+      state.hydb = crate::rest::hydb_fake::MemDb::new().into_hydb();
+      state
+        .live_state
+        .insert_mempool_tx(mempool_tx_fixture(txid.clone(), normal_tx_bytes()));
+
+      let detail = super::get_tx(State(state.clone()), Path(query.clone()))
+        .await
+        .expect("pending tx detail should resolve")
+        .0;
+      assert_eq!(detail.txid, display, "detail for query {query}");
+
+      let query_bytes = utils::decode_hex_to(&query, HashEndian::Ser).expect("query should decode");
+      let Some(SearchResponse::Tx(result)) = super::search_by_txid(&state, &query, &query_bytes)
+        .await
+        .expect("search should succeed")
+      else {
+        panic!("pending transaction should resolve for query {query}");
+      };
+      assert_eq!(result.tx_hash, display, "search for query {query}");
+    }
+  }
+
+  #[tokio::test]
   async fn rawtx_falls_back_to_recent_mempool_cache() {
     let txid = vec![0x11; 32];
     let raw_tx = normal_tx_bytes();
