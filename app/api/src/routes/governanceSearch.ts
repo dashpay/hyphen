@@ -20,6 +20,7 @@ import {
 } from "../internal/json.js";
 import { encodePathSegment, createQuery } from "../internal/query.js";
 import { requestJsonResult, type ClientContext } from "../internal/transport.js";
+import { readTransactionLive, type TransactionLive } from "./transactions.js";
 
 /**
  * Live governance proposal detail.
@@ -81,6 +82,7 @@ export interface SearchTransactionResult {
     readonly mined: boolean;
     readonly coinbase: boolean;
   };
+  readonly live: TransactionLive;
 }
 
 /**
@@ -302,6 +304,7 @@ function parseSearchResult(value: unknown, path: string): SearchResult {
           mined: expectBoolean(readField(txTags, "mined", `${path}.txTags`), `${path}.txTags.mined`),
           coinbase: expectBoolean(readField(txTags, "coinbase", `${path}.txTags`), `${path}.txTags.coinbase`),
         },
+        live: readTransactionLive(object, path),
       };
     }
     case "validator":

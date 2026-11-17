@@ -134,7 +134,6 @@ pub async fn build_tx_value(
   raw_tx: &[u8],
   p2pkh_version: u8,
   p2sh_version: u8,
-  _islocked: bool,
 ) -> Result<TxDetail, DaemonError> {
   let tx = decode_tx(raw_tx)?;
   let prevout_map = load_prevouts(db, &tx).await?;
@@ -225,13 +224,12 @@ pub fn build_tx_value_from_persisted(
   live_state: &LiveState,
   txid_hex: &str,
   txid_bytes: &[u8],
-  islocked: bool,
 ) -> Option<TxDetail> {
   let tx = live_state.mempool_tx(txid_bytes)?;
-  Some(mempool_tx_value(txid_hex, &tx, islocked))
+  Some(mempool_tx_value(txid_hex, &tx))
 }
 
-fn mempool_tx_value(txid_hex: &str, tx: &MempoolTx, _islocked: bool) -> TxDetail {
+fn mempool_tx_value(txid_hex: &str, tx: &MempoolTx) -> TxDetail {
   let public_tx_type = crate::tx::public_tx_type(
     &tx.tx_type,
     tx.outputs

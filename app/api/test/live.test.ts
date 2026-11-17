@@ -91,6 +91,57 @@ describe("live routes", (): void => {
     expect(network.validators.regular.status["enabled"]).toBe(77);
   });
 
+  it.each([
+    ["a known lock", { tags: { islock: true } }, true],
+    ["an empty overlay", {}, undefined],
+    ["no overlay", undefined, undefined],
+  ])("reads mempool lock state from live tags with %s", async (_name, live, islock): Promise<void> => {
+    const client = createClient({
+      "/api/v1/mempool/txs": {
+        value: [
+          {
+            txHash: "mempool-a",
+            txType: "normal",
+            txSize: 225,
+            valueOut: 123_456,
+            firstSeenAt: "2026-03-21T00:00:01Z",
+            lastSeenAt: "2026-03-21T00:00:02Z",
+            tags: { mined: false, coinbase: false },
+            ...(live === undefined ? {} : { live }),
+          },
+        ],
+      },
+    });
+    const page = expectOk(await client.live.listMempoolTransactions());
+    expect(page.value[0]?.live.tags?.islock).toBe(islock);
+    expect(page.value[0]?.tags).toEqual({ mined: false, coinbase: false });
+  });
+
+  it("rejects a non-boolean mempool lock flag", async (): Promise<void> => {
+    const client = createClient({
+      "/api/v1/mempool/txs": {
+        value: [
+          {
+            txHash: "mempool-a",
+            txType: "normal",
+            txSize: 225,
+            valueOut: 123_456,
+            firstSeenAt: "2026-03-21T00:00:01Z",
+            lastSeenAt: "2026-03-21T00:00:02Z",
+            tags: { mined: false, coinbase: false },
+            live: { tags: { islock: "true" } },
+          },
+        ],
+      },
+    });
+    const error = expectErr(await client.live.listMempoolTransactions());
+    expect(error.kind).toBe("contract");
+    if (error.kind !== "contract") {
+      throw new Error("expected contract error");
+    }
+    expect(error.path).toBe("$.value[0].live.tags.islock");
+  });
+
   it("classifies a disabled live capability as capability-unavailable", async (): Promise<void> => {
     const client = ApCreateClient({
       baseUrl: "http://example.test",

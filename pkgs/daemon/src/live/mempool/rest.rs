@@ -80,7 +80,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<MempoolRespon
 #[utoipa::path(
   get,
   path = "/api/v1/mempool/txs",
-  description = "Requires the live mempool capability. Returns live mempool transactions only, not indexed chain history. If the live ISLock capability is enabled, transaction tags include current ISLock state.",
+  description = "Requires the live mempool capability. Returns live mempool transactions only, not indexed chain history. With the live ISLock capability enabled, each row carries live.tags.islock=true when an InstantSend lock for the transaction has been seen; otherwise, or with that capability disabled, the flag is omitted (unknown, never false).",
   params(CursorParams),
   responses(
     (status = 200, description = "Recent mempool transactions", body = MempoolTxListResponse),
@@ -128,6 +128,7 @@ pub async fn recent_txs(
         mined: false,
         coinbase: false,
       },
+      live: crate::live::islock::lock_overlay(state.live_state.has_islock(&tx.txid)),
     });
   }
   let total_count = state
@@ -156,4 +157,43 @@ pub async fn recent_txs(
 
 fn decode_mempool_tx_cursor(cursor: Option<&str>) -> Result<Option<MempoolTxCursor>, ApiError> {
   decode_cursor::<MempoolTxCursor>(cursor)
+}
+
+#[cfg(test)]
+mod tests {
+  use axum::extract::{Query, State};
+
+  #[tokio::test]
+  async fn mempool_rows_report_a_known_lock_under_live_tags_and_omit_unknown_state() {
+    let mut state = crate::tests::app_state();
+    state.live.mempool = true;
+    state.live.islock = true;
+    let raw = crate::sources::zmq::test_wire::raw_tx();
+    let txid = crate::consensus::txid(&raw).expect("transaction txid");
+    let tx = crate::live::mempool::query::normalize_tx(&state.hydb, &txid, &raw, 76, 16, 10, 20)
+      .await
+      .expect("transaction should normalize");
+    state.live_state.insert_mempool_tx(tx);
+    for locked in [false, true] {
+      if locked {
+        state.live_state.record_islock(txid);
+      }
+      let axum::Json(page) = super::recent_txs(
+        State(state.clone()),
+        Query(crate::rest::CursorParams::default()),
+      )
+      .await
+      .expect("mempool list should succeed");
+      let row = serde_json::to_value(&page.value[0]).expect("row should serialize");
+      assert_eq!(
+        row["tags"],
+        serde_json::json!({"mined": false, "coinbase": false})
+      );
+      if locked {
+        assert_eq!(row["live"], serde_json::json!({"tags": {"islock": true}}));
+      } else {
+        assert_eq!(row["live"], serde_json::json!({}));
+      }
+    }
+  }
 }

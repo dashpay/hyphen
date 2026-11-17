@@ -169,17 +169,19 @@ pub struct TxTags {
 }
 
 /// Nullable live tag summary for transaction overlay routes.
-#[derive(Debug, Default, Serialize, ToSchema, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TxLiveTags {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub mempool: Option<bool>,
+  /// True when an InstantSend lock for the transaction has been seen. Never
+  /// false: omitted when no lock is known.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub islock: Option<bool>,
 }
 
 /// Nullable live overlay for transaction routes.
-#[derive(Debug, Default, Serialize, ToSchema, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TxLive {
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -509,6 +511,7 @@ pub struct MempoolTxSummary {
   pub first_seen_at: String,
   pub last_seen_at: String,
   pub tags: TxTags,
+  pub live: TxLive,
 }
 
 /// Live page envelope for recent mempool transactions.
@@ -680,6 +683,7 @@ pub struct SearchTxResult {
   /// Canonical display-order transaction id for the matched transaction.
   pub tx_hash: String,
   pub tx_tags: TxTags,
+  pub live: TxLive,
 }
 
 /// Search result variant for an address.
@@ -1031,6 +1035,20 @@ mod tests {
       assert!(
         schemas.contains_key(name),
         "expected OpenAPI schema {name} to be registered"
+      );
+    }
+  }
+
+  #[test]
+  fn openapi_documents_lock_state_under_live_tags_on_pending_rows() {
+    let doc = serde_json::to_value(ApiDoc::openapi()).expect("openapi should serialize");
+    let schemas = &doc["components"]["schemas"];
+    assert!(schemas["TxTags"]["properties"].get("islock").is_none());
+    assert!(schemas["TxLiveTags"]["properties"]["islock"].is_object());
+    for schema in ["MempoolTxSummary", "MempoolTxEvent", "SearchTxResult"] {
+      assert_eq!(
+        schemas[schema]["properties"]["live"]["$ref"], "#/components/schemas/TxLive",
+        "{schema} should carry the live overlay"
       );
     }
   }

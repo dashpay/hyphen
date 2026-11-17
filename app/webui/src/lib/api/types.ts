@@ -263,6 +263,7 @@ export interface ApiMempoolTxSummary {
   readonly txType?: string | null;
   readonly valueOut?: number | null;
   readonly tags: ApiTxTags;
+  readonly live?: ApiTxLive | null;
 }
 
 export interface ApiMempoolTxListResponse {
@@ -296,6 +297,7 @@ export interface ApiSearchResponse {
   readonly status?: string | null;
   readonly blockTags?: ApiBlockTags | null;
   readonly txTags?: ApiTxTags | null;
+  readonly live?: ApiTxLive | null;
 }
 
 export interface ApiProposalDetail {

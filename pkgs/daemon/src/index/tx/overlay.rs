@@ -23,14 +23,14 @@ pub(crate) async fn indexed_live(state: &AppState, txid: &[u8]) -> Result<TxLive
   } else {
     None
   };
-  let islock = if state.live.islock {
-    Some(is_islocked(state, txid))
-  } else {
-    None
-  };
   Ok(TxLive {
-    tags: live_tags(mempool, islock),
+    tags: live_tags(mempool, is_islocked(state, txid)),
   })
+}
+
+/// Live overlay for rows that only report lock state.
+pub(crate) fn lock_live(state: &AppState, txid: &[u8]) -> TxLive {
+  crate::live::islock::lock_overlay(state.live_state.has_islock(txid))
 }
 
 pub(crate) async fn live_tx_detail(
@@ -48,25 +48,16 @@ pub(crate) async fn live_tx_detail(
         .and_then(|txid| state.live_state.mempool_tx(txid))
     })
     .ok_or_else(|| ApiError::not_found("transaction not found"))?;
-  let islocked = is_islocked(state, &tx.txid);
   let txid_hex = utils::view_hex(&tx.txid, HashEndian::Ser);
 
   let mut value = crate::live::mempool::query::build_tx_value_from_persisted(
     &state.live_state,
     &txid_hex,
     &tx.txid,
-    islocked,
   )
   .ok_or_else(|| ApiError::not_found("transaction not found"))?;
   value.live = TxLive {
-    tags: live_tags(
-      Some(true),
-      if state.live.islock {
-        Some(islocked)
-      } else {
-        None
-      },
-    ),
+    tags: live_tags(Some(true), is_islocked(state, &tx.txid)),
   };
   Ok(value)
 }
@@ -117,11 +108,13 @@ pub(crate) async fn live_search_response(
       mined: false,
       coinbase: false,
     },
+    live: lock_live(state, &tx.txid),
   })))
 }
 
-fn is_islocked(state: &AppState, txid: &[u8]) -> bool {
-  state.live_state.islock(txid).is_some()
+/// `Some(true)` when a lock is known; lock state is never reported false.
+fn is_islocked(state: &AppState, txid: &[u8]) -> Option<bool> {
+  state.live_state.has_islock(txid).then_some(true)
 }
 
 fn live_tags(mempool: Option<bool>, islock: Option<bool>) -> Option<TxLiveTags> {

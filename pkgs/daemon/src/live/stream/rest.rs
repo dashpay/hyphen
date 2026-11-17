@@ -30,7 +30,7 @@ use futures::stream;
 #[utoipa::path(
   get,
   path = "/api/v1/stream",
-  description = "Requires the live stream capability. Event payloads are server-specific live stream envelopes sourced from enabled ZMQ-fed and RPC-fed pipelines, not from any indexed snapshot.",
+  description = "Requires the live stream capability. Event payloads are server-specific live stream envelopes sourced from enabled ZMQ-fed and RPC-fed pipelines, not from any indexed snapshot. With the live ISLock capability enabled, a mempool_tx row carries live.tags.islock=true when an InstantSend lock for the transaction is known; otherwise, or with that capability disabled, the flag is omitted. A lock seen after the row was sent re-sends the row with the rawtxlock topic sequence number, so consumers should upsert mempool rows by txid rather than append.",
   responses(
     (
       status = 200,

@@ -365,6 +365,7 @@ impl Visor for LiveVisor {
       let spec = crate::live::stream_supervised_task(
         tx.clone(),
         stream_hub,
+        self.cfg.islock_enabled,
         Arc::clone(&self.cfg.lifecycle),
       );
       let (task, worker) = spawn_live_supervised_task(Arc::clone(&self.cfg.lifecycle), spec);

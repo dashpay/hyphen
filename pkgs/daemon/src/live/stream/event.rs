@@ -10,15 +10,21 @@ use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
 
+use crate::rest::openapi::TxLive;
 use crate::sources::ZmqEvent;
 use crate::utils::{self, HashEndian};
 
 /// Stream payload for one mempool transaction event.
+///
+/// `live.tags.islock` is true when an InstantSend lock for the txid is known,
+/// and omitted otherwise. A lock seen after the row was sent re-sends the row
+/// with the `rawtxlock` topic's sequence number; consumers upsert by txid.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MempoolTxEvent {
   pub sequence: u32,
   pub txid: String,
   pub rawtx: String,
+  pub live: TxLive,
 }
 
 /// Stream payload for one ChainLock update.
@@ -88,13 +94,14 @@ pub enum LiveEvent {
 
 impl LiveEvent {
   /// Construct one mempool transaction event from a raw transaction payload.
-  pub fn mempool_tx(txid: [u8; 32], raw_tx: Vec<u8>, sequence: u32) -> Self {
+  pub fn mempool_tx(txid: [u8; 32], raw_tx: Vec<u8>, sequence: u32, locked: bool) -> Self {
     Self::MempoolTx {
       ts: now_epoch_secs(),
       payload: MempoolTxEvent {
         sequence,
         txid: utils::view_hex(&txid, HashEndian::Ser),
         rawtx: hex::encode(raw_tx),
+        live: crate::live::islock::lock_overlay(locked),
       },
     }
   }
@@ -225,9 +232,13 @@ mod tests {
   fn raw_tx_zmq_event_becomes_mempool_stream_event() {
     let raw_tx = raw_tx();
     let txid = crate::consensus::txid(&raw_tx).expect("transaction txid");
-    let event = LiveEvent::mempool_tx(txid, raw_tx.clone(), 7);
+    let event = LiveEvent::mempool_tx(txid, raw_tx.clone(), 7, true);
     let json = serde_json::to_value(event).expect("stream event should serialize");
     assert_eq!(json["type"], "mempool_tx");
+    assert_eq!(json["payload"]["live"]["tags"]["islock"], true);
+    let unlocked = LiveEvent::mempool_tx(txid, raw_tx.clone(), 7, false);
+    let unlocked = serde_json::to_value(unlocked).expect("stream event should serialize");
+    assert_eq!(unlocked["payload"]["live"], serde_json::json!({}));
     assert_eq!(json["payload"]["sequence"], 7);
     assert_eq!(json["payload"]["rawtx"], hex::encode(raw_tx));
   }

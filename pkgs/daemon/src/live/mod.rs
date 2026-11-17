@@ -116,6 +116,8 @@ pub(crate) struct LiveZmqWorkerTaskConfig {
 pub(crate) struct StreamWorkerTaskConfig {
   pub rx: broadcast::Receiver<ZmqEvent>,
   pub stream_hub: Arc<stream::StreamHub>,
+  /// Mirrors `live.enable_islock`, so the stream and REST report the same locks.
+  pub islock_enabled: bool,
   pub lifecycle: Arc<Lifecycle>,
 }
 
@@ -435,7 +437,7 @@ pub(crate) fn live_zmq_supervised_task(
 
 fn stream_worker_task(cfg: StreamWorkerTaskConfig) -> WorkerTask<LiveWorker> {
   lifecycle_worker_task("stream_hub", Arc::clone(&cfg.lifecycle), async move {
-    stream::hub::fanout_loop(cfg.rx, cfg.stream_hub, cfg.lifecycle).await;
+    stream::hub::fanout_loop(cfg.rx, cfg.stream_hub, cfg.islock_enabled, cfg.lifecycle).await;
     Ok(())
   })
 }
@@ -444,17 +446,20 @@ fn stream_worker_task(cfg: StreamWorkerTaskConfig) -> WorkerTask<LiveWorker> {
 pub(crate) fn stream_supervised_task(
   rx: broadcast::Sender<ZmqEvent>,
   stream_hub: Arc<stream::StreamHub>,
+  islock_enabled: bool,
   lifecycle: Arc<Lifecycle>,
 ) -> SupervisedTaskSpec<LiveWorker> {
   let initial = stream_worker_task(StreamWorkerTaskConfig {
     rx: rx.subscribe(),
     stream_hub: Arc::clone(&stream_hub),
+    islock_enabled,
     lifecycle: Arc::clone(&lifecycle),
   });
   SupervisedTaskSpec::new("stream hub", initial, move || {
     Ok(stream_worker_task(StreamWorkerTaskConfig {
       rx: rx.subscribe(),
       stream_hub: Arc::clone(&stream_hub),
+      islock_enabled,
       lifecycle: Arc::clone(&lifecycle),
     }))
   })

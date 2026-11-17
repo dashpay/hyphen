@@ -29,9 +29,7 @@
 // switched over, its cell is written but not yet read (or vice versa).
 #![allow(dead_code)]
 
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde_json::Value;
@@ -42,7 +40,7 @@ use serde_json::Value;
 pub struct LiveState {
   chainlock: SingletonCell<ChainLockSnapshot>,
   network: SingletonCell<NetworkSnapshot>,
-  islock: KeyedCell<Vec<u8>, IsLock>,
+  islock: Shared<crate::live::islock::state::KnownLocks>,
   protx: SingletonCell<ProtxSnapshot>,
   mempool_summary: SingletonCell<MempoolSummary>,
   mempool: Shared<MempoolTxs>,
@@ -72,18 +70,14 @@ impl LiveState {
     self.network.set(snapshot);
   }
 
-  /// The current InstantSend lock for a txid (serialized-endian key), if any.
-  pub fn islock(&self, txid: &[u8]) -> Option<Arc<IsLock>> {
-    self.islock.get(txid)
+  /// Whether an InstantSend lock has been seen for a serialized-endian txid.
+  pub fn has_islock(&self, txid: &[u8]) -> bool {
+    self.islock.read().contains(txid)
   }
 
-  pub fn upsert_islock(&self, islock: IsLock) {
-    let txid = islock.txid.clone();
-    self.islock.insert(txid, islock);
-  }
-
-  pub fn remove_islock(&self, txid: &[u8]) {
-    self.islock.remove(txid);
+  /// Remember a lock for a serialized-endian txid; locks are never withdrawn.
+  pub fn record_islock(&self, txid: [u8; 32]) {
+    self.islock.write().insert(txid);
   }
 
   /// The current live ProTx (validator) snapshot, or `None` before first poll.
@@ -415,58 +409,6 @@ impl<T> Default for SingletonCell<T> {
   fn default() -> Self {
     Self(Shared::new(None))
   }
-}
-
-/// A keyed set of live values (e.g. mempool txs, InstantSend locks) behind one
-/// `RwLock`. Reads clone an `Arc`; writes insert/remove/replace whole entries.
-#[derive(Debug)]
-struct KeyedCell<K, V>(Shared<HashMap<K, Arc<V>>>);
-
-impl<K: Eq + Hash, V> KeyedCell<K, V> {
-  fn get<Q>(&self, key: &Q) -> Option<Arc<V>>
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq + ?Sized,
-  {
-    self.0.read().get(key).cloned()
-  }
-
-  fn insert(&self, key: K, value: V) {
-    self.0.write().insert(key, Arc::new(value));
-  }
-
-  fn remove<Q>(&self, key: &Q)
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq + ?Sized,
-  {
-    self.0.write().remove(key);
-  }
-
-  /// Snapshot of all current values (a cheap `Arc` clone each).
-  fn values(&self) -> Vec<Arc<V>> {
-    self.0.read().values().cloned().collect()
-  }
-
-  fn len(&self) -> usize {
-    self.0.read().len()
-  }
-}
-
-impl<K, V> Default for KeyedCell<K, V> {
-  fn default() -> Self {
-    Self(Shared::new(HashMap::new()))
-  }
-}
-
-/// One currently known InstantSend tx-lock — the locked tx bytes and when seen.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IsLock {
-  /// Serialized-endian txid (the key).
-  pub txid: Vec<u8>,
-  /// Raw `pubrawtxlock` payload bytes (the locked transaction).
-  pub raw_islock: Vec<u8>,
-  pub seen_at: i64,
 }
 
 /// Latest ChainLock as reported by the node (`getbestchainlock`).
