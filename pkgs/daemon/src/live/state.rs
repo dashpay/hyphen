@@ -29,9 +29,7 @@
 // switched over, its cell is written but not yet read (or vice versa).
 #![allow(dead_code)]
 
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde_json::Value;
@@ -42,7 +40,7 @@ use serde_json::Value;
 pub struct LiveState {
   chainlock: SingletonCell<ChainLockSnapshot>,
   network: SingletonCell<NetworkSnapshot>,
-  islock: KeyedCell<Vec<u8>, IsLock>,
+  islock: Shared<crate::live::islock::state::KnownLocks>,
   protx: SingletonCell<ProtxSnapshot>,
   mempool_summary: SingletonCell<MempoolSummary>,
   mempool: Shared<MempoolTxs>,
@@ -72,18 +70,14 @@ impl LiveState {
     self.network.set(snapshot);
   }
 
-  /// The current InstantSend lock for a txid (serialized-endian key), if any.
-  pub fn islock(&self, txid: &[u8]) -> Option<Arc<IsLock>> {
-    self.islock.get(txid)
+  /// Whether an InstantSend lock has been seen for a serialized-endian txid.
+  pub fn has_islock(&self, txid: &[u8]) -> bool {
+    self.islock.read().contains(txid)
   }
 
-  pub fn upsert_islock(&self, islock: IsLock) {
-    let txid = islock.txid.clone();
-    self.islock.insert(txid, islock);
-  }
-
-  pub fn remove_islock(&self, txid: &[u8]) {
-    self.islock.remove(txid);
+  /// Remember a lock for a serialized-endian txid; locks are never withdrawn.
+  pub fn record_islock(&self, txid: [u8; 32]) {
+    self.islock.write().insert(txid);
   }
 
   /// The current live ProTx (validator) snapshot, or `None` before first poll.
@@ -148,6 +142,28 @@ impl LiveState {
   pub fn insert_mempool_tx(&self, tx: MempoolTx) {
     let mut guard = self.mempool.write();
     guard.insert(tx);
+  }
+
+  /// Insert one row, then evict the oldest (by `last_seen_at`, then txid)
+  /// until at most `cap` remain.
+  pub fn insert_mempool_tx_capped(&self, tx: MempoolTx, cap: usize) {
+    let mut guard = self.mempool.write();
+    guard.insert(tx);
+    while guard.txs.len() > cap {
+      let Some(oldest) = guard
+        .txs
+        .values()
+        .min_by(|a, b| {
+          a.last_seen_at
+            .cmp(&b.last_seen_at)
+            .then_with(|| a.txid.cmp(&b.txid))
+        })
+        .map(|tx| tx.txid.clone())
+      else {
+        break;
+      };
+      guard.remove(&oldest);
+    }
   }
 
   pub fn remove_mempool_tx(&self, txid: &[u8]) {
@@ -393,58 +409,6 @@ impl<T> Default for SingletonCell<T> {
   fn default() -> Self {
     Self(Shared::new(None))
   }
-}
-
-/// A keyed set of live values (e.g. mempool txs, InstantSend locks) behind one
-/// `RwLock`. Reads clone an `Arc`; writes insert/remove/replace whole entries.
-#[derive(Debug)]
-struct KeyedCell<K, V>(Shared<HashMap<K, Arc<V>>>);
-
-impl<K: Eq + Hash, V> KeyedCell<K, V> {
-  fn get<Q>(&self, key: &Q) -> Option<Arc<V>>
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq + ?Sized,
-  {
-    self.0.read().get(key).cloned()
-  }
-
-  fn insert(&self, key: K, value: V) {
-    self.0.write().insert(key, Arc::new(value));
-  }
-
-  fn remove<Q>(&self, key: &Q)
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq + ?Sized,
-  {
-    self.0.write().remove(key);
-  }
-
-  /// Snapshot of all current values (a cheap `Arc` clone each).
-  fn values(&self) -> Vec<Arc<V>> {
-    self.0.read().values().cloned().collect()
-  }
-
-  fn len(&self) -> usize {
-    self.0.read().len()
-  }
-}
-
-impl<K, V> Default for KeyedCell<K, V> {
-  fn default() -> Self {
-    Self(Shared::new(HashMap::new()))
-  }
-}
-
-/// One currently known InstantSend tx-lock — the locked tx bytes and when seen.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IsLock {
-  /// Serialized-endian txid (the key).
-  pub txid: Vec<u8>,
-  /// Raw `pubrawtxlock` payload bytes (the locked transaction).
-  pub raw_islock: Vec<u8>,
-  pub seen_at: i64,
 }
 
 /// Latest ChainLock as reported by the node (`getbestchainlock`).
@@ -840,5 +804,37 @@ mod tests {
       seen_at: 1001,
     });
     assert_eq!(live.chainlock().map(|c| c.block_height), Some(Some(43)));
+  }
+
+  #[test]
+  fn capped_mempool_insert_evicts_the_least_recently_seen_rows() {
+    let live = LiveState::new();
+    let row = |byte: u8, last_seen_at: i64| MempoolTx {
+      txid: vec![byte; 32],
+      raw_tx: Vec::new(),
+      version: 1,
+      tx_type: "normal".to_owned(),
+      lock_time: 0,
+      size: 1,
+      value_out: 0,
+      input_count: 0,
+      output_count: 0,
+      fee: None,
+      payload: None,
+      inputs: Vec::new(),
+      outputs: Vec::new(),
+      first_seen_at: last_seen_at,
+      last_seen_at,
+    };
+    for (byte, seen) in [(1, 30), (2, 10), (3, 20), (4, 40)] {
+      live.insert_mempool_tx_capped(row(byte, seen), 3);
+    }
+    assert_eq!(live.mempool_len(), 3);
+    assert!(live.mempool_tx(&[2; 32]).is_none(), "oldest row goes first");
+    live.insert_mempool_tx_capped(row(5, 50), 3);
+    assert!(live.mempool_tx(&[3; 32]).is_none());
+    for byte in [1, 4, 5] {
+      assert!(live.mempool_tx(&[byte; 32]).is_some());
+    }
   }
 }

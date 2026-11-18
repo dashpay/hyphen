@@ -21,7 +21,7 @@ import {
 } from "../internal/json.js";
 import { createQuery } from "../internal/query.js";
 import { requestJsonResult, type ClientContext } from "../internal/transport.js";
-import { type TransactionTags } from "./transactions.js";
+import { readTransactionLive, type TransactionLive, type TransactionTags } from "./transactions.js";
 
 /**
  * Live mempool summary snapshot.
@@ -46,6 +46,7 @@ export interface MempoolTransactionSummary {
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
   readonly tags: TransactionTags;
+  readonly live: TransactionLive;
 }
 
 /**
@@ -202,6 +203,7 @@ function parseMempoolTransactionSummary(value: unknown, path: string): MempoolTr
     firstSeenAt: expectString(readField(object, "firstSeenAt", path), `${path}.firstSeenAt`),
     lastSeenAt: expectString(readField(object, "lastSeenAt", path), `${path}.lastSeenAt`),
     tags: parseTransactionTags(readField(object, "tags", path), `${path}.tags`),
+    live: readTransactionLive(object, path),
   };
 }
 

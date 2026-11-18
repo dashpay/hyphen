@@ -383,6 +383,7 @@ pub(crate) async fn search_by_txid(
         mined: true,
         coinbase: detail.block_pos == 0,
       },
+      live: super::overlay::lock_live(state, detail.txid.as_bytes()),
     })));
   }
 
@@ -416,6 +417,7 @@ pub(crate) async fn search_by_txid_prefix(
             mined: true,
             coinbase: hit.block_pos == 0,
           },
+          live: super::overlay::lock_live(state, hit.txid.as_bytes()),
         })
       })
       .collect(),
@@ -475,7 +477,6 @@ mod tests {
       &normal_tx_bytes(),
       76,
       16,
-      true,
     )
     .await
     .expect("mempool tx should decode");
@@ -488,6 +489,131 @@ mod tests {
     );
     assert_eq!(value.block_height, None);
     assert_eq!(value.tx_type, "normal");
+  }
+
+  fn indexed_detail(txid: [u8; 32]) -> hyphen_db::query::HyDbQrTxDetail {
+    hyphen_db::query::HyDbQrTxDetail {
+      txid: hyphen_db::HyDbHash::from_slice(&txid).expect("txid"),
+      block_height: hyphen_db::HyDbHeight::new(12),
+      block_pos: 1,
+      version: 1,
+      tx_type: hyphen_db::HyDbTxType::Normal,
+      lock_time: 0,
+      size: 100,
+      value_out: 40,
+      fee: Some(10),
+      inputs: Vec::new(),
+      outputs: Vec::new(),
+      payload: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn mined_tx_page_keeps_a_known_lock_and_never_reports_false(
+  ) -> Result<(), Box<dyn std::error::Error>> {
+    // Serialized order; asymmetric so a byte-order slip changes the key.
+    let txid: [u8; 32] = std::array::from_fn(|i| i as u8);
+    let display = utils::view_hex(&txid, HashEndian::Ser);
+    for mempool_enabled in [false, true] {
+      for locked in [false, true] {
+        let mut state = crate::tests::app_state();
+        state.live.mempool = mempool_enabled;
+        state.live.islock = true;
+        state.hydb = crate::rest::hydb_fake::MemDb::new()
+          .with_tx(indexed_detail(txid))
+          .with_tip(12, [0x12; 32])
+          .into_hydb();
+        if locked {
+          // The lock arrived while pending; the tx has since been mined.
+          state.live_state.record_islock(txid);
+        }
+        let value = super::get_tx(State(state), Path(display.clone()))
+          .await
+          .map_err(|error| error.message)?
+          .0;
+        let live = match (mempool_enabled, locked) {
+          (false, false) => "{}",
+          (false, true) => r#"{"tags":{"islock":true}}"#,
+          (true, false) => r#"{"tags":{"mempool":false}}"#,
+          (true, true) => r#"{"tags":{"mempool":false,"islock":true}}"#,
+        };
+        let expected = format!(
+          r#"{{"asOfHeight":12,"txHash":"{}","blockHeight":12,"blockPos":1,"txVersion":1,"txType":"normal","lockTime":0,"txSize":100,"valueOut":40,"inputCount":0,"outputCount":0,"fee":10,"tags":{{"mined":true,"coinbase":false}},"live":{live},"vin":[],"vout":[]}}"#,
+          display,
+        );
+        assert_eq!(String::from_utf8(serde_json::to_vec(&value)?)?, expected);
+      }
+    }
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn pending_search_reports_lock_state_for_the_matched_txid_in_both_byte_orders() {
+    let txid: Vec<u8> = (0..32).collect();
+    let canonical_hash = utils::view_hex(&txid, HashEndian::Ser);
+    for query in [canonical_hash.clone(), hex::encode(&txid)] {
+      for locked in [false, true] {
+        let mut state = crate::tests::app_state();
+        state.live.mempool = true;
+        state.live.islock = true;
+        state
+          .live_state
+          .insert_mempool_tx(mempool_tx_fixture(txid.clone(), normal_tx_bytes()));
+        if locked {
+          state
+            .live_state
+            .record_islock(txid.clone().try_into().expect("32-byte txid"));
+        }
+        let query_bytes =
+          utils::decode_hex_to(&query, HashEndian::Ser).expect("query should decode");
+        let response = super::search_by_txid(&state, &query, &query_bytes)
+          .await
+          .expect("search should succeed")
+          .expect("pending transaction should resolve");
+        let SearchResponse::Tx(result) = &response else {
+          panic!("transaction result expected");
+        };
+        assert_eq!(result.tx_hash, canonical_hash);
+        assert!(!result.tx_tags.mined);
+        let json = serde_json::to_value(&response).expect("result should serialize");
+        if locked {
+          assert_eq!(json["live"]["tags"]["islock"], true);
+        } else {
+          assert_eq!(json["live"], serde_json::json!({}));
+        }
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn pending_detail_and_search_return_the_display_txid_for_either_query_order() {
+    // Serialized order, as every live mempool key is stored.
+    let txid: Vec<u8> = (0..32).collect();
+    let display = utils::view_hex(&txid, HashEndian::Ser);
+    assert_ne!(display, hex::encode(&txid));
+    for query in [display.clone(), hex::encode(&txid)] {
+      let mut state = crate::tests::app_state();
+      state.live.mempool = true;
+      state.hydb = crate::rest::hydb_fake::MemDb::new().into_hydb();
+      state
+        .live_state
+        .insert_mempool_tx(mempool_tx_fixture(txid.clone(), normal_tx_bytes()));
+
+      let detail = super::get_tx(State(state.clone()), Path(query.clone()))
+        .await
+        .expect("pending tx detail should resolve")
+        .0;
+      assert_eq!(detail.txid, display, "detail for query {query}");
+
+      let query_bytes = utils::decode_hex_to(&query, HashEndian::Ser).expect("query should decode");
+      let Some(SearchResponse::Tx(result)) = super::search_by_txid(&state, &query, &query_bytes)
+        .await
+        .expect("search should succeed")
+      else {
+        panic!("pending transaction should resolve for query {query}");
+      };
+      assert_eq!(result.tx_hash, display, "search for query {query}");
+    }
   }
 
   #[tokio::test]
@@ -544,11 +670,7 @@ mod tests {
       first_seen_at: 10,
       last_seen_at: 20,
     });
-    live_state.upsert_islock(crate::live::state::IsLock {
-      txid: txid.clone(),
-      raw_islock: vec![0xcc],
-      seen_at: 25,
-    });
+    live_state.record_islock([0x22; 32]);
 
     let mut state = crate::tests::app_state();
     state.live.mempool = true;

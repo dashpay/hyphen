@@ -365,6 +365,7 @@ impl Visor for LiveVisor {
       let spec = crate::live::stream_supervised_task(
         tx.clone(),
         stream_hub,
+        self.cfg.islock_enabled,
         Arc::clone(&self.cfg.lifecycle),
       );
       let (task, worker) = spawn_live_supervised_task(Arc::clone(&self.cfg.lifecycle), spec);
@@ -376,15 +377,17 @@ impl Visor for LiveVisor {
       let tx = live_zmq_tx.as_ref().ok_or_else(|| {
         DaemonError::Config("live.enable_mempool requires core.zmq.enabled".to_owned())
       })?;
-      let spec = crate::live::mempool_recent_supervised_task(
-        tx.clone(),
-        self.cfg.hydb.clone(),
-        Arc::clone(&self.handles.live_state),
-        Arc::clone(&self.cfg.lifecycle),
-        self.cfg.recent_mempool_txs,
-        self.cfg.p2pkh_version,
-        self.cfg.p2sh_version,
-      );
+      let spec =
+        crate::live::mempool_recent_supervised_task(crate::live::MempoolRecentWorkerTaskConfig {
+          events: tx.clone(),
+          db: self.cfg.hydb.clone(),
+          live_state: Arc::clone(&self.handles.live_state),
+          lifecycle: Arc::clone(&self.cfg.lifecycle),
+          ingest_status: Arc::clone(&self.cfg.ingest_status),
+          keep: self.cfg.recent_mempool_txs,
+          p2pkh_version: self.cfg.p2pkh_version,
+          p2sh_version: self.cfg.p2sh_version,
+        });
       let (task, worker) = spawn_live_supervised_task(Arc::clone(&self.cfg.lifecycle), spec);
       self.tasks.mempool_recent = Some(task);
       self.workers.mempool_recent = Some(worker);

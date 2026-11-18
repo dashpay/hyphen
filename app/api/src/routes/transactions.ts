@@ -36,11 +36,13 @@ export interface TransactionTags {
  */
 export interface TransactionLiveTags {
   readonly mempool?: boolean;
+  /** True when an InstantSend lock for the transaction has been seen; omitted, never false, otherwise. */
   readonly islock?: boolean;
 }
 
 /**
- * Nullable live overlay attached to indexed transaction detail routes.
+ * Nullable live overlay attached to transaction detail routes, pending
+ * transaction rows, stream events and transaction search results.
  */
 export interface TransactionLive {
   readonly tags?: TransactionLiveTags;
@@ -194,6 +196,15 @@ function parseTransactionLive(value: unknown, path: string): TransactionLive {
   return {
     ...(tagsValue == null ? {} : { tags: parseTransactionLiveTags(tagsValue, `${path}.tags`) }),
   };
+}
+
+/**
+ * Read the `live` overlay of a row, stream event or search result; servers
+ * that predate it omit the field, which reads as an empty overlay.
+ */
+export function readTransactionLive(object: Readonly<Record<string, unknown>>, path: string): TransactionLive {
+  const value = readOptionalField(object, "live");
+  return value == null ? {} : parseTransactionLive(value, `${path}.live`);
 }
 
 function parseTransactionScriptSig(value: unknown, path: string): TransactionScriptSig {

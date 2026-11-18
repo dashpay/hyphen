@@ -12,14 +12,19 @@ import {
   readOptionalField,
 } from "../internal/json.js";
 import { requestResponseResult, type ClientContext } from "../internal/transport.js";
+import { readTransactionLive, type TransactionLive } from "./transactions.js";
 
 /**
  * Stream payload for one live mempool transaction event.
+ *
+ * A lock seen after the row was sent re-sends the same txid with
+ * `live.tags.islock` true and the lock topic's sequence; upsert rows by txid.
  */
 export interface StreamMempoolTransactionEvent {
   readonly sequence: number;
   readonly txid: string;
   readonly rawtx: string;
+  readonly live: TransactionLive;
 }
 
 /**
@@ -153,6 +158,7 @@ function parseMempoolPayload(value: unknown, path: string): StreamMempoolTransac
     sequence: expectNumber(readField(object, "sequence", path), `${path}.sequence`),
     txid: expectString(readField(object, "txid", path), `${path}.txid`),
     rawtx: expectString(readField(object, "rawtx", path), `${path}.rawtx`),
+    live: readTransactionLive(object, path),
   };
 }
 

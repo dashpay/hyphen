@@ -4,6 +4,55 @@ import { ApAvailabilityKind, ApCreateClient } from "../src/index.js";
 import { createJsonResponse, createNdjsonResponse, expectErr, expectOk } from "./support.js";
 
 describe("stream routes", (): void => {
+  it("upserts a re-sent mempool row when its lock arrives", async (): Promise<void> => {
+    const client = ApCreateClient({
+      baseUrl: "http://example.test",
+      fetch: (): Promise<Response> =>
+        Promise.resolve(
+          createNdjsonResponse(
+            [{}, { tags: { islock: true } }].map((live, index): string =>
+              JSON.stringify({
+                type: "mempool_tx",
+                ts: 1,
+                payload: { sequence: 11 + index * 29, txid: "pending-tx", rawtx: "0011", live },
+              })
+            )
+          )
+        ),
+    });
+    const iterable = expectOk(await client.stream.streamEvents());
+    const locks = new Map<string, boolean | undefined>();
+    for await (const event of iterable) {
+      if (event.type !== "mempool_tx") {
+        throw new Error("expected mempool event");
+      }
+      locks.set(event.payload.txid, event.payload.live.tags?.islock);
+    }
+    expect([...locks]).toEqual([["pending-tx", true]]);
+  });
+
+  it("rejects a non-boolean streamed lock flag", async (): Promise<void> => {
+    const client = ApCreateClient({
+      baseUrl: "http://example.test",
+      fetch: (): Promise<Response> =>
+        Promise.resolve(
+          createNdjsonResponse([
+            JSON.stringify({
+              type: "mempool_tx",
+              ts: 1,
+              payload: { sequence: 11, txid: "mempool-a", rawtx: "0011", live: { tags: { islock: 1 } } },
+            }),
+          ])
+        ),
+    });
+    const iterable = expectOk(await client.stream.streamEvents());
+    await expect(async (): Promise<void> => {
+      for await (const event of iterable) {
+        void event;
+      }
+    }).rejects.toMatchObject({ path: "$.payload.live.tags.islock", message: "expected boolean" });
+  });
+
   it("consumes ndjson live events as one typed async iterable", async (): Promise<void> => {
     const client = ApCreateClient({
       baseUrl: "http://example.test",

@@ -3,6 +3,31 @@ import { describe, expect, it } from "vitest";
 import { createClient, expectErr, expectOk } from "./support.js";
 
 describe("governance and search routes", (): void => {
+  it.each([
+    [{ tags: { islock: true } }, true],
+    [{}, undefined],
+    [undefined, undefined],
+  ])("reads transaction search lock state from live tags %j", async (live, islock): Promise<void> => {
+    const client = createClient({
+      "/api/v1/search?q=pending": {
+        value: [
+          {
+            type: "tx",
+            txHash: "pending-tx",
+            txTags: { mined: false, coinbase: false },
+            ...(live === undefined ? {} : { live }),
+          },
+        ],
+      },
+    });
+    const page = expectOk(await client.governanceSearch.search("pending"));
+    const result = page.value[0];
+    if (result?.type !== "tx") {
+      throw new Error("expected transaction result");
+    }
+    expect(result.live.tags?.islock).toBe(islock);
+  });
+
   it("lists proposals, reads one proposal, pages votes, and resolves all search discriminators", async (): Promise<void> => {
     const client = createClient({
       "/api/v1/proposals?limit=1": {
