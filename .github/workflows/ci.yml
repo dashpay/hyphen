@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+    tags: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  container:
+    name: Build container
+    uses: ./.github/workflows/build-container.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: .
+      file: contrib/docker/ci.Dockerfile
+      name: hyphen-ci
+
+  lint:
+    name: Run linters
+    needs: container
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    container:
+      image: ${{ needs.container.outputs.path }}
+      options: --user root
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Initial setup
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Run linters
+        run: python3 contrib/lint/all_lint.py
+
+  rust:
+    name: Rust
+    needs: [container, lint]
+    uses: ./.github/workflows/build-rust.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      path: ${{ needs.container.outputs.path }}
+
+  typescript:
+    name: TypeScript
+    needs: [container, lint]
+    uses: ./.github/workflows/build-ts.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      path: ${{ needs.container.outputs.path }}
+
+  test-daemon:
+    name: Test hyphen-daemon
+    needs: [container, rust]
+    uses: ./.github/workflows/test-rust.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      crate: hyphend
+      path: ${{ needs.container.outputs.path }}
+
+  test-db:
+    name: Test hyphen-db
+    needs: [container, rust]
+    uses: ./.github/workflows/test-rust.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      crate: hyphen-db
+      path: ${{ needs.container.outputs.path }}
+      postgres: true
+
+  test-webui:
+    name: Test @repo/hyphen-webui
+    needs: [container, typescript]
+    uses: ./.github/workflows/test-ts.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      package: "@repo/hyphen-webui"
+      path: ${{ needs.container.outputs.path }}

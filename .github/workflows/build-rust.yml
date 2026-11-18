@@ -28,7 +28,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 1
 
       - name: Initial setup
@@ -61,7 +60,7 @@ jobs:
         run: cargo build --workspace --tests
 
       - name: Save dependency cache
-        if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == github.event.repository.default_branch && steps.deps-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.deps-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
@@ -70,7 +69,7 @@ jobs:
           key: cargo-deps-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Save build cache
-        if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == github.event.repository.default_branch
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: actions/cache/save@v5
         with:
           path: target

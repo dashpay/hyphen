@@ -5,13 +5,7 @@ on:
   pull_request_target:
     types: [synchronize, opened, reopened]
   workflow_run:
-    workflows:
-      - "Run linters"
-      - "Rust"
-      - "TypeScript"
-      - "Test hyphen-daemon"
-      - "Test hyphen-db"
-      - "Test @repo/hyphen-webui"
+    workflows: ["CI"]
     types: [completed]
 
 concurrency:

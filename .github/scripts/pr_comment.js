@@ -11,7 +11,9 @@ const COMMENT_TAG = "<!-- pr-status-bot -->";
 const MERGEABLE_RETRIES = 5;
 const MERGEABLE_DELAY_MS = 3000;
 
-const WORKFLOW_CHAIN = [
+const CI_WORKFLOW = "CI";
+const JOB_CHAIN = [
+  { name: "Build container" },
   { name: "Run linters" },
   { name: "Rust" },
   { name: "TypeScript" },
@@ -144,38 +146,49 @@ async function buildComment({ github, owner, repo, pr, pulls, fileCache }) {
     head_sha: sha,
     per_page: 100,
   });
+  const ciRuns = runs.workflow_runs.filter((r) => r.name === CI_WORKFLOW);
+  // Fork PR runs list no associated pull requests, so also match on the head repository and branch.
+  const run = ciRuns.find(
+    (r) =>
+      r.event === "pull_request" &&
+      (r.pull_requests.some((p) => p.number === pr.number) ||
+        (r.head_repository?.full_name === pr.head.repo?.full_name && r.head_branch === pr.head.ref))
+  );
+  const jobs = run
+    ? await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+        owner,
+        repo,
+        run_id: run.id,
+        per_page: 100,
+      })
+    : [];
 
   let actionsSection = "## Actions\n\n";
-  actionsSection += "| Workflow | Status | Link |\n";
-  actionsSection += "|:--------:|:------:|:----:|\n";
+  actionsSection += "| Job | Status | Link |\n";
+  actionsSection += "|:---:|:------:|:----:|\n";
 
-  let chainBroken = false;
-  for (const wf of WORKFLOW_CHAIN) {
-    const run = runs.workflow_runs.find((r) => r.name === wf.name);
-    if (chainBroken) {
-      actionsSection += `| ${wf.name} | ⏩ Skipped | - |\n`;
-    } else if (run) {
-      let status;
-      if (run.conclusion === "success") {
-        status = "🟢 Pass";
-      } else if (run.conclusion === "failure") {
-        status = "🔴 Fail";
-        chainBroken = true;
-      } else if (run.conclusion === "cancelled") {
-        status = "⏩ Skipped";
-        chainBroken = true;
-      } else if (run.status === "in_progress") {
-        status = "🟡 In Progress";
-      } else if (run.status === "queued" || run.status === "waiting") {
-        status = "⌛ Waiting";
-      } else {
-        status = "⌛ Waiting";
-      }
-      const link = `[Run #${run.run_number}](${run.html_url})`;
-      actionsSection += `| ${wf.name} | ${status} | ${link} |\n`;
-    } else {
-      actionsSection += `| ${wf.name} | ⌛ Waiting | - |\n`;
+  // A job whose dependency failed is itself reported as skipped, so each row
+  // shows only its own jobs.
+  for (const step of JOB_CHAIN) {
+    // Jobs from reusable workflows are named "<caller> / <callee>".
+    const matched = jobs.filter((j) => j.name === step.name || j.name.startsWith(`${step.name} / `));
+    if (matched.length === 0) {
+      actionsSection += `| ${step.name} | ⌛ Waiting | - |\n`;
+      continue;
     }
+    let status;
+    if (matched.some((j) => j.conclusion === "failure" || j.conclusion === "timed_out")) {
+      status = "🔴 Fail";
+    } else if (matched.some((j) => j.conclusion === "cancelled" || j.conclusion === "skipped")) {
+      status = "⏩ Skipped";
+    } else if (matched.every((j) => j.conclusion === "success")) {
+      status = "🟢 Pass";
+    } else if (matched.some((j) => j.status === "in_progress")) {
+      status = "🟡 In Progress";
+    } else {
+      status = "⌛ Waiting";
+    }
+    actionsSection += `| ${step.name} | ${status} | [Job](${matched[0].html_url}) |\n`;
   }
 
   return `${COMMENT_TAG}\n${banner}\n\n${conflictSection}\n${actionsSection}`;
